@@ -34,6 +34,10 @@ class ConsoleNotifier(BaseNotifier):
     async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
         pass
 
+    async def close(self) -> None:
+        """Close notifier resources - no-op for console notifier."""
+        pass
+
     async def start(self) -> None:
         """Start the console notifier (no-op for console)."""
         self.logger.info("ConsoleNotifier: Using console output (Discord disabled)")
