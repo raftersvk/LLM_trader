@@ -133,7 +133,8 @@ class Config:
             "top_k": self.get_config('model_config', 'top_k', None),
             "freq_penalty": self.get_config('model_config', 'freq_penalty', None),
             "pres_penalty": self.get_config('model_config', 'pres_penalty', None),
-            "max_tokens": default_max_tokens
+            "max_tokens": default_max_tokens,
+            "timeout": self.get_config('model_config', 'timeout', None)
         }
 
         google_max_tokens = self.get_config('model_config', 'google_max_tokens', None)
@@ -148,7 +149,8 @@ class Config:
             "top_k": self.get_config('model_config', 'google_top_k', None),
             "max_tokens": google_max_tokens,
             "thinking_level": self.get_config('model_config', 'google_thinking_level', 'high'),
-            "google_code_execution": self.get_config('model_config', 'google_code_execution', False)
+            "google_code_execution": self.get_config('model_config', 'google_code_execution', False),
+            "timeout": self.get_config('model_config', 'timeout', None)
         }
 
     def get_env(self, key: str, default: Any = None) -> Any:
