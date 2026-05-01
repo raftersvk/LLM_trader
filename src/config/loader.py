@@ -422,7 +422,16 @@ class Config:
     @property
     def SUPPORTED_EXCHANGES(self):
         """Returns list of supported exchanges in priority order."""
-        return self.get_config('exchanges', 'supported', ['binance', 'kucoin', 'gateio'])
+        exchanges = self.get_config('exchanges', 'supported', ['binance', 'kucoin', 'gateio'])
+        # Ensure we always return a list, even if config gives us a string
+        if isinstance(exchanges, str):
+            # Handle case where it's a comma-separated string or a single string without commas
+            if ',' in exchanges:
+                return [item.strip() for item in exchanges.split(',') if item.strip()]
+            else:
+                stripped = exchanges.strip()
+                return [stripped] if stripped else []
+        return exchanges
 
     @property
     def MARKET_REFRESH_HOURS(self):

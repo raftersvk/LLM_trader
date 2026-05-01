@@ -13,7 +13,7 @@
 - **Vector-Only Trading Brain**: ChromaDB vector store for semantic trade retrieval and adaptive thresholds.
 - **Adaptive Memory System**: Temporal awareness, decay engine, and automated reflection loops generating persistent Semantic Rules.
 - **RAG Engine**: Aggregates news from CryptoCompare and fundamentals from DefiLlama.
-- **AI & LLM Support**: Multi-provider support (Google Gemini, OpenRouter, BlockRun.AI, LM Studio) with fallback logic and vision-assisted trading.
+- **AI & LLM Support**: Multi-provider support (Google Gemini, OpenRouter, BlockRun.AI, LM Studio and other OpenAI-compatible endpoints (via LiteLLM)) with fallback logic and vision-assisted trading.
 - **Multi-Exchange Aggregation**: Fetches data via `ccxt` from Binance, KuCoin, Gate.io, MEXC, Hyperliquid.
 
 ![Semantic Signal LLM Dashboard - Overview](img/dashboard1.png)
@@ -31,7 +31,7 @@
 - **Database (Vector)**: ChromaDB
 - **Dashboard Backend**: FastAPI, WebSockets
 - **Dashboard Frontend**: HTML, Vanilla JS, Vis.js, ApexCharts
-- **AI Integrations**: Google Gemini, OpenRouter, BlockRun.AI, LM Studio
+- **AI Integrations**: Google Gemini, OpenRouter, BlockRun.AI, LM Studio and other OpenAI-compatible endpoints (via LiteLLM)
 - **Market Data**: CCXT, CryptoCompare, Alternative.me, DefiLlama
 - **Code Quality**: Ruff, Pylint, Mypy
 
@@ -119,6 +119,50 @@ port = 8000
 demo_quote_capital = 10000
 transaction_fee_percent = 0.00075
 ```
+
+### AI Provider Abstraction via LiteLLM
+
+The bot uses **[LiteLLM](https://github.com/BerriAI/litellm)** as a unified abstraction layer for all LLM providers. LiteLLM translates standard OpenAI-format requests to any provider's API, enabling seamless switching and automatic failover between providers.
+
+#### Supported Providers
+
+| Provider | Config Key | Configuration | Notes |
+|----------|-----------|--------------|-------|
+| **Local OpenAI-compatible** (LM Studio, Ollama, etc.) | local | lm_studio_base_url, lm_studio_model | Any OpenAI-compatible local endpoint |
+| **Google AI** | googleai | (API keys via keys.env) | Free tier + paid fallback |
+| **OpenRouter** | openrouter | openrouter_base_url, openrouter_base_model | Many hosted models |
+| **BlockRun.AI** | blockrun | blockrun_base_url, blockrun_model | Pay-per-request |
+
+#### Configuration Examples
+
+**Using a local OpenAI-compatible endpoint (LM Studio, Ollama, vLLM, etc.):**
+```ini
+[ai_providers]
+provider = local
+lm_studio_base_url = http://localhost:1234/v1
+lm_studio_model = gemma4:31b-cloud
+```
+
+**Google Gemini with automatic paid fallback:**
+```ini
+[ai_providers]
+provider = googleai
+```
+
+**OpenRouter:**
+```ini
+[ai_providers]
+provider = openrouter
+openrouter_base_model = google/gemini-4-31b-it:free
+```
+
+**Automatic multi-provider fallback:**
+```ini
+[ai_providers]
+provider = all
+```
+
+No code changes are required when adding new providers — LiteLLM handles the translation layer.
 
 ### 6. Start the Bot
 

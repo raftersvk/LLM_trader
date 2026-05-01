@@ -9,6 +9,21 @@ from typing import Optional, Dict, Any, List, Union
 
 from PIL import Image
 from openrouter import OpenRouter
+from openrouter.errors import (
+    BadRequestResponseError,
+    UnauthorizedResponseError,
+    PaymentRequiredResponseError,
+    NotFoundResponseError,
+    RequestTimeoutResponseError,
+    UnprocessableEntityResponseError,
+    TooManyRequestsResponseError,
+    InternalServerResponseError,
+    BadGatewayResponseError,
+    ServiceUnavailableResponseError,
+    EdgeNetworkTimeoutResponseError,
+    ProviderOverloadedResponseError,
+    OpenRouterDefaultError,
+)
 
 from src.logger.logger import Logger
 from src.platforms.ai_providers.base import BaseAIClient
@@ -201,8 +216,76 @@ class OpenRouterClient(BaseAIClient):
 
     def _handle_exception(self, exception: Exception) -> Optional[ChatResponseModel]:
         """Handle OpenRouter specific exceptions, falling back to common handler."""
+        # First, check for OpenRouter SDK-specific errors
+        if isinstance(exception, EdgeNetworkTimeoutResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter edge network timeout (524): %s", error_msg)
+            return ChatResponseModel.from_error(f"upstream_timeout: Edge network timeout - upstream provider failed to respond")
+        
+        if isinstance(exception, BadGatewayResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter bad gateway (502): %s", error_msg)
+            return ChatResponseModel.from_error(f"bad_gateway: Upstream provider returned an invalid response")
+        
+        if isinstance(exception, ServiceUnavailableResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter service unavailable (503): %s", error_msg)
+            return ChatResponseModel.from_error(f"overloaded: OpenRouter service unavailable")
+        
+        if isinstance(exception, ProviderOverloadedResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter provider overloaded (529): %s", error_msg)
+            return ChatResponseModel.from_error(f"overloaded: Selected provider is overloaded")
+        
+        if isinstance(exception, TooManyRequestsResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter rate limited (429): %s", error_msg)
+            return ChatResponseModel.from_error(f"rate_limit: Too many requests")
+        
+        if isinstance(exception, NotFoundResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter not found (404): %s", error_msg)
+            return ChatResponseModel.from_error(f"not_found: Requested resource not found")
+        
+        if isinstance(exception, BadRequestResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter bad request (400): %s", error_msg)
+            return ChatResponseModel.from_error(f"bad_request: Invalid request parameters")
+        
+        if isinstance(exception, UnauthorizedResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter unauthorized (401): %s", error_msg)
+            return ChatResponseModel.from_error(f"authentication: Invalid API key")
+        
+        if isinstance(exception, PaymentRequiredResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter payment required (402): %s", error_msg)
+            return ChatResponseModel.from_error(f"quota: Insufficient credits")
+        
+        if isinstance(exception, RequestTimeoutResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter request timeout (408): %s", error_msg)
+            return ChatResponseModel.from_error(f"timeout: Request timed out")
+        
+        if isinstance(exception, InternalServerResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter internal server error (500): %s", error_msg)
+            return ChatResponseModel.from_error(f"server_error: OpenRouter internal error")
+        
+        if isinstance(exception, UnprocessableEntityResponseError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter unprocessable entity (422): %s", error_msg)
+            return ChatResponseModel.from_error(f"invalid_request: Unprocessable entity")
+        
+        if isinstance(exception, OpenRouterDefaultError):
+            error_msg = str(exception)
+            self.logger.error("OpenRouter API error: %s", error_msg)
+            return ChatResponseModel.from_error(f"api_error: {error_msg}")
+        
+        # Fall back to common error handler for other exceptions
         result = self.handle_common_errors(exception)
         if result:
             return result
+        
         self.logger.error("Unexpected OpenRouter error: %s", exception)
-        return None
+        return ChatResponseModel.from_error(f"unknown_error: {str(exception)}")

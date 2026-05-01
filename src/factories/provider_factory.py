@@ -1,8 +1,10 @@
 """Factory for creating AI provider clients based on configuration."""
-from typing import Optional, Tuple, TYPE_CHECKING
+from typing import Optional, Tuple, TYPE_CHECKING, Dict, Any
 
 from src.logger.logger import Logger
-from src.platforms.ai_providers import OpenRouterClient, GoogleAIClient, LMStudioClient, BlockRunClient
+from src.factories.litellm_factory import LiteLLMFactory
+
+from src.platforms.ai_providers.google import GoogleAIClient
 
 if TYPE_CHECKING:
     from src.config.protocol import ConfigProtocol
@@ -32,11 +34,12 @@ class ProviderFactory:
         """
         self.logger = logger
         self.config = config
+        self.litellm_factory = LiteLLMFactory(logger, config)
 
     def create_google_clients(self) -> Tuple[Optional[GoogleAIClient], Optional[GoogleAIClient]]:
         """
         Create Google AI clients (free tier and optional paid tier).
-
+        
         Returns:
             Tuple of (google_client, google_paid_client). Both can be None if API keys not configured.
         """
@@ -63,73 +66,36 @@ class ProviderFactory:
 
         return google_client, google_paid_client
 
-    def create_openrouter_client(self) -> Optional[OpenRouterClient]:
-        """
-        Create OpenRouter client if API key is configured.
+    # === Méthodes spécifiques (dépréciées - gardées pour compatibilité) ===
+    
+    def create_openrouter_client(self) -> None:
+        """Déprécié - utiliser LiteLLM."""
+        return None
 
-        Returns:
-            OpenRouterClient instance or None if API key not configured.
-        """
-        if not self.config.OPENROUTER_API_KEY:
-            return None
+    def create_lmstudio_client(self) -> None:
+        """Déprécié - utiliser LiteLLM."""
+        return None
 
-        client = OpenRouterClient(
-            api_key=self.config.OPENROUTER_API_KEY,
-            base_url=self.config.OPENROUTER_BASE_URL,
-            logger=self.logger
-        )
-        self.logger.debug("OpenRouter client initialized")
-        return client
-
-    def create_lmstudio_client(self) -> Optional[LMStudioClient]:
-        """
-        Create LM Studio client for local inference.
-
-        Returns:
-            LMStudioClient instance or None if base URL not configured.
-        """
-        if not self.config.LM_STUDIO_BASE_URL:
-            return None
-
-        client = LMStudioClient(
-            base_url=self.config.LM_STUDIO_BASE_URL,
-            logger=self.logger
-        )
-        self.logger.debug("LM Studio client initialized for URL: %s", self.config.LM_STUDIO_BASE_URL)
-        return client
-
-    def create_blockrun_client(self) -> Optional[BlockRunClient]:
-        """
-        Create BlockRun client for x402 micropayments.
-
-        Returns:
-            BlockRunClient instance or None if wallet key not configured.
-        """
-        if not self.config.BLOCKRUN_WALLET_KEY:
-            return None
-
-        client = BlockRunClient(
-            wallet_key=self.config.BLOCKRUN_WALLET_KEY,
-            base_url=self.config.BLOCKRUN_BASE_URL,
-            logger=self.logger
-        )
-        self.logger.debug("BlockRun client initialized")
-        return client
+    def create_blockrun_client(self) -> None:
+        """Déprécié - utiliser LiteLLM."""
+        return None
 
     def create_all_clients(self) -> dict:
         """
         Create all available AI provider clients based on configuration.
-
+        
         Returns:
             Dictionary with keys: 'google', 'google_paid', 'openrouter', 'lmstudio', 'blockrun'.
-            Values are client instances or None if not configured.
         """
         google_client, google_paid_client = self.create_google_clients()
+
+        # Créer tous les clients via LiteLLM factory
+        litellm_clients = self.litellm_factory.get_all_clients()
 
         return {
             'google': google_client,
             'google_paid': google_paid_client,
-            'openrouter': self.create_openrouter_client(),
-            'lmstudio': self.create_lmstudio_client(),
-            'blockrun': self.create_blockrun_client()
+            'openrouter': litellm_clients.get('openrouter'),
+            'lmstudio': litellm_clients.get('ollama'),  # llmstudio devient le client local via LiteLLM
+            'blockrun': litellm_clients.get('blockrun')
         }

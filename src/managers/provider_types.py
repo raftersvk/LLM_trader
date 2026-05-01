@@ -3,8 +3,10 @@ from dataclasses import dataclass
 from typing import Optional, Any, Dict, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.platforms.ai_providers import OpenRouterClient, GoogleAIClient, LMStudioClient, BlockRunClient
+    from src.platforms.ai_providers.base import BaseAIClient
+    from src.platforms.ai_providers.google import GoogleAIClient
     from src.platforms.ai_providers.response_models import ChatResponseModel
+
 
 
 @dataclass
@@ -45,9 +47,9 @@ class ProviderClients:
     """Container for all AI provider clients (runtime objects, not serializable)."""
     google: Optional["GoogleAIClient"] = None
     google_paid: Optional["GoogleAIClient"] = None
-    openrouter: Optional["OpenRouterClient"] = None
-    lmstudio: Optional["LMStudioClient"] = None
-    blockrun: Optional["BlockRunClient"] = None
+    openrouter: Optional["BaseAIClient"] = None
+    lmstudio: Optional["BaseAIClient"] = None
+    blockrun: Optional["BaseAIClient"] = None
 
     @classmethod
     def from_factory_dict(cls, clients: Dict[str, Any]) -> "ProviderClients":

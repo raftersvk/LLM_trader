@@ -6,9 +6,7 @@ from src.platforms.ai_providers.response_models import (
     UsageModel
 )
 from src.platforms.ai_providers.google import GoogleAIClient
-from src.platforms.ai_providers.lmstudio import LMStudioClient
-from src.platforms.ai_providers.openrouter import OpenRouterClient
-from src.platforms.ai_providers.blockrun import BlockRunClient
+from src.platforms.ai_providers.litellm_client import LitellmAIClient
 
 __all__ = [
     'BaseAIClient',
@@ -16,8 +14,6 @@ __all__ = [
     'ChoiceModel',
     'MessageModel',
     'UsageModel',
-    'OpenRouterClient',
     'GoogleAIClient',
-    'LMStudioClient',
-    'BlockRunClient',
+    'LitellmAIClient',
 ]
