@@ -165,9 +165,16 @@ class LitellmAIClient(BaseAIClient):
         self.logger.debug("LiteLLM chart analysis - model: %s, provider: %s", full_model, self.provider)
 
         try:
+            self.logger.debug(
+                "LiteLLM request - model: %s, provider: %s, messages: %d, params: %s",
+                full_model,
+                self.provider,
+                len(messages),
+                params,
+            )
             response = await acompletion(
                 model=full_model,
-                messages=messages_with_image,
+                messages=messages,
                 **params,
                 **self.litellm_kwargs,
             )
