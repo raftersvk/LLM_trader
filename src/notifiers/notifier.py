@@ -91,6 +91,10 @@ class DiscordNotifier(BaseNotifier):
 
         self.logger.info("Discord notifier resources released")
 
+    async def close(self) -> None:
+        """Close notifier resources - can be used as shutdown callback."""
+        await self.__aexit__(None, None, None)
+
     async def start(self) -> None:
         """Start the Discord bot."""
         if not self.bot:

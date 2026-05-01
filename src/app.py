@@ -124,6 +124,9 @@ class CryptoTradingBot:
             if self.exchange_manager:
                 self.shutdown_manager.register_shutdown_callback(self.exchange_manager.shutdown)
 
+            if self.discord_notifier:
+                self.shutdown_manager.register_shutdown_callback(self.discord_notifier.close)
+
             if self.cryptocompare_session:
                 self.shutdown_manager.register_shutdown_callback(self.cryptocompare_session.close)
 

@@ -104,23 +104,31 @@ class GracefulShutdownManager:
             for task in pending_tasks:
                 task.cancel()
             try:
-                await asyncio.wait_for(asyncio.wait(pending_tasks), timeout=10.0)
+                done, still_pending = await asyncio.wait_for(asyncio.wait(pending_tasks), timeout=10.0)
             except asyncio.TimeoutError:
-                task_details = []
-                for t in pending_tasks:
-                    if not t.done():
+                # Force cancel any remaining tasks
+                remaining = [t for t in pending_tasks if not t.done()]
+                if remaining:
+                    task_details = []
+                    for t in remaining:
                         try:
-                            # asyncio.Task has get_name() since Python 3.8
                             name = t.get_name()
                         except AttributeError:
                             name = str(t)
                         task_details.append(name)
-
-                timeout_msg = f"Some tasks didn't complete in time: {task_details}"
-                if self.logger:
-                    self.logger.warning(timeout_msg)
-                else:
-                    print(timeout_msg)
+                        t.cancel()
+                    
+                    timeout_msg = f"Force cancelling {len(remaining)} tasks: {task_details}"
+                    if self.logger:
+                        self.logger.warning(timeout_msg)
+                    else:
+                        print(timeout_msg)
+                    
+                    # Wait for force-cancelled tasks
+                    try:
+                        await asyncio.wait(remaining, timeout=2.0)
+                    except Exception:
+                        pass
         try:
             await asyncio.wait_for(self.loop.shutdown_asyncgens(), timeout=2.0)
         except (asyncio.TimeoutError, Exception) as e:
