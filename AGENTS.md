@@ -1,5 +1,13 @@
 # AGENTS.md
 
+## Critical Information
+
+- **Port 8000**: Running a Docker container unrelated to this project. Ignore it.
+- **Config file**: `config/config.ini` (not config.ini.example)
+- **Dashboard port**: 8100
+- **Dashboard URL**: `http://localhost:8100/`
+- **Python venv**: `.venv` in project root - ALWAYS activate with `source .venv/bin/activate` before running Python commands
+
 ## Project overview
 Autonomous asyncio-first crypto trading bot that uses LLMs + RAG to make BUY/SELL/HOLD decisions. Integrates market data, news, and chart analysis via ChromaDB vector memory and multi-provider AI support (Google Gemini, OpenRouter, BlockRun.AI, LM Studio).
 
@@ -25,6 +33,22 @@ Autonomous asyncio-first crypto trading bot that uses LLMs + RAG to make BUY/SEL
 - Mock config via `tests/conftest.py` (patches `src.config.loader`)
 - Run all tests: `.venv/bin/pytest tests/`
 - Run specific test file: `.venv/bin/pytest tests/test_vector_memory.py`
+
+## Dashboard Testing
+- Use Playwright for browser testing of the dashboard
+- **IMPORTANT**: Always activate the project venv first: `source .venv/bin/activate`
+- Install playwright: `pip install playwright && playwright install chromium`
+- Run dashboard on port 8100 before testing
+
+## Dashboard Tabs to Test
+1. Overview - Live Dashboard with KPIs
+2. Brain Activity - Neural Network State + Visual Cortex
+3. Last Prompt - Trading Context Sent to LLM
+4. Last Response - LLM Analysis Output
+5. Statistics - Trading Statistics
+6. Latest News - Crypto News
+7. Market Data - Active Position
+8. Memory Bank - Vector Experience Database
 
 ## Architecture notes
 - **Entry point**: `start.py` - Composition Root with Dependency Injection pattern
