@@ -1,6 +1,6 @@
 """WebSocket router for real-time dashboard updates."""
 
-from typing import Set, Dict, Any
+from typing import Set, Dict, Any, Optional
 from collections import defaultdict
 from urllib.parse import urlparse
 
@@ -8,11 +8,13 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 
 class ConnectionManager:
-    """Manages WebSocket connections with rate limiting."""
+    """Manages WebSocket connections with rate limiting and pair subscriptions."""
 
     def __init__(self, max_connections: int = 1000, max_per_ip: int = 10):
         self.active_connections: Set[WebSocket] = set()
         self.ip_counts: Dict[str, int] = defaultdict(int)
+        # Track pair subscriptions: websocket -> symbol (None for global updates)
+        self.subscriptions: Dict[WebSocket, Optional[str]] = {}
         self.max_connections = max_connections
         self.max_per_ip = max_per_ip
 
@@ -34,6 +36,7 @@ class ConnectionManager:
         # Pre-increment counters to prevent race conditions during await accept()
         self.active_connections.add(websocket)
         self.ip_counts[client_ip] += 1
+        self.subscriptions[websocket] = None  # Default to global (no symbol filter)
 
         try:
             await websocket.accept()
@@ -51,12 +54,28 @@ class ConnectionManager:
             self.ip_counts[client_ip] -= 1
             if self.ip_counts[client_ip] <= 0:
                 del self.ip_counts[client_ip]
+            # Remove subscription
+            self.subscriptions.pop(websocket, None)
+
+    def subscribe(self, websocket: WebSocket, symbol: Optional[str]):
+        """Subscribe a connection to updates for a specific symbol (or global if None)."""
+        if websocket in self.active_connections:
+            self.subscriptions[websocket] = symbol
 
     async def broadcast(self, data: Dict[str, Any]):
-        """Broadcast data to all active connections."""
+        """Broadcast data to active connections, respecting symbol subscriptions."""
+        msg_symbol = data.get('symbol')
         for connection in list(self.active_connections):
             try:
-                await connection.send_json(data)
+                # If the message has a symbol, only send to clients subscribed to that symbol or global (None)
+                # If the message has no symbol (global update), send to all
+                sub = self.subscriptions.get(connection)
+                if msg_symbol is None:
+                    # Global update: send to everyone
+                    await connection.send_json(data)
+                elif sub == msg_symbol or sub is None:
+                    # Client is subscribed to this symbol or to global (None)
+                    await connection.send_json(data)
             except Exception:
                 self.disconnect(connection)
 
@@ -116,7 +135,11 @@ class WebSocketRouter:
         if await self.manager.connect(websocket):
             try:
                 while True:
-                    await websocket.receive_text()
+                    # Wait for messages from client (e.g., subscription requests)
+                    data = await websocket.receive_json()
+                    if data.get("type") == "subscribe":
+                        symbol = data.get("symbol")
+                        self.manager.subscribe(websocket, symbol)
             except WebSocketDisconnect:
                 self.manager.disconnect(websocket)
             except Exception:
@@ -125,5 +148,7 @@ class WebSocketRouter:
     async def get_countdown(self) -> Dict[str, Any]:
         """Get countdown to next analysis (REST fallback for WebSocket)."""
         if self.dashboard_state:
+            # For backward compatibility, return the first pair's countdown if no symbol specified
+            # In a real implementation, we might want to accept a symbol query param
             return self.dashboard_state.get_countdown_data()
         return {"next_check_utc": None, "seconds_remaining": None}

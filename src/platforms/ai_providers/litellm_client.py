@@ -1,8 +1,8 @@
 """
-LiteLLM Unified Client - Remplace les SDK spécifiques par une interface standard OpenAI.
+LiteLLM Unified Client - Replaces specific SDKs with a standard OpenAI interface.
 
-Supporte: Ollama, OpenAI, Anthropic, Google, OpenRouter, etc.
-via un seul client unifié.
+Supports: Ollama, OpenAI, Anthropic, Google, OpenRouter, etc.
+via a single unified client.
 """
 import io
 import base64
@@ -17,22 +17,22 @@ from src.platforms.ai_providers.base import BaseAIClient
 from src.platforms.ai_providers.response_models import ChatResponseModel, UsageModel, ChoiceModel, MessageModel
 from src.utils.decorators import retry_api_call
 
-litellm.drop_params = True  # Ignore les paramètres non supportés par certains providers
+litellm.drop_params = True  # Ignore unsupported params by some providers
 
 
 class LitellmAIClient(BaseAIClient):
-    """Client unifié utilisant LiteLLM pour tous les providers LLM."""
+    """Unified client using LiteLLM for all LLM providers."""
 
     def __init__(self, config: Dict[str, Any], logger: Logger) -> None:
         """
-        Initialise le client LiteLLM.
+        Initialize the LiteLLM client.
 
         Args:
-            config: Configuration du provider avec clés:
-                - provider: nom du provider (ollama, openai, anthropic, google, openrouter...)
-                - base_url: URL de base (optionnel, ex: http://localhost:11434/v1)
-                - api_key: Clé API (optionnel pour local)
-                - model: Modèle par défaut
+            config: Provider config with keys:
+                - provider: provider name (ollama, openai, anthropic, google, openrouter...)
+                - base_url: Base URL (optional, e.g. http://localhost:11434/v1)
+                - api_key: API key (optional for local)
+                - model: Default model
             logger: Logger instance
         """
         super().__init__(logger)
@@ -42,46 +42,46 @@ class LitellmAIClient(BaseAIClient):
         self.api_key = config.get("api_key")
         self.default_model = config.get("model", "default")
 
-        # Configuration LiteLLM pour ce client
+        # LiteLLM configuration for this client
         self.litellm_kwargs = {
             "base_url": self.base_url,
         }
         if self.api_key:
             self.litellm_kwargs["api_key"] = self.api_key
         elif self.base_url:
-            # Pour les URLs custom (Ollama/LM Studio), LiteLLM requiert une api_key
-            # On utilise une valeur factice
+            # For custom URLs (Ollama/LM Studio), LiteLLM requires an api_key
+            # We use a dummy value
             self.litellm_kwargs["api_key"] = "ollama"
 
         self.logger.debug(
-            "LitellmAIClient initialisé - provider: %s, model: %s, base_url: %s",
+            "LitellmAIClient initialized - provider: %s, model: %s, base_url: %s",
             self.provider,
             self.default_model,
             self.base_url,
         )
 
     async def _initialize_client(self) -> None:
-        """LiteLLM n'a pas besoin d'initialisation asynchrone spécifique."""
-        self.logger.debug("LitellmAIClient prêt - aucune initialisation requise")
+        """LiteLLM does not need specific async initialization."""
+        self.logger.debug("LitellmAIClient ready - no initialization required")
 
     async def close(self) -> None:
-        """LiteLLM n'a pas besoin de nettoyage spécifique."""
-        self.logger.debug("LitellmAIClient - fermeture (aucune action requise)")
+        """LiteLLM does not need specific cleanup."""
+        self.logger.debug("LitellmAIClient - closing (no action required)")
 
     @retry_api_call(max_retries=3, initial_delay=1, backoff_factor=2, max_delay=30)
     async def chat_completion(
         self, model: str, messages: List[Dict[str, Any]], model_config: Dict[str, Any]
     ) -> Optional[ChatResponseModel]:
         """
-        Envoie une requête de chat completion via LiteLLM.
+        Send a chat completion request via LiteLLM.
 
         Args:
-            model: Nom du modèle (ex: gemma4:31b-cloud, gemini-flash, claude-sonnet)
-            messages: Liste de messages OpenAI-style
-            model_config: Paramètres du modèle (temperature, max_tokens, etc.)
+            model: Model name (e.g. gemma4:31b-cloud, gemini-flash, claude-sonnet)
+            messages: List of OpenAI-style messages
+            model_config: Model parameters (temperature, max_tokens, etc.)
 
         Returns:
-            ChatResponseModel ou None en cas d'erreur
+            ChatResponseModel or None on error
         """
         full_model = self._get_full_model_name(model)
         params = self._build_litellm_params(model_config)
@@ -100,7 +100,7 @@ class LitellmAIClient(BaseAIClient):
                 **params,
                 **self.litellm_kwargs,
             )
-            self.logger.debug("LiteLLM response reçue avec succès")
+            self.logger.debug("LiteLLM response received successfully")
             return self._create_response_from_litellm(response)
         except Exception as e:
             self.logger.error("Erreur LiteLLM request: %s", str(e), exc_info=True)
@@ -118,24 +118,23 @@ class LitellmAIClient(BaseAIClient):
         model_config: Dict[str, Any],
     ) -> Optional[ChatResponseModel]:
         """
-        Envoie une requête avec image pour l'analyse de graphique.
+        Send a request with image for chart analysis.
 
-        LiteLLM gère les requêtes multimodales (texte + image) pour les
-        providers qui le supportent (Gemini, GPT-4o, Claude 3, etc.).
+        LiteLLM handles multimodal requests (text + image) for providers
+        that support it (Gemini, GPT-4o, Claude 3, etc.).
 
         Args:
-            model: Nom du modèle
-            messages: Liste de messages OpenAI-style
-            chart_image: Image du graphique (BytesIO, bytes, ou path)
-            model_config: Paramètres du modèle
+            model: Model name
+            messages: List of OpenAI-style messages
+            chart_image: Chart image (BytesIO, bytes, or path)
 
         Returns:
-            ChatResponseModel ou None en cas d'erreur
+            ChatResponseModel or None on error
         """
         full_model = self._get_full_model_name(model)
         params = self._build_litellm_params(model_config)
 
-        # Préparer les données de l'image
+            # Prepare image data
         img_data = self.process_chart_image(chart_image)
         img_b64 = base64.b64encode(img_data).decode("utf-8")
 
@@ -178,7 +177,7 @@ class LitellmAIClient(BaseAIClient):
                 **params,
                 **self.litellm_kwargs,
             )
-            self.logger.debug("LiteLLM chart analysis response reçue")
+            self.logger.debug("LiteLLM chart analysis response received")
             return self._create_response_from_litellm(response)
         except Exception as e:
             self.logger.error("Erreur LiteLLM chart analysis: %s", str(e), exc_info=True)
@@ -196,16 +195,16 @@ class LitellmAIClient(BaseAIClient):
         callback=None,
     ) -> Optional[ChatResponseModel]:
         """
-        Envoie une requête de chat completion en streaming via LiteLLM.
+        Send a streaming chat completion request via LiteLLM.
 
         Args:
-            model: Nom du modèle
-            messages: Liste de messages OpenAI-style
-            model_config: Paramètres du modèle
-            callback: Fonction appelée pour chaque fragment de streaming
+            model: Model name
+            messages: List of OpenAI-style messages
+            model_config: Model parameters
+            callback: Function called for each streaming fragment
 
         Returns:
-            ChatResponseModel ou None en cas d'erreur
+            ChatResponseModel or None on error
         """
         full_model = self._get_full_model_name(model)
         params = self._build_litellm_params(model_config)
@@ -229,7 +228,7 @@ class LitellmAIClient(BaseAIClient):
                     if callback:
                         await callback(content)
 
-            self.logger.debug("LiteLLM streaming response complète")
+            self.logger.debug("LiteLLM streaming response complete")
             return self.create_response(
                 content=complete_content,
                 usage=UsageModel(prompt_tokens=0, completion_tokens=0, total_tokens=0),
@@ -244,17 +243,17 @@ class LitellmAIClient(BaseAIClient):
             )
 
     def _get_full_model_name(self, model: str) -> str:
-        """Construit le nom complet du modèle pour LiteLLM.
-        
-        Pour les URLs locales (Ollama/LM Studio), on utilise l'API OpenAI-compatible
-        avec prefixe openai/ pour utiliser le transport OpenAI standard de LiteLLM.
+        """Build the full model name for LiteLLM.
+
+        For local URLs (Ollama/LM Studio), we use the OpenAI-compatible API
+        with openai/ prefix to use LiteLLM's standard OpenAI transport.
         """
         if not model:
             model = self.default_model
 
         if self.provider == "openrouter":
             return f"openrouter/{model}"
-        # URLs locales -> openai/ prefix avec base_url
+        # Local URLs -> openai/ prefix with base_url
         if self.base_url:
             return f"openai/{model}"
         if self.provider == "ollama":
@@ -262,7 +261,7 @@ class LitellmAIClient(BaseAIClient):
         return f"{self.provider}/{model}"
 
     def _build_litellm_params(self, model_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Construit les paramètres LiteLLM à partir de la config du modèle."""
+        """Build LiteLLM params from model config."""
         params: Dict[str, Any] = {}
         if "temperature" in model_config:
             params["temperature"] = model_config["temperature"]
@@ -277,11 +276,11 @@ class LitellmAIClient(BaseAIClient):
 
         params["timeout"] = model_config.get("timeout", 30)
         # base_url is in litellm_kwargs
-        # base_url déjà dans litellm_kwargs, non ajouté ici
+        # base_url already in litellm_kwargs, not added here
         return params
 
     def _create_response_from_litellm(self, response) -> ChatResponseModel:
-        """Convertit une réponse LiteLLM en ChatResponseModel standard."""
+        """Convert LiteLLM response to standard ChatResponseModel."""
         if hasattr(response, "choices") and response.choices:
             choice = response.choices[0]
             if hasattr(choice, "message"):
@@ -339,7 +338,7 @@ class LitellmAIClient(BaseAIClient):
         return None
 
     def _handle_litellm_exception(self, exception: Exception, model: str) -> Optional[ChatResponseModel]:
-        """Gère les exceptions LiteLLM et les convertit en réponses standardisées."""
+        """Handle LiteLLM exceptions and convert to standardized responses."""
         error_message = str(exception)
         error_message_lower = error_message.lower()
 
@@ -353,7 +352,7 @@ class LitellmAIClient(BaseAIClient):
             self.logger.error("Service indisponible LiteLLM [%s]: %s", model, error_message)
             return ChatResponseModel.from_error(f"service_unavailable: {error_message}")
         if any(err in error_message_lower for err in ["not found", "404", "unknown model", "does not exist"]):
-            self.logger.error("Modèle non trouvé LiteLLM [%s]: %s", model, error_message)
+            self.logger.error("LiteLLM model not found [%s]: %s", model, error_message)
             return ChatResponseModel.from_error(f"model_not_found: {error_message}")
         if any(err in error_message_lower for err in ["auth", "api_key", "401", "403"]):
             self.logger.error("Erreur auth LiteLLM [%s]: %s", model, error_message)
@@ -363,7 +362,7 @@ class LitellmAIClient(BaseAIClient):
         if result:
             return result
 
-        self.logger.error("Erreur LiteLLM non gérée [%s]: %s", model, error_message)
+        self.logger.error("Unhandled LiteLLM error [%s]: %s", model, error_message)
         return None
 
     @property

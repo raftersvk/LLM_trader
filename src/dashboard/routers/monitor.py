@@ -2,7 +2,7 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from fastapi import APIRouter
 from src.utils.token_counter import CostStorage
@@ -25,6 +25,10 @@ class MonitorRouter:
         self.router.add_api_route("/system_prompt", self.get_system_prompt, methods=["GET"])
         self.router.add_api_route("/costs", self.get_api_costs, methods=["GET"])
         self.router.add_api_route("/news", self.get_news, methods=["GET"])
+        # New endpoints for multi-pair support
+        self.router.add_api_route("/pairs", self.get_available_pairs, methods=["GET"])
+        self.router.add_api_route("/status/countdown", self.get_countdown, methods=["GET"])
+        self.router.add_api_route("/status/all", self.get_all_pairs_status, methods=["GET"])
 
     def _load_prev_response_sync(self) -> Dict[str, Any]:
         """Helper to load previous response data synchronously."""
@@ -40,11 +44,11 @@ class MonitorRouter:
 
     async def get_last_prompt(self) -> Dict[str, Any]:
         """Get the last prompt sent to the LLM."""
-        if self.analysis_engine and self.analysis_engine.last_generated_prompt:
+        if self.analysis_engine and hasattr(self.analysis_engine, 'last_generated_prompt') and self.analysis_engine.last_generated_prompt:
             return {
                 "prompt": self.analysis_engine.last_generated_prompt,
                 "source": "memory",
-                "timestamp": self.analysis_engine.last_prompt_timestamp
+                "timestamp": getattr(self.analysis_engine, 'last_prompt_timestamp', None)
             }
         data = await asyncio.to_thread(self._load_prev_response_sync)
         prompt = data.get("prompt")
@@ -58,11 +62,11 @@ class MonitorRouter:
 
     async def get_last_response(self) -> Dict[str, Any]:
         """Get the last response received from the LLM."""
-        if self.analysis_engine and self.analysis_engine.last_llm_response:
+        if self.analysis_engine and hasattr(self.analysis_engine, 'last_llm_response') and self.analysis_engine.last_llm_response:
             return {
                 "response": self.analysis_engine.last_llm_response,
                 "source": "memory",
-                "timestamp": self.analysis_engine.last_response_timestamp
+                "timestamp": getattr(self.analysis_engine, 'last_response_timestamp', None)
             }
         data = await asyncio.to_thread(self._load_prev_response_sync)
         if data:
@@ -78,7 +82,7 @@ class MonitorRouter:
 
     async def get_system_prompt(self) -> Dict[str, Any]:
         """Get the last system prompt (contains brain context and trading rules)."""
-        system_prompt = self.analysis_engine.last_system_prompt if self.analysis_engine else None
+        system_prompt = getattr(self.analysis_engine, 'last_system_prompt', None) if self.analysis_engine else None
         if system_prompt:
             has_brain = "TRADING BRAIN" in system_prompt
             return {
@@ -88,9 +92,9 @@ class MonitorRouter:
             }
         return {"system_prompt": "No system prompt generated yet.", "source": None, "has_brain_context": False}
 
-
     async def get_api_costs(self) -> Dict[str, Any]:
         """Get current API cost tracking data."""
+        from src.utils.token_counter import CostStorage
         cached = self.dashboard_state.get_cached("costs", ttl_seconds=30.0)
         if cached:
             return cached
@@ -109,7 +113,6 @@ class MonitorRouter:
         }
         self.dashboard_state.set_cached("costs", result)
         return result
-
 
     def _read_news_file_sync(self, file_path: Path) -> list:
         """Synchronously read and parse a news JSON file."""
@@ -141,3 +144,20 @@ class MonitorRouter:
                         self.logger.error("Failed to load news from %s", news_path, exc_info=True)
         self.dashboard_state.set_cached("news", articles)
         return {"articles": articles, "count": len(articles)}
+
+    async def get_available_pairs(self) -> Dict[str, Any]:
+        """Get the list of configured trading pairs."""
+        return {"pairs": self.config.CRYPTO_PAIRS}
+
+    async def get_countdown(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+        """Get countdown timer for a specific pair or the first configured pair."""
+        return self.dashboard_state.get_countdown_data(symbol)
+
+    async def get_all_pairs_status(self) -> Dict[str, Any]:
+        """Get status of all configured pairs."""
+        pairs_state = self.dashboard_state.get_all_pairs_state()
+        return {
+            "pairs": pairs_state,
+            "total_pairs": len(self.config.CRYPTO_PAIRS),
+            "active_pairs": sum(1 for state in pairs_state.values() if state.get("is_running", False))
+        }

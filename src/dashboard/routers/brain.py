@@ -334,7 +334,8 @@ class BrainRouter:
         cached = self.dashboard_state.get_cached("position", ttl_seconds=10.0)
         if cached:
             return cached
-        current_price = self.dashboard_state.current_price
+        pair_state = next((p for p in self.dashboard_state.pairs.values()), None)
+        current_price = pair_state.current_price if pair_state else None
         if current_price is None:
             data_dir = self.config.DATA_DIR
             prev_response_file = Path(data_dir) / "trading" / "previous_response.json"

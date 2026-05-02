@@ -231,6 +231,26 @@ class CompositionRoot:
         deps['dashboard_server'] = dashboard_server
         deps['dashboard_state'] = dashboard_server.dashboard_state
 
+        # Multi-pair manager for concurrent pair handling
+        deps['multi_pair_manager'] = trading.get('multi_pair_manager')
+        deps['bot_factory'] = trading.get('bot_factory')
+
+        # Update factory with actual dependencies after all are built
+        if 'bot_factory' in trading and trading['bot_factory']:
+            trading['bot_factory'].base_dependencies.update({
+                'exchange_manager': infra['exchange_manager'],
+                'coingecko_api': apis['coingecko'],
+                'news_client': apis['news'],
+                'market_api': apis['market'],
+                'categories_api': apis['categories'],
+                'alternative_me_api': apis['alternative_me'],
+                'cryptocompare_session': infra['session'],
+                'model_manager': models['manager'],
+                'discord_notifier': notifiers['notifier'],
+                'keyboard_handler': infra['keyboard_handler'],
+                'rag_engine': rag,
+            })
+
         return deps
 
     def _init_directories(self):
@@ -461,13 +481,32 @@ class CompositionRoot:
             risk_manager, self.config, PositionExtractor(self.logger, utils['parser']),
             PositionFactory(self.logger)
         )
-        
+
+        # Create multi-pair manager for concurrent pair handling
+        from src.managers.multi_pair_manager import MultiPairManager
+        from src.factories.bot_factory import BotDependencyFactory
+
+        base_deps = {}
+        bot_factory = BotDependencyFactory(
+            base_dependencies=base_deps,
+            config=self.config,
+            logger=self.logger
+        )
+
+        multi_pair_manager = MultiPairManager(
+            logger=self.logger,
+            config=self.config,
+            dependencies_factory=bot_factory
+        )
+
         return {
             'strategy': strategy,
             'persistence': persistence,
             'brain_service': brain_service,
             'memory_service': memory_service,
-            'statistics_service': statistics_service
+            'statistics_service': statistics_service,
+            'multi_pair_manager': multi_pair_manager,
+            'bot_factory': bot_factory
         }
 
     async def _provision_notifiers(self, utils: dict) -> dict:
@@ -541,6 +580,8 @@ class CompositionRoot:
 
         # Extract dashboard_server before passing to bot (bot doesn't accept it)
         dashboard_server = dependencies.pop('dashboard_server', None)
+        dependencies.pop('multi_pair_manager', None)  # Not used by bot
+        dependencies.pop('bot_factory', None)  # Not used by bot
 
         bot = CryptoTradingBot(
             logger=self.logger,

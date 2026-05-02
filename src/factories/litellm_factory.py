@@ -1,6 +1,6 @@
 """
-Factory pour créer un client LiteLLM unifié.
-Remplace les factories spécifiques par un client unique multi-provider.
+Factory to create a unified LiteLLM client.
+Replaces specific factories with a single multi-provider client.
 """
 from typing import Dict, Any, Optional
 
@@ -9,11 +9,11 @@ from src.platforms.ai_providers.litellm_client import LitellmAIClient
 
 
 class LiteLLMFactory:
-    """Factory pour créer un client LiteLLM unifié."""
+    """Factory to create a unified LiteLLM client."""
 
     def __init__(self, logger: Logger, config: Any):
         """
-        Initialise la factory.
+        Initialize the factory.
 
         Args:
             logger: Logger instance
@@ -24,32 +24,32 @@ class LiteLLMFactory:
 
     def create_litellm_client(self, provider: str) -> Optional[LitellmAIClient]:
         """
-        Crée un client LiteLLM pour le provider spécifié.
+        Create a LiteLLM client for the specified provider.
 
         Args:
-            provider: Nom du provider (ollama, googleai, openrouter, blockrun)
+            provider: Provider name (ollama, googleai, openrouter, blockrun)
 
         Returns:
-            LitellmAIClient ou None si non configuré
+            LitellmAIClient or None if not configured
         """
         config = self._get_provider_config(provider)
         if not config:
-            self.logger.debug("Aucune configuration pour le provider: %s", provider)
+            self.logger.debug("No configuration for provider: %s", provider)
             return None
 
         client = LitellmAIClient(config=config, logger=self.logger)
-        self.logger.debug("Client LiteLLM créé pour le provider: %s", provider)
+        self.logger.debug("LiteLLM client created for provider: %s", provider)
         return client
 
     def _get_provider_config(self, provider: str) -> Optional[Dict[str, Any]]:
         """
-        Récupère la configuration pour un provider spécifique.
+        Retrieve config for a specific provider.
 
         Args:
-            provider: Nom du provider
+            provider: Provider name
 
         Returns:
-            Dict de configuration ou None
+            Config dict or None
         """
         if provider == "ollama":
             return self._get_ollama_config()
@@ -60,57 +60,57 @@ class LiteLLMFactory:
         elif provider == "blockrun":
             return self._get_blockrun_config()
 
-        self.logger.warning("Provider inconnu: %s", provider)
+        self.logger.warning("Unknown provider: %s", provider)
         return None
 
     def _get_ollama_config(self) -> Optional[Dict[str, Any]]:
         """
-        Configuration pour Ollama (API OpenAI-compatible locale).
+        Ollama configuration (OpenAI-compatible local API).
 
-        Utilise l'URL http://localhost:11434/v1
+        Uses http://localhost:11434/v1
         """
         base_url = getattr(self.config, "LM_STUDIO_BASE_URL", None)
         if not base_url:
-            # Valeur par défaut si non configurée
+            # Default value if not configured
             base_url = "http://localhost:11434/v1"
 
         model = getattr(self.config, "LM_STUDIO_MODEL", "gemma4:31b-cloud")
 
-        # Pour Ollama/LM Studio local, on utilise l'API OpenAI-compatible
-        # Pas besoin de API key
+        # For Ollama/LM Studio local, we use OpenAI-compatible API
+        # No API key needed
         return {
             "provider": "ollama",
             "base_url": base_url,
             "model": model,
-            "api_key": "ollama",  # Dummy key, pas utilisé pour local
+            "api_key": "ollama",  # Dummy key, local doesn't need it
         }
 
     def _get_google_config(self) -> Optional[Dict[str, Any]]:
         """
-        Configuration pour Google AI Studio via LiteLLM.
+        Google AI Studio configuration via LiteLLM.
 
-        Utilise vertexai ou gemini via LiteLLM.
+        Uses vertexai or gemini via LiteLLM.
         """
         api_key = getattr(self.config, "GOOGLE_STUDIO_API_KEY", None)
         if not api_key:
-            self.logger.debug("Aucune API key Google configurée")
+            self.logger.debug("No Google API key configured")
             return None
 
         model = getattr(self.config, "GOOGLE_STUDIO_MODEL", "gemini-1.5-flash")
 
         return {
-            "provider": "gemini",  # LiteLLM utilise "gemini" pour Google
+            "provider": "gemini",  # LiteLLM uses "gemini" for Google
             "model": model,
             "api_key": api_key,
         }
 
     def _get_openrouter_config(self) -> Optional[Dict[str, Any]]:
         """
-        Configuration pour OpenRouter via LiteLLM.
+        OpenRouter configuration via LiteLLM.
         """
         api_key = getattr(self.config, "OPENROUTER_API_KEY", None)
         if not api_key:
-            self.logger.debug("Aucune API key OpenRouter configurée")
+            self.logger.debug("No OpenRouter API key configured")
             return None
 
         base_url = getattr(self.config, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
@@ -125,13 +125,13 @@ class LiteLLMFactory:
 
     def _get_blockrun_config(self) -> Optional[Dict[str, Any]]:
         """
-        Configuration pour BlockRun via LiteLLM.
+        BlockRun configuration via LiteLLM.
 
-        BlockRun utilise une API OpenAI-compatible avec wallet key.
+        BlockRun uses an OpenAI-compatible API with wallet key.
         """
         wallet_key = getattr(self.config, "BLOCKRUN_WALLET_KEY", None)
         if not wallet_key:
-            self.logger.debug("Aucune wallet key BlockRun configurée")
+            self.logger.debug("No BlockRun wallet key configured")
             return None
 
         base_url = getattr(
@@ -142,7 +142,7 @@ class LiteLLMFactory:
         model = getattr(self.config, "BLOCKRUN_MODEL", "openai/gpt-4o")
 
         return {
-            "provider": "openai",  # BlockRun est OpenAI-compatible
+            "provider": "openai",  # BlockRun is OpenAI-compatible
             "base_url": base_url,
             "model": model,
             "api_key": wallet_key,
@@ -150,10 +150,10 @@ class LiteLLMFactory:
 
     def get_all_clients(self) -> Dict[str, Optional[LitellmAIClient]]:
         """
-        Crée tous les clients configurés.
+        Create all configured clients.
 
         Returns:
-            Dict avec les clients pour chaque provider
+            Dict with clients for each provider
         """
         providers = ["ollama", "googleai", "openrouter", "blockrun"]
         clients = {}

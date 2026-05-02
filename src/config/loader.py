@@ -291,7 +291,25 @@ class Config:
 
     @property
     def CRYPTO_PAIR(self):
+        """Backward compatibility - primary pair."""
         return self.get_config('general', 'crypto_pair', 'BTC/USDT')
+
+    @property
+    def CRYPTO_PAIRS(self) -> list:
+        """Get list of crypto pairs to trade.
+        
+        Supports:
+        - crypto_pairs = BTC/USDT, ETH/USDT, BNB/USDT (nouvelle option)
+        - crypto_pair = BTC/USDT (existant, fallback)
+        """
+        pairs_str = self.get_config('general', 'crypto_pairs', None)
+        if pairs_str:
+            if isinstance(pairs_str, list):
+                return pairs_str
+            pairs = [p.strip() for p in str(pairs_str).split(',') if p.strip()]
+            if pairs:
+                return pairs
+        return [self.CRYPTO_PAIR]
 
     @property
     def DISCORD_BOT_ENABLED(self):

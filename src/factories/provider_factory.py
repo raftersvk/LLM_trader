@@ -66,30 +66,30 @@ class ProviderFactory:
 
         return google_client, google_paid_client
 
-    # === Méthodes spécifiques (dépréciées - gardées pour compatibilité) ===
-    
+    # === Specific methods (deprecated - kept for compatibility) ===
+
     def create_openrouter_client(self) -> None:
-        """Déprécié - utiliser LiteLLM."""
+        """Deprecated - use LiteLLM."""
         return None
 
     def create_lmstudio_client(self) -> None:
-        """Déprécié - utiliser LiteLLM."""
+        """Deprecated - use LiteLLM."""
         return None
 
     def create_blockrun_client(self) -> None:
-        """Déprécié - utiliser LiteLLM."""
+        """Deprecated - use LiteLLM."""
         return None
 
     def create_all_clients(self) -> dict:
         """
         Create all available AI provider clients based on configuration.
-        
+
         Returns:
             Dictionary with keys: 'google', 'google_paid', 'openrouter', 'lmstudio', 'blockrun'.
         """
         google_client, google_paid_client = self.create_google_clients()
 
-        # Créer tous les clients via LiteLLM factory
+        # Create all clients via LiteLLM factory
         litellm_clients = self.litellm_factory.get_all_clients()
 
         return {

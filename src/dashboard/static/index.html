@@ -31,6 +31,17 @@
                 <button id="mobile-menu-close" class="icon-btn-xs mobile-close-btn" aria-label="Close menu" aria-expanded="true" aria-controls="sidebar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
 
+            <!-- Pair Selector -->
+            <div class="pair-selector-container" style="margin: 20px 0; padding: 0 15px;">
+                <label for="pair-select" class="pair-label">Paire de trading: </label>
+                <select id="pair-select" class="pair-select">
+                    <!-- Options will be populated dynamically -->
+                </select>
+                <button id="consolidated-view-btn" class="icon-btn" title="Vue consolidée de toutes les paires">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8"/><path d="M8 12h8"/></svg></button>
+                <span id="active-pairs-badge" class="pairs-badge"></span>
+            </div>
+
             <div class="sidebar-nav" role="tablist" aria-label="Dashboard Navigation">
                 <span class="tab-btn active" data-target="tab-overview" role="tab" aria-selected="true" aria-controls="tab-overview" id="nav-overview" tabindex="0">
                     <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></span> Overview

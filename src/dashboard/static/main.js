@@ -9,6 +9,7 @@ import { initPositionPanel, updatePositionData } from './modules/position_panel.
 import { initUI } from './modules/ui.js?v=4.5';
 import { initStatisticsPanel, updateStatisticsData } from './modules/statistics_panel.js?v=4.5';
 import { initNewsPanel, updateNewsData } from './modules/news_panel.js?v=4.5';
+import { consolidatedOverview } from './modules/overview.js?v=1.0';
 
 const state = {
     isConnected: false,
@@ -257,6 +258,59 @@ function initApp() {
             console.log('Analysis complete, refreshing...');
             updateFastLane();
             updateSlowLane();
+        });
+
+        // Initialize pair selector and consolidated view button
+        document.addEventListener('DOMContentLoaded', () => {
+            const pairSelect = document.getElementById('pair-select');
+            const consolidatedViewBtn = document.getElementById('consolidated-view-btn');
+            const activePairsBadge = document.getElementById('active-pairs-badge');
+            
+            if (pairSelect && consolidatedViewBtn && activePairsBadge) {
+                // Fetch available pairs and populate selector
+                fetch('/api/monitor/pairs')
+                    .then(response => response.json())
+                    .then(data => {
+                        const pairs = data.pairs || [];
+                        if (pairs.length > 0) {
+                            // Populate selector
+                            pairSelect.innerHTML = '';
+                            pairs.forEach(pair => {
+                                const option = document.createElement('option');
+                                option.value = pair;
+                                option.textContent = pair;
+                                pairSelect.appendChild(option);
+                            });
+                            
+                            // Set default to first pair
+                            pairSelect.value = pairs[0];
+                            currentPair = pairs[0];
+                            
+                            // Update badge
+                            activePairsBadge.textContent = `${pairs.length} paires`;
+                            
+                            // Add change event listener
+                            pairSelect.addEventListener('change', (e) => {
+                                const newPair = e.target.value;
+                                if (newPair && newPair !== currentPair) {
+                                    currentPair = newPair;
+                                    // Notify all modules to update for this pair
+                                    document.dispatchEvent(new CustomEvent('pair-changed', { 
+                                        detail: { symbol: newPair } 
+                                    }));
+                                }
+                            });
+                            
+                            // Add consolidated view button listener
+                            consolidatedViewBtn.addEventListener('click', () => {
+                                consolidatedOverview.load();
+                            });
+                        }
+                    })
+                    .catch(err => {
+                        console.error('Failed to load pairs:', err);
+                    });
+            }
         });
 
         console.log('Dashboard App Initialized');

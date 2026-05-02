@@ -429,7 +429,7 @@ class CryptoTradingBot:
             if ticker and self.dashboard_state:
                 price = float(ticker.get('last', ticker.get('close', 0)))
                 if price > 0:
-                    await self.dashboard_state.update_price(price)
+                    await self.dashboard_state.update_price(self.current_symbol, price)
             return ticker
         except Exception as e:
             self.logger.error("Error fetching current ticker: %s", e)
@@ -448,7 +448,7 @@ class CryptoTradingBot:
             next_check_time = datetime.fromtimestamp(next_candle_ms / 1000, timezone.utc)
             self.logger.info("Next check at %s UTC (in %.0fs)", next_check_time.strftime('%Y-%m-%d %H:%M:%S'), delay_seconds)
             if self.dashboard_state:
-                await self.dashboard_state.update_next_check(next_check_time)
+                await self.dashboard_state.update_next_check(self.current_symbol, next_check_time)
             return await self._interruptible_sleep(delay_seconds)
 
         except Exception as e:
@@ -491,7 +491,7 @@ class CryptoTradingBot:
             self.logger.info("Resuming from last check at %s. %s - next check at %s UTC (in %.0fs)", last_time.strftime('%Y-%m-%d %H:%M:%S'), context_msg, next_check_time.strftime('%Y-%m-%d %H:%M:%S'), delay_seconds)
 
             if self.dashboard_state:
-                await self.dashboard_state.update_next_check(next_check_time)
+                await self.dashboard_state.update_next_check(self.current_symbol, next_check_time)
             await self._interruptible_sleep(delay_seconds)
 
         except Exception as e:
