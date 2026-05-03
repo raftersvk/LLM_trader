@@ -102,13 +102,18 @@ class BotDependencyFactory:
             'discord_notifier',
             'keyboard_handler',
             'rag_engine',
-            'market_analyzer',
+            'parser',
         ]
 
         deps = {}
         for key in shared:
             if key in self.base_dependencies:
                 deps[key] = self.base_dependencies[key]
+
+        market_analyzer_factory = self.base_dependencies.get('market_analyzer_factory')
+        if market_analyzer_factory:
+            deps['market_analyzer'] = market_analyzer_factory(symbol)
+
         return deps
 
     def _create_pair_services(self, symbol: str) -> Dict[str, Any]:
@@ -147,9 +152,10 @@ class BotDependencyFactory:
         from src.trading.position_extractor import PositionExtractor
         from src.factories.position_factory import PositionFactory
         from src.trading.trading_strategy import TradingStrategy
+        parser = self.base_dependencies.get('parser')
         strategy = TradingStrategy(
             self.logger, persistence, brain_service, statistics_service, memory_service,
-            risk_manager, self.config, PositionExtractor(self.logger, None), PositionFactory(self.logger)
+            risk_manager, self.config, PositionExtractor(self.logger, parser), PositionFactory(self.logger)
         )
 
         return {

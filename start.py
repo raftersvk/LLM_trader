@@ -189,7 +189,8 @@ class CompositionRoot:
         # Combine everything for the bot and dashboard
         deps = {
             'exchange_manager': infra['exchange_manager'],
-            'market_analyzer': analyzer['engine'],
+            'market_analyzer': analyzer['engine_factory'](self.config.CRYPTO_PAIR),
+            'market_analyzer_factory': analyzer['engine_factory'],
             'trading_strategy': trading['strategy'],
             'discord_notifier': notifiers['notifier'],
             'discord_task': notifiers['task'],
@@ -206,14 +207,16 @@ class CompositionRoot:
             'brain_service': trading['brain_service'],
             'statistics_service': trading['statistics_service'],
             'memory_service': trading['memory_service'],
+            'unified_parser': utils['parser'],
         }
 
-        # Always instantiate DashboardServer so the 'd' keyboard toggle can start/stop it at runtime.
-        # The server socket is NOT opened until start() is called, so this is safe even when disabled.
+        # Dashboard needs an analysis_engine; create one for dashboard monitoring purposes.
+        # Multi-pair bots get their own engine instances per pair via the factory.
+        dashboard_engine = analyzer['engine_factory'](self.config.CRYPTO_PAIR)
         dashboard_server = DashboardServer(
             brain_service=trading['brain_service'],
             vector_memory=trading['brain_service'].vector_memory if trading['brain_service'] else None,
-            analysis_engine=analyzer['engine'],
+            analysis_engine=dashboard_engine,
             config=self.config,
             logger=self.logger,
             unified_parser=utils['parser'],
@@ -244,7 +247,8 @@ class CompositionRoot:
                 'discord_notifier': notifiers['notifier'],
                 'keyboard_handler': infra['keyboard_handler'],
                 'rag_engine': rag,
-                'market_analyzer': analyzer['engine'],
+                'market_analyzer_factory': analyzer['engine_factory'],
+                'parser': utils['parser'],
             })
 
         return deps
@@ -397,52 +401,55 @@ class CompositionRoot:
     async def _provision_analyzer_layer(
         self, infra: dict, apis: dict, utils: dict, rag: RagEngine, models: dict
     ) -> dict:
-        """Provision the market analysis engine."""
-        overview_fmt = MarketOverviewFormatter(self.logger, utils['format_utils'])
-        long_term_fmt = LongTermFormatter(self.logger, utils['format_utils'])
-        period_fmt = MarketPeriodFormatter(self.logger, utils['format_utils'])
+        """Provision the market analysis engine components."""
 
-        market_fmt = MarketFormatter(
-            self.logger, utils['format_utils'], self.config, utils['token_counter'],
-            overview_fmt, period_fmt, long_term_fmt
-        )
+        def create_analysis_engine(symbol: str):
+            """Factory to create per-pair AnalysisEngine instances."""
+            overview_fmt = MarketOverviewFormatter(self.logger, utils['format_utils'])
+            long_term_fmt = LongTermFormatter(self.logger, utils['format_utils'])
+            period_fmt = MarketPeriodFormatter(self.logger, utils['format_utils'])
 
-        tech_calc = TechnicalCalculator(self.logger, utils['format_utils'], utils['ti_factory'])
-        pattern_analyzer = PatternAnalyzer(
-            pattern_engine=PatternEngine(lookback=5, lookahead=5),
-            indicator_pattern_engine=IndicatorPatternEngine(),
-            logger=self.logger
-        )
-        try:
-            pattern_analyzer.warmup()
-        except Exception as warmup_error:
-            self.logger.warning("Pattern analyzer warm-up could not run: %s", warmup_error)
+            market_fmt = MarketFormatter(
+                self.logger, utils['format_utils'], self.config, utils['token_counter'],
+                overview_fmt, period_fmt, long_term_fmt
+            )
 
-        ctx_builder = AnalyzerContextBuilder(
-            self.config.TIMEFRAME, self.logger, utils['format_utils'],
-            market_fmt, period_fmt, long_term_fmt, utils['timeframe_validator']
-        )
-        
-        prompt_builder = PromptBuilder(
-            self.config.TIMEFRAME, self.logger, tech_calc, self.config, utils['format_utils'],
-            overview_fmt, long_term_fmt, TechnicalFormatter(tech_calc, self.logger, utils['format_utils']),
-            market_fmt, utils['timeframe_validator'],
-            TemplateManager(self.config, self.logger, utils['timeframe_validator']), ctx_builder
-        )
-        
-        engine = AnalysisEngine(
-            self.logger, rag, apis['coingecko'], models['manager'], apis['alternative_me'],
-            apis['market'], self.config, tech_calc, pattern_analyzer, prompt_builder,
-            MarketDataCollector(self.logger, rag, apis['alternative_me'], session=infra['session']),
-            MarketMetricsCalculator(self.logger),
-            AnalysisResultProcessor(models['manager'], self.logger, utils['parser']),
-            ChartGenerator(
-                self.logger, self.config, formatter=utils['format_utils'].fmt, format_utils=utils['format_utils']
-            ),
-            data_fetcher_factory=utils['data_fetcher_factory']
-        )
-        
-        return {'engine': engine}
+            tech_calc = TechnicalCalculator(self.logger, utils['format_utils'], utils['ti_factory'])
+            pattern_analyzer = PatternAnalyzer(
+                pattern_engine=PatternEngine(lookback=5, lookahead=5),
+                indicator_pattern_engine=IndicatorPatternEngine(),
+                logger=self.logger
+            )
+            try:
+                pattern_analyzer.warmup()
+            except Exception as warmup_error:
+                self.logger.warning("Pattern analyzer warm-up could not run: %s", warmup_error)
+
+            ctx_builder = AnalyzerContextBuilder(
+                self.config.TIMEFRAME, self.logger, utils['format_utils'],
+                market_fmt, period_fmt, long_term_fmt, utils['timeframe_validator']
+            )
+
+            prompt_builder = PromptBuilder(
+                self.config.TIMEFRAME, self.logger, tech_calc, self.config, utils['format_utils'],
+                overview_fmt, long_term_fmt, TechnicalFormatter(tech_calc, self.logger, utils['format_utils']),
+                market_fmt, utils['timeframe_validator'],
+                TemplateManager(self.config, self.logger, utils['timeframe_validator']), ctx_builder
+            )
+
+            return AnalysisEngine(
+                self.logger, rag, apis['coingecko'], models['manager'], apis['alternative_me'],
+                apis['market'], self.config, tech_calc, pattern_analyzer, prompt_builder,
+                MarketDataCollector(self.logger, rag, apis['alternative_me'], session=infra['session']),
+                MarketMetricsCalculator(self.logger),
+                AnalysisResultProcessor(models['manager'], self.logger, utils['parser']),
+                ChartGenerator(
+                    self.logger, self.config, formatter=utils['format_utils'].fmt, format_utils=utils['format_utils']
+                ),
+                data_fetcher_factory=utils['data_fetcher_factory']
+            )
+
+        return {'engine_factory': create_analysis_engine}
 
     def _provision_trading_layer(self, utils: dict) -> dict:
         """Provision trading strategy and memory services."""
@@ -586,6 +593,9 @@ class CompositionRoot:
         dashboard_server = dependencies.pop('dashboard_server', None)
         multi_pair_manager = dependencies.pop('multi_pair_manager', None)
         bot_factory = dependencies.pop('bot_factory', None)
+        # market_analyzer_factory is for multi-pair bots via BotDependencyFactory only
+        dependencies.pop('market_analyzer_factory', None)
+        dependencies.pop('unified_parser', None)
 
         bot = CryptoTradingBot(
             logger=self.logger,
