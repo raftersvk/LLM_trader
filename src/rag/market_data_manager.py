@@ -5,7 +5,7 @@ Handles fetching and processing of cryptocurrency market overview data.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from src.logger.logger import Logger
 from .file_handler import RagFileHandler
 from .market_components import (

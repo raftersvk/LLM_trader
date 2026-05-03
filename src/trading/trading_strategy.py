@@ -186,8 +186,19 @@ class TradingStrategy:
                 return None
 
             # Extract trading info from response
-            signal, confidence, stop_loss, take_profit, position_size, reasoning = \
-                self.extractor.extract_trading_info(raw_response)
+            extracted = self.extractor.extract_trading_info(raw_response)
+            signal, confidence, stop_loss, take_profit, position_size, reasoning, ai_symbol = extracted
+
+            # Validate symbol if AI provided one
+            if ai_symbol:
+                expected_symbol = symbol.upper().replace("/", "_")
+                ai_symbol_normalized = ai_symbol.upper().replace("/", "_").replace("-", "_")
+                if ai_symbol_normalized != expected_symbol:
+                    self.logger.error(
+                        "AI responded with wrong symbol: %s (expected %s). Discarding response.",
+                        ai_symbol, symbol
+                    )
+                    return None
 
             self.logger.info("Extracted Signal: %s, Confidence: %s", signal, confidence)
 

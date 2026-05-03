@@ -6,7 +6,6 @@ via a single unified client.
 """
 import io
 import base64
-import logging
 from typing import Optional, Dict, Any, List, Union
 
 import litellm

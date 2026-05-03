@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any, TYPE_CHECKING
 from uuid import uuid4
 
 from src.logger.logger import Logger
-from src.utils.indicator_classifier import classify_adx_label, classify_rsi_label
+from src.utils.indicator_classifier import classify_adx_label
 from .vector_memory import VectorMemoryService
 from .data_models import Position, TradeDecision
 

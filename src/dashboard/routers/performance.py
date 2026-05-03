@@ -185,6 +185,6 @@ class PerformanceRouter:
                     "win_rate": win_rate
                 }
             }
-        except Exception as e:
+        except Exception:
             self.logger.error("Failed to generate consolidated statistics", exc_info=True)
             return {"error": "Failed to generate consolidated statistics"}

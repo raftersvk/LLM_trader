@@ -83,31 +83,31 @@ class PositionExtractor:
         # Try raw extraction without unwrapping
         return self.unified_parser.extract_json_block(text)
 
-    def extract_trading_info(self, text: str) -> Tuple[str, str, Optional[float], Optional[float], Optional[float], str]:
+    def extract_trading_info(self, text: str) -> Tuple[str, str, Optional[float], Optional[float], Optional[float], str, Optional[str]]:
         """Extract trading information from AI response.
 
         Args:
             text: AI response text
 
         Returns:
-            Tuple of (signal, confidence, stop_loss, take_profit, position_size, reasoning)
+            Tuple of (signal, confidence, stop_loss, take_profit, position_size, reasoning, symbol)
         """
         # First try JSON extraction
         json_data = self.extract_from_json(text)
         if json_data:
             return self._extract_from_dict(json_data)
 
-        # Fall back to regex extraction
-        return self._extract_from_text(text)
+        # Fall back to regex extraction (symbol will be None)
+        return self._extract_from_text(text) + (None,)
 
-    def _extract_from_dict(self, data: Dict[str, Any]) -> Tuple[str, str, Optional[float], Optional[float], Optional[float], str]:
+    def _extract_from_dict(self, data: Dict[str, Any]) -> Tuple[str, str, Optional[float], Optional[float], Optional[float], str, Optional[str]]:
         """Extract trading info from a dictionary.
 
         Args:
             data: Dictionary containing trading decision
 
         Returns:
-            Tuple of (signal, confidence, stop_loss, take_profit, position_size, reasoning)
+            Tuple of (signal, confidence, stop_loss, take_profit, position_size, reasoning, symbol)
         """
         signal = str(data.get("signal", data.get("action", "HOLD"))).upper()
 
@@ -133,7 +133,12 @@ class PositionExtractor:
 
         reasoning = str(data.get("reasoning", data.get("rationale", "")))
 
-        return signal, confidence, stop_loss, take_profit, position_size, reasoning
+        # Extract symbol if present in response
+        symbol = data.get("symbol")
+        if symbol is not None:
+            symbol = str(symbol).upper()
+
+        return signal, confidence, stop_loss, take_profit, position_size, reasoning, symbol
 
     def _numeric_to_confidence_string(self, confidence: float) -> str:
         """Convert numeric confidence (0-100) to string (HIGH/MEDIUM/LOW).

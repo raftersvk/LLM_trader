@@ -94,7 +94,6 @@ class MonitorRouter:
 
     async def get_api_costs(self) -> Dict[str, Any]:
         """Get current API cost tracking data."""
-        from src.utils.token_counter import CostStorage
         cached = self.dashboard_state.get_cached("costs", ttl_seconds=30.0)
         if cached:
             return cached

@@ -291,6 +291,7 @@ class PromptBuilder:
 
         # Add response template (instructions go in system prompt)
         response_template = self.template_manager.build_response_template(
+            symbol,
             has_chart_analysis,
             dynamic_thresholds=dynamic_thresholds
         )

@@ -137,11 +137,12 @@ class TemplateManager:
 
         return "\n".join(header_lines)
 
-    def build_response_template(self, _has_chart_analysis: bool = False,
+    def build_response_template(self, symbol: str, _has_chart_analysis: bool = False,
                                 dynamic_thresholds: Optional[Dict[str, Any]] = None) -> str:
         """Build the response template for trading decision output.
 
         Args:
+            symbol: Trading symbol (e.g., "BTC/USDT")
             has_chart_analysis: Whether chart image analysis is available
             dynamic_thresholds: Brain-learned thresholds for dynamic values
 
@@ -201,6 +202,7 @@ Then output JSON:
 {{
     "analysis": {{
         "signal": "BUY|SELL|HOLD|CLOSE|UPDATE",
+        "symbol": "{symbol}",
         "confidence": 0-100,
         "confluence_factors": {{
             "trend_alignment": 0-100,
@@ -220,6 +222,8 @@ Then output JSON:
     }}
 }}
 ```
+
+**CRITICAL**: The "symbol" field MUST match exactly the trading pair you are analyzing (e.g., "ETH/USDT"). If you analyze the wrong pair, the trading system will open positions on the wrong asset at the wrong price.
 
 CONFLUENCE SCORING:
 Before finalizing your signal, rate each factor (0-100) based on how strongly it SUPPORTS your chosen signal:

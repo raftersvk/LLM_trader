@@ -7,7 +7,6 @@ import io
 import base64
 from typing import Optional, Dict, Any, List, Union
 
-from PIL import Image
 from openrouter import OpenRouter
 from openrouter.errors import (
     BadRequestResponseError,
@@ -220,62 +219,62 @@ class OpenRouterClient(BaseAIClient):
         if isinstance(exception, EdgeNetworkTimeoutResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter edge network timeout (524): %s", error_msg)
-            return ChatResponseModel.from_error(f"upstream_timeout: Edge network timeout - upstream provider failed to respond")
+            return ChatResponseModel.from_error("upstream_timeout: Edge network timeout - upstream provider failed to respond")
         
         if isinstance(exception, BadGatewayResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter bad gateway (502): %s", error_msg)
-            return ChatResponseModel.from_error(f"bad_gateway: Upstream provider returned an invalid response")
+            return ChatResponseModel.from_error("bad_gateway: Upstream provider returned an invalid response")
         
         if isinstance(exception, ServiceUnavailableResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter service unavailable (503): %s", error_msg)
-            return ChatResponseModel.from_error(f"overloaded: OpenRouter service unavailable")
+            return ChatResponseModel.from_error("overloaded: OpenRouter service unavailable")
         
         if isinstance(exception, ProviderOverloadedResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter provider overloaded (529): %s", error_msg)
-            return ChatResponseModel.from_error(f"overloaded: Selected provider is overloaded")
+            return ChatResponseModel.from_error("overloaded: Selected provider is overloaded")
         
         if isinstance(exception, TooManyRequestsResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter rate limited (429): %s", error_msg)
-            return ChatResponseModel.from_error(f"rate_limit: Too many requests")
+            return ChatResponseModel.from_error("rate_limit: Too many requests")
         
         if isinstance(exception, NotFoundResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter not found (404): %s", error_msg)
-            return ChatResponseModel.from_error(f"not_found: Requested resource not found")
+            return ChatResponseModel.from_error("not_found: Requested resource not found")
         
         if isinstance(exception, BadRequestResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter bad request (400): %s", error_msg)
-            return ChatResponseModel.from_error(f"bad_request: Invalid request parameters")
+            return ChatResponseModel.from_error("bad_request: Invalid request parameters")
         
         if isinstance(exception, UnauthorizedResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter unauthorized (401): %s", error_msg)
-            return ChatResponseModel.from_error(f"authentication: Invalid API key")
+            return ChatResponseModel.from_error("authentication: Invalid API key")
         
         if isinstance(exception, PaymentRequiredResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter payment required (402): %s", error_msg)
-            return ChatResponseModel.from_error(f"quota: Insufficient credits")
+            return ChatResponseModel.from_error("quota: Insufficient credits")
         
         if isinstance(exception, RequestTimeoutResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter request timeout (408): %s", error_msg)
-            return ChatResponseModel.from_error(f"timeout: Request timed out")
+            return ChatResponseModel.from_error("timeout: Request timed out")
         
         if isinstance(exception, InternalServerResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter internal server error (500): %s", error_msg)
-            return ChatResponseModel.from_error(f"server_error: OpenRouter internal error")
+            return ChatResponseModel.from_error("server_error: OpenRouter internal error")
         
         if isinstance(exception, UnprocessableEntityResponseError):
             error_msg = str(exception)
             self.logger.error("OpenRouter unprocessable entity (422): %s", error_msg)
-            return ChatResponseModel.from_error(f"invalid_request: Unprocessable entity")
+            return ChatResponseModel.from_error("invalid_request: Unprocessable entity")
         
         if isinstance(exception, OpenRouterDefaultError):
             error_msg = str(exception)
