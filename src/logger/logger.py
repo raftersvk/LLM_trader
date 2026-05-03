@@ -9,6 +9,8 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install as install_rich_traceback
 
+from typing import Optional
+
 from src.config.loader import config
 
 install_rich_traceback()
@@ -58,6 +60,18 @@ class DailyRotatingFileHandler(TimedRotatingFileHandler):
         super().emit(record)
 
 
+class _SymbolFilter(logging.Filter):
+    def __init__(self, logger):
+        super().__init__()
+        self._logger = logger
+
+    def filter(self, record):
+        if self._logger.symbol_context:
+            if record.msg and isinstance(record.msg, str):
+                record.msg = f"[{self._logger.symbol_context}] {record.msg}"
+        return True
+
+
 class Logger(logging.Logger):
     def __init__(self, logger_name: str = '', log_filename_prefix: str = '', log_dir: str = None,
                  logger_debug: bool = False) -> None:
@@ -67,9 +81,9 @@ class Logger(logging.Logger):
         super().__init__(sanitized_name, level)
 
         self.log_filename_prefix = log_filename_prefix
+        self.symbol_context: Optional[str] = None
 
         if log_dir is None:
-            # Import config here to avoid circular imports
             self.log_dir = config.LOG_DIR
         else:
             self.log_dir = log_dir
@@ -79,26 +93,34 @@ class Logger(logging.Logger):
         self._setup_logger()
         self.debug("Logger %s initialized with log directory: %s", sanitized_name, self.log_dir)
 
+    def set_symbol(self, symbol: Optional[str]) -> None:
+        self.symbol_context = symbol
+
+    def getChild(self, suffix):
+        child = Logger(self.name + '.' + suffix, self.log_filename_prefix, self.log_dir, self.level == logging.DEBUG)
+        child.symbol_context = self.symbol_context
+        for handler in child.handlers[:]:
+            handler.filters = [f for f in handler.filters if not isinstance(f, _SymbolFilter)]
+            handler.addFilter(_SymbolFilter(child))
+        return child
+
     def _get_log_dir(self, current_date: str) -> str:
-        # Simplified: no separate error directory logic needed
         log_dir = os.path.join(self.log_dir, self.name, current_date)
         os.makedirs(log_dir, exist_ok=True)
         return log_dir
 
     def _get_log_filename(self, log_dir: str, suffix: str = '') -> str:
-        # Ensure we have a valid filename even if prefix or name are empty
         prefix = self.log_filename_prefix if self.log_filename_prefix else ""
         name = self.name if self.name else "default"
         return os.path.join(log_dir, f"{prefix}{name}{suffix}.log")
 
     def _plain_formatter(self) -> logging.Formatter:
-        format_string = "[{asctime}] {filename}.{funcName} - {message}" if self.level == logging.DEBUG else "[{asctime}] - {message}"
+        format_string = "[{asctime}] {message}" if self.level == logging.DEBUG else "[{asctime}] {message}"
         return logging.Formatter(format_string, datefmt=self.date_format, style="{")
 
     def _setup_logger(self) -> None:
         current_date = datetime.now().strftime("%Y_%m_%d")
         log_dir = self._get_log_dir(current_date)
-        # Error log now lives in the same directory, so we reuse log_dir
         error_log_dir = log_dir
 
         if not self.handlers:
@@ -108,8 +130,15 @@ class Logger(logging.Logger):
 
     def _add_console_handler(self):
         console = Console(color_system="auto", width=180)
-        rich_handler = RichHandler(console=console, rich_tracebacks=False)
+        rich_handler = RichHandler(
+            console=console,
+            rich_tracebacks=False,
+            show_time=True,
+            show_path=self.level == logging.DEBUG,
+            log_time_format='[%d/%m/%y %H:%M:%S]'
+        )
         rich_handler.setLevel(self.level)
+        rich_handler.addFilter(_SymbolFilter(self))
         self.addHandler(rich_handler)
 
     def _add_file_handler(self, log_dir):
@@ -127,12 +156,12 @@ class Logger(logging.Logger):
         )
         file_handler.setLevel(self.level)
         file_handler.setFormatter(self._plain_formatter())
+        file_handler.addFilter(_SymbolFilter(self))
         file_handler.namer = lambda name: name.replace(".log", "") + ".log"
         file_handler.rotator = lambda source, _dest: self._log_rotator(source)
         self.addHandler(file_handler)
 
     def _add_error_file_handler(self, error_log_dir):
-        # We manually specify errors.log here, though the handler logic also enforces it
         error_log_filename = os.path.join(error_log_dir, "errors.log")
         error_file_handler = DailyRotatingFileHandler(
             error_log_filename,
@@ -147,6 +176,7 @@ class Logger(logging.Logger):
         )
         error_file_handler.setLevel(logging.ERROR)
         error_file_handler.setFormatter(self._plain_formatter())
+        error_file_handler.addFilter(_SymbolFilter(self))
         error_file_handler.namer = lambda name: name.replace(".log", "") + ".log"
         error_file_handler.rotator = lambda source, _dest: self._log_rotator(source)
         self.addHandler(error_file_handler)

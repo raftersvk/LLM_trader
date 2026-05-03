@@ -2,7 +2,7 @@
 
 import asyncio
 from typing import Dict, List, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from src.logger.logger import Logger
 from src.config.loader import Config
 
@@ -39,49 +39,54 @@ class MultiPairManager:
     
     async def initialize_pair(self, symbol: str) -> PairTradingContext:
         """Initialize the context for a specific pair."""
-        async with self._lock:
-            timeframe = self.config.TIMEFRAME
-            context = PairTradingContext(
-                symbol=symbol,
-                timeframe=timeframe,
-                is_running=False
-            )
-            self.pair_contexts[symbol] = context
-            self.logger.info("Initialized pair context: %s (%s)", symbol, timeframe)
-            return context
+        timeframe = self.config.TIMEFRAME
+        context = PairTradingContext(
+            symbol=symbol,
+            timeframe=timeframe,
+            is_running=False
+        )
+        self.pair_contexts[symbol] = context
+        self.logger.info("Initialized pair context: %s (%s)", symbol, timeframe)
+        return context
     
     async def start_pair(self, symbol: str) -> bool:
         """Start the trading loop for a pair."""
+        self.logger.info("start_pair %s: checking context", symbol)
         async with self._lock:
+            self.logger.info("start_pair %s: lock acquired", symbol)
             if symbol not in self.pair_contexts:
                 await self.initialize_pair(symbol)
-            
+
             context = self.pair_contexts[symbol]
             if context.is_running and context.bot_task and not context.bot_task.done():
                 self.logger.warning("Pair %s already running", symbol)
                 return False
-            
-            # Create a new independent bot for this pair
-            bot = await self.dependencies_factory.create_bot_for_pair(symbol)
-            
-            # Start the async task
+            context.is_running = True
+
+        self.logger.info("start_pair %s: creating bot (outside lock)", symbol)
+        self.logger.info("start_pair %s: calling create_bot_for_pair...", symbol)
+        bot = await self.dependencies_factory.create_bot_for_pair(symbol)
+        self.logger.info("start_pair %s: create_bot_for_pair returned", symbol)
+
+        async with self._lock:
+            context = self.pair_contexts[symbol]
             context.bot_task = asyncio.create_task(
                 self._run_pair_loop(bot, symbol),
                 name=f"TradingBot-{symbol.replace('/', '_')}"
             )
-            context.is_running = True
-            self.logger.info("Started trading loop for %s", symbol)
+            self.logger.info("Pair %s task started (task_id=%s)", symbol, context.bot_task.get_name())
             return True
     
     async def _run_pair_loop(self, bot, symbol: str):
         """Execution loop for a specific pair."""
+        self.logger.info("Pair %s loop starting", symbol)
         try:
             await bot.run(symbol, bot.config.TIMEFRAME)
         except asyncio.CancelledError:
             self.logger.info("Trading loop cancelled for %s", symbol)
             raise
         except Exception as e:
-            self.logger.error("Error in trading loop for %s: %s", symbol, e)
+            self.logger.error("Error in trading loop for %s: %s", symbol, e, exc_info=True)
             async with self._lock:
                 if symbol in self.pair_contexts:
                     self.pair_contexts[symbol].last_error = str(e)
@@ -90,6 +95,7 @@ class MultiPairManager:
             async with self._lock:
                 if symbol in self.pair_contexts:
                     self.pair_contexts[symbol].is_running = False
+            self.logger.info("Pair %s loop ended", symbol)
     
     async def stop_pair(self, symbol: str) -> bool:
         """Stop the loop for a pair."""
@@ -112,17 +118,15 @@ class MultiPairManager:
     async def start_all_pairs(self):
         """Start all configured pairs."""
         pairs = self.get_pairs()
+        self.logger.info("start_all_pairs: got %d pairs %s", len(pairs), pairs)
         self.logger.info("Starting %d pairs: %s", len(pairs), ", ".join(pairs))
-        
-        tasks = []
+
         for symbol in pairs:
-            tasks.append(self.start_pair(symbol))
-        
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        successful = sum(1 for r in results if r is True)
-        self.logger.info("Started %d/%d pairs successfully", successful, len(pairs))
-        return results
+            self.logger.info("start_all_pairs: starting pair %s", symbol)
+            await self.start_pair(symbol)
+            self.logger.info("start_all_pairs: pair %s started", symbol)
+
+        self.logger.info("All %d pairs started", len(pairs))
     
     async def stop_all_pairs(self):
         """Stop all running pairs."""

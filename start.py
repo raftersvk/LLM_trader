@@ -98,12 +98,7 @@ def _get_best_device() -> str:
         return "mps"
     return "cpu"
 
-try:
-    from PyQt6.QtWidgets import QApplication, QMessageBox
-    from PyQt6.QtCore import Qt
-    PYQT_AVAILABLE = True
-except ImportError:
-    PYQT_AVAILABLE = False
+PYQT_AVAILABLE = False
 
 class SingleInstanceLock:
     """Manages a single instance lock file to prevent multiple application instances."""
@@ -249,6 +244,7 @@ class CompositionRoot:
                 'discord_notifier': notifiers['notifier'],
                 'keyboard_handler': infra['keyboard_handler'],
                 'rag_engine': rag,
+                'market_analyzer': analyzer['engine'],
             })
 
         return deps
@@ -486,7 +482,14 @@ class CompositionRoot:
         from src.managers.multi_pair_manager import MultiPairManager
         from src.factories.bot_factory import BotDependencyFactory
 
-        base_deps = {}
+        base_deps = {
+            'persistence': persistence,
+            'brain_service': brain_service,
+            'memory_service': memory_service,
+            'statistics_service': statistics_service,
+            'strategy': strategy,
+            'risk_manager': risk_manager,
+        }
         bot_factory = BotDependencyFactory(
             base_dependencies=base_deps,
             config=self.config,
@@ -505,6 +508,7 @@ class CompositionRoot:
             'brain_service': brain_service,
             'memory_service': memory_service,
             'statistics_service': statistics_service,
+            'risk_manager': risk_manager,
             'multi_pair_manager': multi_pair_manager,
             'bot_factory': bot_factory
         }
@@ -580,8 +584,8 @@ class CompositionRoot:
 
         # Extract dashboard_server before passing to bot (bot doesn't accept it)
         dashboard_server = dependencies.pop('dashboard_server', None)
-        dependencies.pop('multi_pair_manager', None)  # Not used by bot
-        dependencies.pop('bot_factory', None)  # Not used by bot
+        multi_pair_manager = dependencies.pop('multi_pair_manager', None)
+        bot_factory = dependencies.pop('bot_factory', None)
 
         bot = CryptoTradingBot(
             logger=self.logger,
@@ -624,8 +628,17 @@ class CompositionRoot:
             elif not self.config.DASHBOARD_ENABLED:
                 self.logger.info("Dashboard disabled (config). Press 'd' to start it.")
 
-            # Bot runs independently; dashboard is managed by _toggle_dashboard
-            await asyncio.create_task(bot.run(symbol, timeframe))
+            # Start all configured pairs via MultiPairManager
+            self.logger.info("About to call start_all_pairs(), multi_pair_manager=%s, bot_factory=%s",
+                multi_pair_manager is not None, bot_factory is not None)
+            if multi_pair_manager and bot_factory:
+                await multi_pair_manager.start_all_pairs()
+                self.logger.info("start_all_pairs() returned - all pairs should be running")
+            else:
+                self.logger.warning("MultiPairManager not available, falling back to single pair")
+                await asyncio.create_task(bot.run(symbol, timeframe))
+
+            await asyncio.Event().wait()  # Keep running until cancelled
 
         except asyncio.CancelledError:
             self.logger.info("Trading cancelled, shutting down...")
@@ -640,21 +653,7 @@ class CompositionRoot:
         single_instance_lock = SingleInstanceLock()
         
         if not single_instance_lock.acquire():
-            if PYQT_AVAILABLE:
-                app = QApplication.instance()
-                if app is None:
-                    app = QApplication(sys.argv)
-                    QApplication.setHighDpiScaleFactorRoundingPolicy(
-                        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-                    )
-                QMessageBox.critical(
-                    None,
-                    "Crypto Trading Bot",
-                    "Another instance of Crypto Trading Bot is already running.",
-                    QMessageBox.StandardButton.Ok
-                )
-            else:
-                print("Another instance of Crypto Trading Bot is already running.")
+            print("ERROR: Another instance of Crypto Trading Bot is already running.")
             sys.exit(1)
         
         if sys.platform == 'win32':
@@ -666,7 +665,6 @@ class CompositionRoot:
         self.shutdown_manager = GracefulShutdownManager(
             self.loop,
             logger=self.logger,
-            confirmation_callback=GracefulShutdownManager.show_exit_confirmation
         )
         self.shutdown_manager.setup_signal_handlers()
         

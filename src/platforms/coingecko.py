@@ -187,7 +187,9 @@ class CoinGeckoAPI:
                 symbol_lower = symbol.lower()
                 if symbol_lower in symbol_to_id:
                     coin_ids.append(symbol_to_id[symbol_lower])
-            return coin_ids if coin_ids else list(symbol_to_id.values())[:10]
+            # Only use dominance symbols if we got at least 3, otherwise use defaults
+            if len(coin_ids) >= 3:
+                return coin_ids
 
         # Default: return top 10 most common coins
         return list(symbol_to_id.values())[:10]

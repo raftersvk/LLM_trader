@@ -105,7 +105,9 @@ class CryptoTradingBot:
 
     async def initialize(self):
         """Initialize all components."""
+        self.logger.debug("initialize: starting")
         if self.shutdown_manager:
+            self.logger.debug("initialize: registering shutdown callbacks")
             self.shutdown_manager.register_shutdown_callback(self.shutdown)
 
             # Register components for shutdown
@@ -138,11 +140,13 @@ class CryptoTradingBot:
                     except AttributeError:
                         pass
 
+        self.logger.debug("initialize: registering keyboard commands")
         # Register keyboard commands
         self.keyboard_handler.register_command('a', self._force_analysis_now, "Force immediate analysis")
         self.keyboard_handler.register_command('h', self._show_help, "Show available keyboard commands")
         self.keyboard_handler.register_command('q', self._request_shutdown, "Quit the application")
 
+        self.logger.debug("initialize: starting keyboard handler task")
         # Start keyboard handler task
         keyboard_task = asyncio.create_task(
             self.keyboard_handler.start_listening(),
@@ -179,6 +183,7 @@ class CryptoTradingBot:
                 pass
 
         self.logger.info("Bot shutdown signaling complete.")
+        self.logger.set_symbol(None)
 
 
     async def run(self, symbol: str, timeframe: str = None):
@@ -190,6 +195,7 @@ class CryptoTradingBot:
         """
         self.current_symbol = symbol
         self.current_timeframe = timeframe or self.config.TIMEFRAME
+        self.logger.set_symbol(symbol)
 
         # Find exchange that supports the symbol
         exchange, exchange_id = await self.exchange_manager.find_symbol_exchange(symbol)
