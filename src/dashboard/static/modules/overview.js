@@ -48,7 +48,7 @@ class ConsolidatedOverview {
     
     async load() {
         try {
-            const response = await fetch('/api/status/all');
+            const response = await fetch('/api/monitor/status/all');
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }

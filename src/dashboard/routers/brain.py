@@ -151,7 +151,7 @@ class BrainRouter:
         self.router.add_api_route("/position", self.get_current_position, methods=["GET"])
         self.router.add_api_route("/refresh-price", self.refresh_current_price, methods=["GET"])
 
-    async def get_brain_status(self) -> Dict[str, Any]:
+    async def get_brain_status(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get the current thought process/status of the brain."""
         cached = self.dashboard_state.get_cached("brain_status", ttl_seconds=30.0)
         if cached:
@@ -329,12 +329,13 @@ class BrainRouter:
             result["error"] = "Internal error retrieving vector details"
         return result
 
-    async def get_current_position(self) -> Dict[str, Any]:
+    async def get_current_position(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get current open position details."""
         cached = self.dashboard_state.get_cached("position", ttl_seconds=10.0)
         if cached:
             return cached
-        pair_state = next((p for p in self.dashboard_state.pairs.values()), None)
+        target_symbol = symbol or (next(iter(self.dashboard_state.pairs)) if self.dashboard_state.pairs else None)
+        pair_state = self.dashboard_state.pairs.get(target_symbol) if target_symbol else None
         current_price = pair_state.current_price if pair_state else None
         if current_price is None:
             data_dir = self.config.DATA_DIR
@@ -391,22 +392,22 @@ class BrainRouter:
         self.dashboard_state.set_cached("position", res)
         return res
 
-    async def refresh_current_price(self) -> Dict[str, Any]:
+    async def refresh_current_price(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Fetch fresh price from exchange and update dashboard state."""
         if not self.exchange_manager:
             return {"success": False, "error": "Exchange manager not available"}
         try:
-            symbol = self.config.CRYPTO_PAIR
-            exchange, _ = await self.exchange_manager.find_symbol_exchange(symbol)
+            target_symbol = symbol or self.config.CRYPTO_PAIR
+            exchange, _ = await self.exchange_manager.find_symbol_exchange(target_symbol)
             if not exchange:
-                return {"success": False, "error": f"No exchange found for {symbol}"}
-            ticker = await exchange.fetch_ticker(symbol)
+                return {"success": False, "error": f"No exchange found for {target_symbol}"}
+            ticker = await exchange.fetch_ticker(target_symbol)
             if not ticker:
                 return {"success": False, "error": "Failed to fetch ticker"}
             price = float(ticker.get('last', ticker.get('close', 0)))
             if price > 0 and self.dashboard_state:
-                await self.dashboard_state.update_price(price)
-            return {"success": True, "current_price": price, "symbol": symbol}
+                await self.dashboard_state.update_price(target_symbol, price)
+            return {"success": True, "current_price": price, "symbol": target_symbol}
         except Exception:
             self.logger.error("Internal error during price refresh", exc_info=True)
             return {"success": False, "error": "Internal error during price refresh"}

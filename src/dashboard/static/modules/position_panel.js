@@ -50,7 +50,11 @@ export async function updatePositionData(currentPrice = null, fetchFresh = false
         // Optionally fetch fresh price from exchange
         if (fetchFresh) {
             try {
-                const priceResponse = await fetch('/api/brain/refresh-price');
+                const currentPair = window.state?.currentPair;
+                const priceUrl = currentPair && currentPair !== '__global__'
+                    ? `/api/brain/refresh-price?symbol=${encodeURIComponent(currentPair)}`
+                    : '/api/brain/refresh-price';
+                const priceResponse = await fetch(priceUrl);
                 const priceData = await priceResponse.json();
                 if (priceData.success && priceData.current_price) {
                     currentPrice = priceData.current_price;
@@ -59,7 +63,11 @@ export async function updatePositionData(currentPrice = null, fetchFresh = false
                 console.warn('Failed to refresh price:', e);
             }
         }
-        const response = await fetch('/api/brain/position');
+        const currentPair = window.state?.currentPair;
+        const positionUrl = currentPair && currentPair !== '__global__'
+            ? `/api/brain/position?symbol=${encodeURIComponent(currentPair)}`
+            : '/api/brain/position';
+        const response = await fetch(positionUrl);
         const data = await response.json();
         lastPosition = data;
         if (!data.has_position) {

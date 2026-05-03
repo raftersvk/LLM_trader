@@ -32,13 +32,11 @@
             </div>
 
             <!-- Pair Selector -->
-            <div class="pair-selector-container" style="margin: 20px 0; padding: 0 15px;">
-                <label for="pair-select" class="pair-label">Paire de trading: </label>
+            <div class="pair-selector-container">
+                <label for="pair-select" class="pair-label">Trading Pair</label>
                 <select id="pair-select" class="pair-select">
-                    <!-- Options will be populated dynamically -->
+                    <option value="__global__">Global View (All Pairs)</option>
                 </select>
-                <button id="consolidated-view-btn" class="icon-btn" title="Vue consolidée de toutes les paires">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8"/><path d="M8 12h8"/></svg></button>
                 <span id="active-pairs-badge" class="pairs-badge"></span>
             </div>
 

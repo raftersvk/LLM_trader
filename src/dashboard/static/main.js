@@ -9,13 +9,14 @@ import { initPositionPanel, updatePositionData } from './modules/position_panel.
 import { initUI } from './modules/ui.js?v=4.5';
 import { initStatisticsPanel, updateStatisticsData } from './modules/statistics_panel.js?v=4.5';
 import { initNewsPanel, updateNewsData } from './modules/news_panel.js?v=4.5';
-import { consolidatedOverview } from './modules/overview.js?v=1.0';
+import './modules/overview.js?v=1.0';
 
 const state = {
     isConnected: false,
     fastPollInterval: 10000,
     slowPollInterval: 30000,
-    lastUpdateTime: null
+    lastUpdateTime: null,
+    currentPair: null
 };
 
 function formatCost(cost) {
@@ -58,7 +59,10 @@ function updateCostDisplay(data) {
 
 async function fetchBrainStatus() {
     try {
-        const response = await fetch('/api/brain/status');
+        const url = state.currentPair && state.currentPair !== '__global__'
+            ? `/api/brain/status?symbol=${encodeURIComponent(state.currentPair)}`
+            : '/api/brain/status';
+        const response = await fetch(url);
         const data = await response.json();
         const connStatus = document.getElementById('connection-status');
         const statusDot = document.querySelector('.status-dot');
@@ -260,58 +264,72 @@ function initApp() {
             updateSlowLane();
         });
 
+        // Listen for pair change and refresh all panels
+        document.addEventListener('pair-changed', (e) => {
+            console.log('Pair changed to:', e.detail.symbol, '- refreshing all panels...');
+            updateAll();
+        });
+
         // Initialize pair selector and consolidated view button
-        document.addEventListener('DOMContentLoaded', () => {
-            const pairSelect = document.getElementById('pair-select');
-            const consolidatedViewBtn = document.getElementById('consolidated-view-btn');
-            const activePairsBadge = document.getElementById('active-pairs-badge');
-            
-            if (pairSelect && consolidatedViewBtn && activePairsBadge) {
-                // Fetch available pairs and populate selector
-                fetch('/api/monitor/pairs')
-                    .then(response => response.json())
+        const pairSelect = document.getElementById('pair-select');
+        const activePairsBadge = document.getElementById('active-pairs-badge');
+
+        if (pairSelect && activePairsBadge) {
+            console.log('Fetching pairs from /api/monitor/pairs...');
+            fetch('/api/monitor/pairs')
+                    .then(response => {
+                        console.log('Response status:', response.status);
+                        return response.json();
+                    })
                     .then(data => {
-                        const pairs = data.pairs || [];
+                        console.log('Pairs data received:', JSON.stringify(data));
+                        let pairs = data.pairs;
+                        // Ensure pairs is an array
+                        if (!Array.isArray(pairs)) {
+                            console.warn('Pairs data is not an array, converting:', pairs);
+                            if (typeof pairs === 'object' && pairs !== null) {
+                                pairs = Object.keys(pairs);
+                            } else {
+                                pairs = [];
+                            }
+                        }
                         if (pairs.length > 0) {
-                            // Populate selector
-                            pairSelect.innerHTML = '';
                             pairs.forEach(pair => {
                                 const option = document.createElement('option');
                                 option.value = pair;
                                 option.textContent = pair;
                                 pairSelect.appendChild(option);
                             });
-                            
-                            // Set default to first pair
+
                             pairSelect.value = pairs[0];
-                            currentPair = pairs[0];
-                            
-                            // Update badge
-                            activePairsBadge.textContent = `${pairs.length} paires`;
-                            
-                            // Add change event listener
+                            state.currentPair = pairs[0];
+
+                            activePairsBadge.textContent = `${pairs.length} pairs`;
+
                             pairSelect.addEventListener('change', (e) => {
                                 const newPair = e.target.value;
-                                if (newPair && newPair !== currentPair) {
-                                    currentPair = newPair;
-                                    // Notify all modules to update for this pair
-                                    document.dispatchEvent(new CustomEvent('pair-changed', { 
-                                        detail: { symbol: newPair } 
+                                if (newPair === '__global__') {
+                                    if (window.consolidatedOverview) {
+                                        window.consolidatedOverview.load();
+                                    }
+                                    return;
+                                }
+                                if (newPair && newPair !== state.currentPair) {
+                                    state.currentPair = newPair;
+                                    document.dispatchEvent(new CustomEvent('pair-changed', {
+                                        detail: { symbol: newPair }
                                     }));
                                 }
                             });
-                            
-                            // Add consolidated view button listener
-                            consolidatedViewBtn.addEventListener('click', () => {
-                                consolidatedOverview.load();
-                            });
+                        } else {
+                            activePairsBadge.textContent = 'No pairs';
                         }
                     })
                     .catch(err => {
                         console.error('Failed to load pairs:', err);
+                        activePairsBadge.textContent = 'Error';
                     });
-            }
-        });
+        }
 
         console.log('Dashboard App Initialized');
     } catch (e) {
