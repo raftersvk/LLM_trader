@@ -16,7 +16,11 @@ export async function updatePromptTab() {
     const meta = document.getElementById('prompt-meta');
     if (!viewer) return;
     try {
-        const response = await fetch('/api/monitor/last_prompt');
+        const symbol = window.state?.currentPair;
+        const url = symbol && symbol !== '__global__'
+            ? `/api/monitor/last_prompt?symbol=${encodeURIComponent(symbol)}`
+            : '/api/monitor/last_prompt';
+        const response = await fetch(url);
         const data = await response.json();
         const content = data.prompt || 'No prompt available';
         const timestamp = data.timestamp ? new Intl.DateTimeFormat(navigator.language, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(data.timestamp)) : 'N/A';
@@ -41,7 +45,11 @@ export async function updateResponseTab() {
     const meta = document.getElementById('response-meta');
     if (!viewer) return;
     try {
-        const response = await fetch('/api/monitor/last_response');
+        const symbol = window.state?.currentPair;
+        const url = symbol && symbol !== '__global__'
+            ? `/api/monitor/last_response?symbol=${encodeURIComponent(symbol)}`
+            : '/api/monitor/last_response';
+        const response = await fetch(url);
         const data = await response.json();
         const content = data.response || 'No response available';
         const timestamp = data.timestamp ? new Intl.DateTimeFormat(navigator.language, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(data.timestamp)) : 'N/A';

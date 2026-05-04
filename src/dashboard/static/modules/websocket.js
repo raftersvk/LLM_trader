@@ -20,10 +20,14 @@ export function initWebSocket() {
 function connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${location.host}/ws`);
+    window.ws = ws;
     ws.onopen = () => {
         reconnectAttempts = 0;
         updateConnectionStatus('connected');
         console.log('WebSocket connected');
+        if (window.state?.currentPair && window.state.currentPair !== '__global__') {
+            ws.send(JSON.stringify({ type: 'subscribe', symbol: window.state.currentPair }));
+        }
     };
     ws.onmessage = (event) => {
         try {
@@ -78,7 +82,14 @@ function handleUpdate(data) {
  * Update countdown display from WebSocket data.
  */
 function updateCountdownFromWS(data) {
-    if (data.next_check_utc) {
+    if (data.symbol && data.next_check_utc) {
+        if (!window._nextCheckUTC) window._nextCheckUTC = {};
+        window._nextCheckUTC[data.symbol] = new Date(data.next_check_utc);
+        const currentPair = window.state?.currentPair;
+        if (!currentPair || currentPair === data.symbol || currentPair === '__global__') {
+            window._nextCheckUTC.__current = new Date(data.next_check_utc);
+        }
+    } else if (data.next_check_utc) {
         window._nextCheckUTC = new Date(data.next_check_utc);
     }
 }
@@ -154,7 +165,11 @@ export function startCountdownLoop() {
  */
 async function fetchInitialCountdown() {
     try {
-        const response = await fetch('/api/status/countdown');
+        const symbol = window.state?.currentPair;
+        const url = symbol && symbol !== '__global__'
+            ? `/api/status/countdown?symbol=${encodeURIComponent(symbol)}`
+            : '/api/status/countdown';
+        const response = await fetch(url);
         const data = await response.json();
         if (data.next_check_utc) {
             window._nextCheckUTC = new Date(data.next_check_utc);

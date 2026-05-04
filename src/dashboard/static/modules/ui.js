@@ -75,10 +75,14 @@ function setupSidebarNavigation() {
                 
                 // Specific fix for vis-network graph in Brain Activity tab
                 if (targetId === 'tab-brain') {
-                    // Small delay to ensure the div is fully visible/rendered
                     setTimeout(() => {
                         if (window.fitSynapseNetwork) window.fitSynapseNetwork();
                     }, 50);
+                }
+
+                // Refresh relevant data when switching tabs
+                if (targetId === 'tab-portfolio' && window.updateAll) {
+                    window.updateAll();
                 }
             }
 

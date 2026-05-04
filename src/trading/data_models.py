@@ -305,12 +305,12 @@ class SessionCosts(SerializableMixin):
     """Cumulative session costs by provider."""
     openrouter: float = 0.0
     google: float = 0.0
-    lmstudio: float = 0.0
+    litellm: float = 0.0
 
     @property
     def total(self) -> float:
         """Get total cost across all providers."""
-        return self.openrouter + self.google + self.lmstudio
+        return self.openrouter + self.google + self.litellm
 
 
 @dataclass(slots=True)

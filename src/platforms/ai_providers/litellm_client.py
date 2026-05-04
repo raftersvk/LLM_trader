@@ -42,9 +42,9 @@ class LitellmAIClient(BaseAIClient):
         self.default_model = config.get("model", "default")
 
         # LiteLLM configuration for this client
-        self.litellm_kwargs = {
-            "base_url": self.base_url,
-        }
+        self.litellm_kwargs = {}
+        if self.base_url:
+            self.litellm_kwargs["base_url"] = self.base_url
         if self.api_key:
             self.litellm_kwargs["api_key"] = self.api_key
         elif self.base_url:
@@ -53,11 +53,14 @@ class LitellmAIClient(BaseAIClient):
             self.litellm_kwargs["api_key"] = "ollama"
 
         self.logger.debug(
-            "LitellmAIClient initialized - provider: %s, model: %s, base_url: %s",
+            "LitellmAIClient initialized - provider: %s, model: %s, base_url: %s, api_key_set: %s",
             self.provider,
             self.default_model,
             self.base_url,
+            bool(self.api_key),
         )
+        if self.api_key:
+            self.logger.debug("API key prefix: %s", self.api_key[:8])
 
     async def _initialize_client(self) -> None:
         """LiteLLM does not need specific async initialization."""
@@ -86,10 +89,12 @@ class LitellmAIClient(BaseAIClient):
         params = self._build_litellm_params(model_config)
 
         self.logger.debug(
-            "LiteLLM request - model: %s, provider: %s, messages: %d",
+            "LiteLLM request - model: %s, provider: %s, messages: %d, api_key_set: %s, base_url: %s",
             full_model,
             self.provider,
             len(messages),
+            bool(self.api_key),
+            self.base_url,
         )
 
         try:
@@ -242,22 +247,11 @@ class LitellmAIClient(BaseAIClient):
             )
 
     def _get_full_model_name(self, model: str) -> str:
-        """Build the full model name for LiteLLM.
+        """Return the model name as-is from config.
 
-        For local URLs (Ollama/LM Studio), we use the OpenAI-compatible API
-        with openai/ prefix to use LiteLLM's standard OpenAI transport.
+        LiteLLM expects the model identifier as configured by the user.
         """
-        if not model:
-            model = self.default_model
-
-        if self.provider == "openrouter":
-            return f"openrouter/{model}"
-        # Local URLs -> openai/ prefix with base_url
-        if self.base_url:
-            return f"openai/{model}"
-        if self.provider == "ollama":
-            return f"ollama/{model}"
-        return f"{self.provider}/{model}"
+        return model if model else self.default_model
 
     def _build_litellm_params(self, model_config: Dict[str, Any]) -> Dict[str, Any]:
         """Build LiteLLM params from model config."""

@@ -61,13 +61,13 @@ class ProviderOrchestrator:
                 supports_chart=True,
                 has_rate_limits=True
             ),
-            'local': ProviderMetadata(
-                name='LM Studio',
-                client=self.clients.lmstudio,
-                default_model=self.config.LM_STUDIO_MODEL,
-                config=self.config.get_model_config(self.config.LM_STUDIO_MODEL),
-                supports_chart=False,
-                has_rate_limits=False
+            'litellm': ProviderMetadata(
+                name='LiteLLM',
+                client=self.clients.litellm,
+                default_model=self.config.LITELLM_MODEL,
+                config=self.config.get_model_config(self.config.LITELLM_MODEL),
+                supports_chart=True,
+                has_rate_limits=True
             ),
             'blockrun': ProviderMetadata(
                 name='BlockRun.AI',
@@ -135,8 +135,8 @@ class ProviderOrchestrator:
         effective_model = self.resolve_model(provider, model)
         if provider == "googleai":
             return await self._invoke_google(metadata, messages, effective_model, chart, chart_image)
-        if provider == "local":
-            return await self._invoke_local(metadata, messages, effective_model, chart)
+        if provider == "litellm":
+            return await self._invoke_litellm(metadata, messages, effective_model, chart)
         if provider == "openrouter":
             return await self._invoke_openrouter(metadata, messages, effective_model, chart, chart_image)
         if provider == "blockrun":
@@ -327,35 +327,28 @@ class ProviderOrchestrator:
             model=effective_model
         )
 
-    async def _invoke_local(
+    async def _invoke_litellm(
         self,
         metadata: ProviderMetadata,
         messages: List[Dict[str, str]],
         effective_model: str,
         chart: bool
     ) -> InvocationResult:
-        """Invoke LM Studio local provider."""
-        if chart:
-            return InvocationResult(
-                success=False,
-                response=ChatResponseModel.from_error("Chart analysis unavailable - local models don't support images"),
-                provider="lmstudio",
-                model=effective_model
-            )
+        """Invoke LiteLLM provider."""
         try:
             response = await metadata.client.chat_completion(effective_model, messages, metadata.config)
             success = self._is_valid_response(response)
             return InvocationResult(
                 success=success,
                 response=response,
-                provider="lmstudio",
+                provider="litellm",
                 model=effective_model
             )
         except Exception as e:
             return InvocationResult(
                 success=False,
-                response=ChatResponseModel.from_error(f"LM Studio connection failed: {str(e)}"),
-                provider="lmstudio",
+                response=ChatResponseModel.from_error(f"LiteLLM connection failed: {str(e)}"),
+                provider="litellm",
                 model=effective_model
             )
 
@@ -433,7 +426,7 @@ class ProviderOrchestrator:
             elif provider == "googleai":
                 self.logger.error("Google AI client not initialized. Check GOOGLE_STUDIO_API_KEY in keys.env")
             elif provider == "local":
-                self.logger.error("LM Studio client not initialized. Check LM_STUDIO_BASE_URL in config.ini")
+                self.logger.error("LiteLLM client not initialized. Check LITELLM_BASE_URL in config.ini")
             elif provider == "blockrun":
                 self.logger.error("BlockRun client not initialized. Check BLOCKRUN_WALLET_KEY in keys.env")
         elif provider == "local":

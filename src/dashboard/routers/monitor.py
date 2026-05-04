@@ -12,27 +12,45 @@ NEWS_FILES = ("crypto_news.json", "news_cache/recent_news.json")
 class MonitorRouter:
     """Handles endpoints for system monitoring and news."""
     # pylint: disable=too-many-arguments,too-many-positional-arguments
-    def __init__(self, config, logger, dashboard_state, analysis_engine, rag_engine):
+    def __init__(self, config, logger, dashboard_state, analysis_engine, rag_engine, engine_registry=None):
         self.router = APIRouter(prefix="/api/monitor", tags=["monitor"])
         self.config = config
         self.logger = logger
         self.dashboard_state = dashboard_state
         self.analysis_engine = analysis_engine
         self.rag_engine = rag_engine
+        self.engine_registry = engine_registry
 
         self.router.add_api_route("/last_prompt", self.get_last_prompt, methods=["GET"])
         self.router.add_api_route("/last_response", self.get_last_response, methods=["GET"])
         self.router.add_api_route("/system_prompt", self.get_system_prompt, methods=["GET"])
         self.router.add_api_route("/costs", self.get_api_costs, methods=["GET"])
         self.router.add_api_route("/news", self.get_news, methods=["GET"])
-        # New endpoints for multi-pair support
         self.router.add_api_route("/pairs", self.get_available_pairs, methods=["GET"])
         self.router.add_api_route("/status/countdown", self.get_countdown, methods=["GET"])
         self.router.add_api_route("/status/all", self.get_all_pairs_status, methods=["GET"])
 
-    def _load_prev_response_sync(self) -> Dict[str, Any]:
+    def _get_engine_for_symbol(self, symbol: Optional[str]):
+        """Get analysis engine for a specific symbol via registry."""
+        if self.engine_registry and symbol:
+            engine = self.engine_registry.get(symbol)
+            if engine:
+                return engine
+        return self.analysis_engine
+
+    def _load_prev_response_sync(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Helper to load previous response data synchronously."""
         data_dir = self.config.DATA_DIR
+        if symbol:
+            safe_symbol = symbol.replace("/", "_").replace("-", "_")
+            pair_path = Path(data_dir) / "trading" / f"pair_{safe_symbol}" / "previous_response.json"
+            if pair_path.exists():
+                try:
+                    with open(pair_path, "r", encoding="utf-8") as file:
+                        return json.load(file)
+                except Exception:
+                    self.logger.error("Error loading previous response for %s", symbol, exc_info=True)
+                return {}
         path = Path(data_dir) / "trading" / "previous_response.json"
         if path.exists():
             try:
@@ -42,15 +60,16 @@ class MonitorRouter:
                 self.logger.error("Error loading previous response", exc_info=True)
         return {}
 
-    async def get_last_prompt(self) -> Dict[str, Any]:
+    async def get_last_prompt(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get the last prompt sent to the LLM."""
-        if self.analysis_engine and hasattr(self.analysis_engine, 'last_generated_prompt') and self.analysis_engine.last_generated_prompt:
+        engine = self._get_engine_for_symbol(symbol)
+        if engine and hasattr(engine, 'last_generated_prompt') and engine.last_generated_prompt:
             return {
-                "prompt": self.analysis_engine.last_generated_prompt,
+                "prompt": engine.last_generated_prompt,
                 "source": "memory",
-                "timestamp": getattr(self.analysis_engine, 'last_prompt_timestamp', None)
+                "timestamp": getattr(engine, 'last_prompt_timestamp', None)
             }
-        data = await asyncio.to_thread(self._load_prev_response_sync)
+        data = await asyncio.to_thread(self._load_prev_response_sync, symbol)
         prompt = data.get("prompt")
         if prompt:
             return {
@@ -60,15 +79,16 @@ class MonitorRouter:
             }
         return {"prompt": "No prompt generated yet.", "source": None}
 
-    async def get_last_response(self) -> Dict[str, Any]:
+    async def get_last_response(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get the last response received from the LLM."""
-        if self.analysis_engine and hasattr(self.analysis_engine, 'last_llm_response') and self.analysis_engine.last_llm_response:
+        engine = self._get_engine_for_symbol(symbol)
+        if engine and hasattr(engine, 'last_llm_response') and engine.last_llm_response:
             return {
-                "response": self.analysis_engine.last_llm_response,
+                "response": engine.last_llm_response,
                 "source": "memory",
-                "timestamp": getattr(self.analysis_engine, 'last_response_timestamp', None)
+                "timestamp": getattr(engine, 'last_response_timestamp', None)
             }
-        data = await asyncio.to_thread(self._load_prev_response_sync)
+        data = await asyncio.to_thread(self._load_prev_response_sync, symbol)
         if data:
             response = data.get("response", {})
             text_analysis = response.get("text_analysis", "No analysis available")
@@ -80,9 +100,10 @@ class MonitorRouter:
             }
         return {"response": "No response received yet."}
 
-    async def get_system_prompt(self) -> Dict[str, Any]:
+    async def get_system_prompt(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get the last system prompt (contains brain context and trading rules)."""
-        system_prompt = getattr(self.analysis_engine, 'last_system_prompt', None) if self.analysis_engine else None
+        engine = self._get_engine_for_symbol(symbol)
+        system_prompt = getattr(engine, 'last_system_prompt', None) if engine else None
         if system_prompt:
             has_brain = "TRADING BRAIN" in system_prompt
             return {

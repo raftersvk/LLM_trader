@@ -15,7 +15,7 @@ CONFIG_DIR = ROOT_DIR / "config"
 KEYS_ENV_PATH = ROOT_DIR / "keys.env"
 CONFIG_INI_PATH = CONFIG_DIR / "config.ini"
 
-VALID_PROVIDERS = {"local", "googleai", "openrouter", "blockrun", "all"}
+VALID_PROVIDERS = {"litellm", "googleai", "openrouter", "blockrun", "all"}
 
 class Config:
     """Configuration class that loads settings from environment and INI files.
@@ -195,6 +195,14 @@ class Config:
         return self.get_env('GOOGLE_STUDIO_PAID_API_KEY')
 
     @property
+    def MINIMAX_API_KEY(self):
+        return self.get_env('MINIMAX_API_KEY')
+
+    @property
+    def LITELLM_API_KEY(self):
+        return self.get_env('LITELLM_API_KEY')
+
+    @property
     def CRYPTOCOMPARE_API_KEY(self):
         return self.get_env('CRYPTOCOMPARE_API_KEY')
 
@@ -247,16 +255,20 @@ class Config:
         return self.get_config('ai_providers', 'provider', 'googleai')
 
     @property
-    def LM_STUDIO_BASE_URL(self):
-        return self.get_config('ai_providers', 'lm_studio_base_url', 'http://localhost:1234/v1')
+    def LITELLM_BASE_URL(self):
+        return self.get_config('ai_providers', 'litellm_base_url', 'http://localhost:1234/v1')
 
     @property
-    def LM_STUDIO_MODEL(self):
-        return self.get_config('ai_providers', 'lm_studio_model', 'local-model')
+    def LITELLM_MODEL(self):
+        return self.get_config('ai_providers', 'litellm_model', 'local-model')
 
     @property
-    def LM_STUDIO_STREAMING(self):
-        return self.get_config('ai_providers', 'lm_studio_streaming', True)
+    def LITELLM_STREAMING(self):
+        return self.get_config('ai_providers', 'litellm_streaming', True)
+
+    @property
+    def LITELLM_API_KEY(self):
+        return self.get_env('LITELLM_API_KEY')
 
     @property
     def OPENROUTER_BASE_URL(self):

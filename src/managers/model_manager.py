@@ -69,8 +69,8 @@ class ModelManager(ModelManagerProtocol):
             await self._clients.google.__aenter__()
         if self._clients.google_paid:
             await self._clients.google_paid.__aenter__()
-        if self._clients.lmstudio:
-            await self._clients.lmstudio.__aenter__()
+        if self._clients.litellm:
+            await self._clients.litellm.__aenter__()
         if self._clients.blockrun:
             await self._clients.blockrun.__aenter__()
         return self
@@ -88,8 +88,8 @@ class ModelManager(ModelManagerProtocol):
                 await self._clients.google.close()
             if self._clients.google_paid:
                 await self._clients.google_paid.close()
-            if self._clients.lmstudio:
-                await self._clients.lmstudio.close()
+            if self._clients.litellm:
+                await self._clients.litellm.close()
             if self._clients.blockrun:
                 await self._clients.blockrun.close()
             self.logger.debug("All model clients closed successfully")
@@ -136,19 +136,19 @@ class ModelManager(ModelManagerProtocol):
         """
         messages = self._prepare_messages(prompt, system_message)
         effective_provider = provider if provider else self.provider
-        if (effective_provider in ("local", "all")) and self._clients.lmstudio and self.config.LM_STUDIO_STREAMING:
+        if (effective_provider in ("litellm", "all")) and self._clients.litellm and self.config.LITELLM_STREAMING:
             try:
-                effective_model = model if model else self.config.LM_STUDIO_MODEL
+                effective_model = model if model else self.config.LITELLM_MODEL
                 async def print_stream_callback(chunk):
                     print(chunk, end='', flush=True)
-                response_json = await self._clients.lmstudio.stream_chat_completion(
-                    effective_model, messages, self._orchestrator.get_metadata("local").config, callback=print_stream_callback
+                response_json = await self._clients.litellm.stream_chat_completion(
+                    effective_model, messages, self._orchestrator.get_metadata("litellm").config, callback=print_stream_callback
                 )
                 if response_json is not None:
                     result = InvocationResult(
                         success=True,
                         response=response_json,
-                        provider="lmstudio",
+                        provider="litellm",
                         model=effective_model
                     )
                     return await self._process_result(result)
@@ -214,8 +214,8 @@ class ModelManager(ModelManagerProtocol):
                 if self.config.OPENROUTER_BASE_MODEL:
                     chain.append(self.config.OPENROUTER_BASE_MODEL)
             else:
-                if self.config.LM_STUDIO_MODEL:
-                    chain.append(self.config.LM_STUDIO_MODEL)
+                if self.config.LITELLM_MODEL:
+                    chain.append(self.config.LITELLM_MODEL)
                 if self.config.OPENROUTER_BASE_MODEL:
                     chain.append(self.config.OPENROUTER_BASE_MODEL)
             model_chain = " -> ".join(chain) if chain else "fallback chain unavailable"

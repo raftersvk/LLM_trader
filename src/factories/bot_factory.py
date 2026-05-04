@@ -24,12 +24,16 @@ class BotDependencyFactory:
         self,
         base_dependencies: Dict[str, Any],
         config: Config,
-        logger: Logger
+        logger: Logger,
+        engine_registry=None,
+        vector_memory_registry=None,
     ):
         self.base_dependencies = base_dependencies
         self.config = config
         self.logger = logger
         self._bot_instances: Dict[str, CryptoTradingBot] = {}
+        self.engine_registry = engine_registry
+        self.vector_memory_registry = vector_memory_registry
 
     async def create_bot_for_pair(self, symbol: str) -> CryptoTradingBot:
         """Create an isolated bot instance for a trading pair.
@@ -85,6 +89,12 @@ class BotDependencyFactory:
         self.logger.debug("BotFactory: calling bot.initialize() for %s", symbol)
         await bot.initialize()
         self._bot_instances[symbol] = bot
+
+        if self.engine_registry and hasattr(bot, 'market_analyzer') and bot.market_analyzer:
+            self.engine_registry.register(symbol, bot.market_analyzer)
+        if self.vector_memory_registry and 'vector_memory' in pair_services:
+            self.vector_memory_registry.register(symbol, pair_services['vector_memory'])
+
         self.logger.info("BotFactory: bot for %s ready", symbol)
         return bot
 
@@ -165,6 +175,7 @@ class BotDependencyFactory:
             'statistics_service': statistics_service,
             'strategy': strategy,
             'risk_manager': risk_manager,
+            'vector_memory': vector_memory,
         }
 
     async def cleanup_bot(self, symbol: str):

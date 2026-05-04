@@ -48,7 +48,7 @@ class ProviderClients:
     google: Optional["GoogleAIClient"] = None
     google_paid: Optional["GoogleAIClient"] = None
     openrouter: Optional["BaseAIClient"] = None
-    lmstudio: Optional["BaseAIClient"] = None
+    litellm: Optional["BaseAIClient"] = None
     blockrun: Optional["BaseAIClient"] = None
 
     @classmethod
@@ -58,6 +58,6 @@ class ProviderClients:
             google=clients.get('google'),
             google_paid=clients.get('google_paid'),
             openrouter=clients.get('openrouter'),
-            lmstudio=clients.get('lmstudio'),
+            litellm=clients.get('litellm'),
             blockrun=clients.get('blockrun')
         )

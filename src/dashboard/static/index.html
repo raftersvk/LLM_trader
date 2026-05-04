@@ -7,7 +7,7 @@
     <meta name="description" content="Semantic Signal LLM Dashboard for Crypto Trading Neural Engine">
     <meta property="og:title" content="Semantic Signal LLM">
     <meta property="og:description" content="Semantic Signal LLM Dashboard for Crypto Trading Neural Engine">
-    <link rel="stylesheet" href="css/style.css?v=6.0">
+    <link rel="stylesheet" href="css/style.css?v=7.0">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -41,29 +41,26 @@
             </div>
 
             <div class="sidebar-nav" role="tablist" aria-label="Dashboard Navigation">
-                <span class="tab-btn active" data-target="tab-overview" role="tab" aria-selected="true" aria-controls="tab-overview" id="nav-overview" tabindex="0">
-                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg></span> Overview
+                <span class="tab-btn active" data-target="tab-portfolio" role="tab" aria-selected="true" aria-controls="tab-portfolio" id="nav-portfolio" tabindex="0">
+                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span> Portfolio
+                </span>
+                <span class="tab-btn" data-target="tab-pair-detail" role="tab" aria-selected="false" aria-controls="tab-pair-detail" id="nav-pair-detail" tabindex="0">
+                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span> Pair Detail
                 </span>
                 <span class="tab-btn" data-target="tab-brain" role="tab" aria-selected="false" aria-controls="tab-brain" id="nav-brain" tabindex="0">
                     <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg></span> Brain Activity
                 </span>
-                <span class="tab-btn" data-target="tab-prompt" role="tab" aria-selected="false" aria-controls="tab-prompt" id="nav-prompt" tabindex="0">
-                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span> Last Prompt
-                </span>
-                <span class="tab-btn" data-target="tab-response" role="tab" aria-selected="false" aria-controls="tab-response" id="nav-response" tabindex="0">
-                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></span> Last Response
-                </span>
-                <span class="tab-btn" data-target="tab-stats" role="tab" aria-selected="false" aria-controls="tab-stats" id="nav-stats" tabindex="0">
-                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span> Statistics
+                <span class="tab-btn" data-target="tab-memory" role="tab" aria-selected="false" aria-controls="tab-memory" id="nav-memory" tabindex="0">
+                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span> Memory Bank
                 </span>
                 <span class="tab-btn" data-target="tab-news" role="tab" aria-selected="false" aria-controls="tab-news" id="nav-news" tabindex="0">
                     <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/></svg></span> Latest News
                 </span>
-                <span class="tab-btn" data-target="tab-market" role="tab" aria-selected="false" aria-controls="tab-market" id="nav-market" tabindex="0">
-                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></span> Market Data
+                <span class="tab-btn" data-target="tab-performance" role="tab" aria-selected="false" aria-controls="tab-performance" id="nav-performance" tabindex="0">
+                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span> Performance
                 </span>
-                <span class="tab-btn" data-target="tab-memory" role="tab" aria-selected="false" aria-controls="tab-memory" id="nav-memory" tabindex="0">
-                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span> Memory Bank
+                <span class="tab-btn" data-target="tab-system" role="tab" aria-selected="false" aria-controls="tab-system" id="nav-system" tabindex="0">
+                    <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></span> System Monitor
                 </span>
             </div>
 
@@ -72,8 +69,6 @@
                     <div class="status-dot" aria-hidden="true"></div>
                     <span id="connection-status">Connecting…</span>
                 </div>
-                <!-- Hidden legacy fields for main.js compatibility -->
-                <!-- Legacy fields removed. -->
                 <div class="next-update">
                     <span class="label">Next Analysis</span>
                     <span id="next-analysis" class="value">--:--</span>
@@ -102,45 +97,100 @@
                 <button id="mobile-menu-toggle" class="icon-btn-xs" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
             </div>
 
-            <!-- Tab: Overview -->
-            <div id="tab-overview" class="tab-content active" role="tabpanel" aria-labelledby="nav-overview">
+            <!-- Tab: Portfolio Overview -->
+            <div id="tab-portfolio" class="tab-content active" role="tabpanel" aria-labelledby="nav-portfolio">
                 <header class="tab-header">
-                    <h2>Live Dashboard</h2>
-                    <span id="last-updated" style="font-size: 12px; color: var(--text-muted);">Updated: --</span>
+                    <h2>Portfolio Overview</h2>
+                    <span id="portfolio-last-updated" style="font-size: 12px; color: var(--text-muted);">Updated: --</span>
                 </header>
-
-                <div class="kpi-grid">
+                <div id="portfolio-kpi-row" class="kpi-grid">
                     <div class="kpi-card">
-                        <div class="label">Market Trend</div>
-                        <div class="value" id="overview-trend" aria-live="polite">--</div>
+                        <div class="label">Total P&L</div>
+                        <div class="value" id="portfolio-total-pnl" aria-live="polite">$0.00</div>
                     </div>
                     <div class="kpi-card">
-                        <div class="label">Confidence</div>
-                        <div class="value highlight" id="overview-conf" aria-live="polite">--%</div>
-                        <div class="sub-label" id="overview-action" aria-live="polite">WAITING</div>
+                        <div class="label">Win Rate</div>
+                        <div class="value highlight" id="portfolio-win-rate" aria-live="polite">0%</div>
+                        <div class="sub-label" id="portfolio-trade-count" aria-live="polite">0 trades</div>
                     </div>
                     <div class="kpi-card">
-                        <div class="label">Active Rules</div>
-                        <div class="value" id="overview-rules-count" aria-live="polite">0</div>
-                        <div class="sub-label" id="overview-rules-hint" style="font-size: 10px;">No rules learned yet</div>
+                        <div class="label">Active Positions</div>
+                        <div class="value" id="portfolio-active-positions" aria-live="polite">0</div>
+                        <div class="sub-label" id="portfolio-pairs-count" aria-live="polite">0 pairs</div>
                     </div>
                     <div class="kpi-card">
                         <div class="label">Session Cost</div>
-                        <div class="value" id="overview-cost" aria-live="polite">$0.00</div>
-
+                        <div class="value" id="portfolio-cost" aria-live="polite">$0.00</div>
                     </div>
                 </div>
-
-                <section id="panel-performance" class="panel full-height-panel">
+                <div id="pairs-status-grid" class="pairs-grid"></div>
+                <section id="panel-portfolio-chart" class="panel">
                     <div class="panel-header">
-                        <h3>Performance Metrics</h3>
-                        <div class="controls">
-                            <span id="stats-summary" class="stats-summary-text"><span class="spinner spinner-sm"></span> Loading stats…</span>
+                        <h3>Portfolio Performance</h3>
+                    </div>
+                    <div id="portfolio-performance-chart" class="chart-container"></div>
+                </section>
+            </div>
 
+            <!-- Tab: Pair Detail -->
+            <div id="tab-pair-detail" class="tab-content" role="tabpanel" aria-labelledby="nav-pair-detail">
+                <header class="tab-header">
+                    <h2 id="pair-detail-title">Pair Detail</h2>
+                    <span id="pair-detail-meta" style="font-size: 12px; color: var(--text-muted);"></span>
+                </header>
+                <div id="pair-detail-header" class="pair-detail-header-bar"></div>
+                <section id="pair-detail-position" class="panel">
+                    <div class="panel-header">
+                        <h3>Position Details</h3>
+                        <button class="toolbar-btn" id="btn-refresh-price" title="Refresh price" aria-label="Refresh current price"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg></button>
+                    </div>
+                    <div id="pair-position-content" class="position-details-container">
+                        <div class="no-position">
+                            <span class="no-position-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>
+                            <span>No active position</span>
                         </div>
                     </div>
-                    <div id="performance-chart" class="chart-container"></div>
                 </section>
+                <div class="pair-detail-accordion">
+                    <section class="panel">
+                        <div class="panel-header" style="cursor:pointer" id="accordion-prompt-header">
+                            <h3>Last Prompt</h3>
+                            <div class="controls">
+                                <span id="pair-prompt-meta" class="meta-info"></span>
+                                <button id="btn-copy-pair-prompt" class="copy-btn" aria-label="Copy prompt to clipboard"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
+                                <button class="toolbar-btn" id="btn-toggle-prompt" title="Expand/Collapse"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+                            </div>
+                        </div>
+                        <div id="pair-prompt-viewer" class="discord-content accordion-body">
+                            <div class="empty-state"><div class="spinner"></div><div class="empty-state-text">Loading trading context…</div></div>
+                        </div>
+                    </section>
+                    <section class="panel">
+                        <div class="panel-header" style="cursor:pointer" id="accordion-response-header">
+                            <h3>Last Response</h3>
+                            <div class="controls">
+                                <span id="pair-response-meta" class="meta-info"></span>
+                                <button id="btn-copy-pair-response" class="copy-btn" aria-label="Copy response to clipboard"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
+                                <button class="toolbar-btn" id="btn-toggle-response" title="Expand/Collapse"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+                            </div>
+                        </div>
+                        <div id="pair-response-viewer" class="discord-content accordion-body">
+                            <div class="empty-state"><div class="spinner"></div><div class="empty-state-text">Loading analysis output…</div></div>
+                        </div>
+                    </section>
+                    <section class="panel">
+                        <div class="panel-header" style="cursor:pointer" id="accordion-chart-header">
+                            <h3>Chart</h3>
+                            <div class="controls">
+                                <button class="toolbar-btn" id="btn-toggle-chart" title="Expand/Collapse"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+                            </div>
+                        </div>
+                        <div id="pair-chart-container" class="visual-box accordion-body">
+                            <img id="pair-analysis-chart" src="" alt="No chart generated" width="800" height="450" style="display: none;">
+                            <span id="pair-no-chart-msg">No visual data available</span>
+                        </div>
+                    </section>
+                </div>
             </div>
 
             <!-- Tab: Brain Activity -->
@@ -148,7 +198,6 @@
                 <header class="tab-header">
                     <h2>Neural Network State</h2>
                 </header>
-
                 <div class="stack-layout">
                     <section id="panel-synapses" class="panel large-panel">
                         <div class="panel-header">
@@ -161,12 +210,10 @@
                         </div>
                         <div id="synapse-network" class="network-container"></div>
                     </section>
-                    
                     <section id="panel-visuals" class="panel visual-panel">
                         <div class="panel-header">
                             <h3>Visual Cortex Input</h3>
                             <div class="controls panel-toolbar panel-controls">
-
                                 <button class="toolbar-btn" id="btn-minimize-visuals" title="Minimize" aria-label="Minimize visual cortex input" aria-expanded="true" aria-controls="visual-container"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg></button>
                                 <button class="toolbar-btn" id="btn-lightbox-visuals" title="Fullscreen" aria-label="Fullscreen chart" aria-haspopup="dialog" aria-controls="lightbox-overlay"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg></button>
                             </div>
@@ -179,107 +226,11 @@
                 </div>
             </div>
 
-            <!-- Tab: Last Prompt -->
-            <div id="tab-prompt" class="tab-content" role="tabpanel" aria-labelledby="nav-prompt">
-                <header class="tab-header">
-                    <h2>Last Prompt</h2>
-
-                </header>
-                <section class="panel full-height-panel">
-                    <div class="panel-header">
-                        <h3>Trading Context Sent to LLM</h3>
-                        <div class="controls">
-                            <span id="prompt-meta" class="meta-info"></span>
-                            <button id="btn-copy-prompt" class="copy-btn" aria-label="Copy prompt to clipboard"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
-                        </div>
-                    </div>
-                    <div id="prompt-viewer" class="discord-content">
-                        <div class="empty-state">
-                            <div class="spinner"></div>
-                            <div class="empty-state-text">Loading trading context…</div>
-                        </div>
-                    </div>
-                </section>
-            </div>
-
-            <!-- Tab: Last Response -->
-            <div id="tab-response" class="tab-content" role="tabpanel" aria-labelledby="nav-response">
-                <header class="tab-header">
-                    <h2>Last Response</h2>
-
-                </header>
-                <section class="panel full-height-panel">
-                    <div class="panel-header">
-                        <h3>LLM Analysis Output</h3>
-                        <div class="controls">
-                            <span id="response-meta" class="meta-info"></span>
-                            <button id="btn-copy-response" class="copy-btn" aria-label="Copy response to clipboard"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
-                        </div>
-                    </div>
-                    <div id="response-viewer" class="discord-content">
-                        <div class="empty-state">
-                            <div class="spinner"></div>
-                            <div class="empty-state-text">Loading analysis output…</div>
-                        </div>
-                    </div>
-                </section>
-            </div>
-
-            <!-- Tab: Statistics -->
-            <div id="tab-stats" class="tab-content" role="tabpanel" aria-labelledby="nav-stats">
-                <header class="tab-header">
-                    <h2>Trading Statistics</h2>
-
-                </header>
-                <div id="statistics-content">
-                    <div class="empty-state">
-                        <div class="spinner"></div>
-                        <div class="empty-state-text">Loading trading statistics…</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Tab: Latest News -->
-            <div id="tab-news" class="tab-content" role="tabpanel" aria-labelledby="nav-news">
-                <header class="tab-header">
-                    <h2>Latest Crypto News</h2>
-
-                </header>
-                <div id="news-content">
-                    <div class="empty-state">
-                        <div class="spinner"></div>
-                        <div class="empty-state-text">Loading latest news…</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Tab: Market Data -->
-            <div id="tab-market" class="tab-content" role="tabpanel" aria-labelledby="nav-market">
-                <header class="tab-header">
-                    <h2>Active Market Position</h2>
-
-                </header>
-                
-                <section id="panel-position" class="panel">
-                    <div class="panel-header">
-                        <h3>Position Details</h3>
-                    </div>
-                    <div id="position-content" class="position-details-container">
-                        <div class="no-position">
-                            <span class="no-position-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>
-                            <span>No active positions</span>
-                        </div>
-                    </div>
-                </section>
-            </div>
-
             <!-- Tab: Memory Bank -->
             <div id="tab-memory" class="tab-content" role="tabpanel" aria-labelledby="nav-memory">
                 <header class="tab-header">
                     <h2>Vector Experience Database</h2>
-
                 </header>
-
                 <section id="panel-vectors" class="panel full-height-panel">
                     <div id="vector-content">
                         <div class="empty-state">
@@ -290,9 +241,48 @@
                 </section>
             </div>
 
+            <!-- Tab: Latest News -->
+            <div id="tab-news" class="tab-content" role="tabpanel" aria-labelledby="nav-news">
+                <header class="tab-header">
+                    <h2>Latest Crypto News</h2>
+                </header>
+                <div id="news-content">
+                    <div class="empty-state">
+                        <div class="spinner"></div>
+                        <div class="empty-state-text">Loading latest news…</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Performance -->
+            <div id="tab-performance" class="tab-content" role="tabpanel" aria-labelledby="nav-performance">
+                <header class="tab-header">
+                    <h2>Performance</h2>
+                </header>
+                <div id="performance-content">
+                    <div class="empty-state">
+                        <div class="spinner"></div>
+                        <div class="empty-state-text">Loading performance data…</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: System Monitor -->
+            <div id="tab-system" class="tab-content" role="tabpanel" aria-labelledby="nav-system">
+                <header class="tab-header">
+                    <h2>System Monitor</h2>
+                </header>
+                <div id="system-content">
+                    <div class="empty-state">
+                        <div class="spinner"></div>
+                        <div class="empty-state-text">Loading system status…</div>
+                    </div>
+                </div>
+            </div>
+
         </main>
     </div>
 
-    <script type="module" src="main.js?v=5.0"></script>
+    <script type="module" src="main.js?v=7.0"></script>
 </body>
 </html>

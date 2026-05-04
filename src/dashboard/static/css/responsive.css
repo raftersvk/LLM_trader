@@ -87,7 +87,7 @@
     }
 
     /* Grids to Single Column for readability */
-    .kpi-grid, .vector-stats, .position-grid {
+    .kpi-grid, .vector-stats, .position-grid, .pairs-grid, .system-grid {
         grid-template-columns: 1fr;
         gap: 15px;
     }

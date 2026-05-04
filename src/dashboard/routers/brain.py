@@ -83,7 +83,7 @@ def _extract_market_status(data: Dict[str, Any], unified_parser=None) -> Dict[st
             status["trend"] = "BULLISH"
     return status
 
-def _build_current_market_context(config, logger, unified_parser=None) -> tuple[str, str]:
+def _build_current_market_context(config, logger, unified_parser=None, symbol: Optional[str] = None) -> tuple[str, str]:
     """Build rich context query string from current market conditions.
 
     Reads ``technical_data`` from ``previous_response.json`` (persisted by the
@@ -97,7 +97,11 @@ def _build_current_market_context(config, logger, unified_parser=None) -> tuple[
         for embedding search. Both are empty strings on failure.
     """
     data_dir = config.DATA_DIR
-    prev_response_file = Path(data_dir) / "trading" / "previous_response.json"
+    if symbol:
+        safe_symbol = symbol.replace("/", "_").replace("-", "_")
+        prev_response_file = Path(data_dir) / "trading" / f"pair_{safe_symbol}" / "previous_response.json"
+    else:
+        prev_response_file = Path(data_dir) / "trading" / "previous_response.json"
     if not prev_response_file.exists():
         return "", ""
     try:
@@ -134,7 +138,7 @@ def _build_current_market_context(config, logger, unified_parser=None) -> tuple[
 class BrainRouter:
     """Handles endpoints for the trading brain status, rules, and memory."""
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-instance-attributes
-    def __init__(self, config, logger, dashboard_state, vector_memory, unified_parser, persistence, exchange_manager):
+    def __init__(self, config, logger, dashboard_state, vector_memory, unified_parser, persistence, exchange_manager, vector_memory_registry=None):
         self.router = APIRouter(prefix="/api/brain", tags=["brain"])
         self.config = config
         self.logger = logger
@@ -143,6 +147,7 @@ class BrainRouter:
         self.unified_parser = unified_parser
         self.persistence = persistence
         self.exchange_manager = exchange_manager
+        self.vector_memory_registry = vector_memory_registry
 
         self.router.add_api_route("/status", self.get_brain_status, methods=["GET"])
         self.router.add_api_route("/memory", self.get_vector_memory, methods=["GET"])
@@ -151,17 +156,64 @@ class BrainRouter:
         self.router.add_api_route("/position", self.get_current_position, methods=["GET"])
         self.router.add_api_route("/refresh-price", self.refresh_current_price, methods=["GET"])
 
+    def _get_persistence_for_symbol(self, symbol: Optional[str]):
+        """Get a PersistenceManager instance for a specific symbol or the primary one."""
+        from src.managers.persistence_manager import PersistenceManager
+
+        if symbol:
+            safe_symbol = symbol.replace("/", "_").replace("-", "_")
+            pair_data_dir = Path(f"data/trading/pair_{safe_symbol}")
+        else:
+            pair_data_dir = Path(self.config.DATA_DIR) / "trading"
+
+        return PersistenceManager(logger=self.logger, data_dir=str(pair_data_dir))
+
+    def _get_vector_memory_for_symbol(self, symbol: Optional[str]):
+        """Get vector_memory for a specific symbol via registry, falling back to default."""
+        if self.vector_memory_registry and symbol:
+            vm = self.vector_memory_registry.get(symbol)
+            if vm:
+                return vm
+        return self.vector_memory
+
+    def _get_prev_response_path(self, symbol: Optional[str]) -> Path:
+        """Resolve the previous_response.json path for a given symbol."""
+        data_dir = self.config.DATA_DIR
+        if symbol:
+            safe_symbol = symbol.replace("/", "_").replace("-", "_")
+            pair_dir = Path(data_dir) / "trading" / f"pair_{safe_symbol}"
+            if (pair_dir / "previous_response.json").exists():
+                return pair_dir / "previous_response.json"
+        return Path(data_dir) / "trading" / "previous_response.json"
+
+    def _get_stats_path(self, symbol: Optional[str]) -> Path:
+        """Resolve the statistics.json path for a given symbol."""
+        data_dir = self.config.DATA_DIR
+        if symbol:
+            safe_symbol = symbol.replace("/", "_").replace("-", "_")
+            pair_dir = Path(data_dir) / "trading" / f"pair_{safe_symbol}"
+            if (pair_dir / "statistics.json").exists():
+                return pair_dir / "statistics.json"
+        return Path(data_dir) / "trading" / "statistics.json"
+
+    def _get_trade_history_path(self, symbol: Optional[str]) -> Path:
+        """Resolve the trade_history.json path for a given symbol."""
+        data_dir = self.config.DATA_DIR
+        if symbol:
+            safe_symbol = symbol.replace("/", "_").replace("-", "_")
+            pair_dir = Path(data_dir) / "trading" / f"pair_{safe_symbol}"
+            if (pair_dir / "trade_history.json").exists():
+                return pair_dir / "trade_history.json"
+        return Path(data_dir) / "trading" / "trade_history.json"
+
     async def get_brain_status(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get the current thought process/status of the brain."""
-        cached = self.dashboard_state.get_cached("brain_status", ttl_seconds=30.0)
+        cache_key = f"brain_status_{symbol}" if symbol else "brain_status"
+        cached = self.dashboard_state.get_cached(cache_key, ttl_seconds=30.0)
         if cached:
             return cached
-        try:
-            data_dir = self.config.DATA_DIR
-        except AttributeError:
-            data_dir = "data"
-        prev_response_file = Path(data_dir) / "trading" / "previous_response.json"
-        stats_file = Path(data_dir) / "trading" / "statistics.json"
+        prev_response_file = self._get_prev_response_path(symbol)
+        stats_file = self._get_stats_path(symbol)
         status = {"status": "active", "trend": "--", "confidence": "--", "action": "--", "adx": None, "rsi": None}
         try:
             prev_data = await asyncio.to_thread(_read_json_file, prev_response_file)
@@ -181,24 +233,25 @@ class BrainRouter:
                 })
         except Exception:
             self.logger.error("Failed to load statistics", exc_info=True)
-        self.dashboard_state.set_cached("brain_status", status)
+        self.dashboard_state.set_cached(cache_key, status)
         return status
 
-    async def get_vector_memory(self, limit: int = Query(default=100, ge=1, le=500)) -> Dict[str, Any]:
+    async def get_vector_memory(self, limit: int = Query(default=100, ge=1, le=500), symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get recent vector memories (synapses)."""
-        cached = self.dashboard_state.get_cached(f"memory_{limit}", ttl_seconds=30.0)
+        cache_key = f"memory_{limit}_{symbol}" if symbol else f"memory_{limit}"
+        cached = self.dashboard_state.get_cached(cache_key, ttl_seconds=30.0)
         if cached:
             return cached
-        data_dir = getattr(self.config, "DATA_DIR", "data")
+        vm = self._get_vector_memory_for_symbol(symbol)
         result = {
             "experience_count": 0,
             "trades": [],
             "stats": {}
         }
-        if self.vector_memory:
-            result["experience_count"] = self.vector_memory.experience_count
-            result["stats"] = self.vector_memory.compute_confidence_stats()
-        trade_history_file = Path(data_dir) / "trading" / "trade_history.json"
+        if vm:
+            result["experience_count"] = vm.experience_count
+            result["stats"] = vm.compute_confidence_stats()
+        trade_history_file = self._get_trade_history_path(symbol)
         try:
             trades = await asyncio.to_thread(_read_json_file, trade_history_file)
             if trades is not None:
@@ -216,18 +269,20 @@ class BrainRouter:
         except Exception:
             self.logger.error("Failed to load trade history for memory", exc_info=True)
 
-        self.dashboard_state.set_cached(f"memory_{limit}", result)
+        self.dashboard_state.set_cached(cache_key, result)
         return result
 
-    async def get_active_rules(self) -> List[Dict[str, Any]]:
+    async def get_active_rules(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get currently active semantic rules."""
-        cached = self.dashboard_state.get_cached("rules", ttl_seconds=30.0)
+        cache_key = f"rules_{symbol}" if symbol else "rules"
+        cached = self.dashboard_state.get_cached(cache_key, ttl_seconds=30.0)
         if cached:
             return cached
-        if not self.vector_memory:
+        vm = self._get_vector_memory_for_symbol(symbol)
+        if not vm:
             return []
         try:
-            raw_rules = self.vector_memory.get_active_rules(n_results=20)
+            raw_rules = vm.get_active_rules(n_results=20)
             rules = []
             for r in raw_rules:
                 mapped_rule = dict(r)
@@ -236,17 +291,17 @@ class BrainRouter:
                 mapped_rule["win_rate"] = meta.get("win_rate")
                 mapped_rule["source_trades"] = meta.get("source_trades")
                 rules.append(mapped_rule)
-            self.dashboard_state.set_cached("rules", rules)
+            self.dashboard_state.set_cached(cache_key, rules)
             return rules
         except Exception:
             self.logger.error("Failed to retrieve active rules", exc_info=True)
             return []
 
     async def get_vector_details(
-        self, request: Request, query: str = Query(default=None, max_length=500), limit: int = Query(default=50, ge=1, le=500)
+        self, request: Request, query: str = Query(default=None, max_length=500), limit: int = Query(default=50, ge=1, le=500),
+        symbol: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get detailed vector memory contents from ChromaDB."""
-        # Validate inputs to prevent DoS via unbounded cache keys
         sort_by = request.query_params.get("sort_by", "date")
         if sort_by not in ["date", "similarity", "pnl", "outcome", "confidence", "direction"]:
             sort_by = "date"
@@ -255,7 +310,7 @@ class BrainRouter:
         if order not in ["asc", "desc"]:
             order = "desc"
 
-        cache_key = f"vectors_{limit}_{sort_by}_{order}"
+        cache_key = f"vectors_{symbol}_{limit}_{sort_by}_{order}" if symbol else f"vectors_{limit}_{sort_by}_{order}"
         if not query:
             cached = self.dashboard_state.get_cached(cache_key, ttl_seconds=30.0)
             if cached:
@@ -269,29 +324,30 @@ class BrainRouter:
             "rule_count": 0,
             "current_context": None
         }
-        if not self.vector_memory:
+        vm = self._get_vector_memory_for_symbol(symbol)
+        if not vm:
             return result
         try:
-            result["experience_count"] = self.vector_memory.trade_count
-            result["rule_count"] = self.vector_memory.semantic_rule_count
-            result["confidence_stats"] = self.vector_memory.compute_confidence_stats()
-            result["adx_stats"] = self.vector_memory.compute_adx_performance()
-            result["factor_stats"] = self.vector_memory.compute_factor_performance()
+            result["experience_count"] = vm.trade_count
+            result["rule_count"] = vm.semantic_rule_count
+            result["confidence_stats"] = vm.compute_confidence_stats()
+            result["adx_stats"] = vm.compute_adx_performance()
+            result["factor_stats"] = vm.compute_factor_performance()
             where_filter = {"outcome": {"$ne": "UPDATE"}}
             embed_query = query
             display_context = query
             if not embed_query:
                 display_context, embed_query = await asyncio.to_thread(
-                    _build_current_market_context, self.config, self.logger, self.unified_parser
+                    _build_current_market_context, self.config, self.logger, self.unified_parser, symbol
                 )
                 if display_context:
                     result["current_context"] = display_context
             if embed_query:
-                experiences = self.vector_memory.retrieve_similar_experiences(
+                experiences = vm.retrieve_similar_experiences(
                     embed_query, k=limit, where=where_filter
                 )
             else:
-                experiences = self.vector_memory.get_all_experiences(limit=limit, where=where_filter)
+                experiences = vm.get_all_experiences(limit=limit, where=where_filter)
             reverse = order == "desc"
             def get_sort_key(item):
                 # pylint: disable=too-many-return-statements
@@ -331,15 +387,15 @@ class BrainRouter:
 
     async def get_current_position(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get current open position details."""
-        cached = self.dashboard_state.get_cached("position", ttl_seconds=10.0)
+        cache_key = f"position_{symbol}" if symbol else "position"
+        cached = self.dashboard_state.get_cached(cache_key, ttl_seconds=10.0)
         if cached:
             return cached
         target_symbol = symbol or (next(iter(self.dashboard_state.pairs)) if self.dashboard_state.pairs else None)
         pair_state = self.dashboard_state.pairs.get(target_symbol) if target_symbol else None
         current_price = pair_state.current_price if pair_state else None
         if current_price is None:
-            data_dir = self.config.DATA_DIR
-            prev_response_file = Path(data_dir) / "trading" / "previous_response.json"
+            prev_response_file = self._get_prev_response_path(symbol)
             try:
                 data = await asyncio.to_thread(_read_json_file, prev_response_file)
                 if data is not None:
@@ -350,12 +406,11 @@ class BrainRouter:
             except Exception:
                 self.logger.error("Failed to parse current price from prompt", exc_info=True)
 
-        if not self.persistence:
-            return {"has_position": False, "error": "Persistence not available"}
-        position = self.persistence.load_position()
+        persistence = self._get_persistence_for_symbol(symbol)
+        position = persistence.load_position()
         if not position:
             res = {"has_position": False, "current_price": current_price}
-            self.dashboard_state.set_cached("position", res)
+            self.dashboard_state.set_cached(cache_key, res)
             return res
         sl_distance_pct = _distance_pct_or_fallback(
             position.sl_distance_pct,
@@ -389,7 +444,7 @@ class BrainRouter:
             "max_profit_pct": position.max_profit_pct,
             "confluence_factors": position.confluence_factors
         }
-        self.dashboard_state.set_cached("position", res)
+        self.dashboard_state.set_cached(cache_key, res)
         return res
 
     async def refresh_current_price(self, symbol: Optional[str] = None) -> Dict[str, Any]:

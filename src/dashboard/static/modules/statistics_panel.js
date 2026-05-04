@@ -24,7 +24,11 @@ export async function updateStatisticsData() {
     const container = document.getElementById('statistics-content');
     if (!container) return;
     try {
-        const response = await fetch('/api/performance/stats');
+        const symbol = window.state?.currentPair;
+        const url = symbol && symbol !== '__global__'
+            ? `/api/performance/stats?symbol=${encodeURIComponent(symbol)}`
+            : '/api/performance/stats';
+        const response = await fetch(url);
         const stats = await response.json();
         if (!stats || Object.keys(stats).length === 0) {
             container.innerHTML = `

@@ -15,13 +15,13 @@ class ProviderFactory:
     Factory for creating AI provider client instances based on configuration.
 
     Centralizes provider instantiation logic and handles API key validation.
-    Supports multiple providers: Google AI Studio (free/paid), OpenRouter, LM Studio (local).
+    Supports multiple providers: Google AI Studio (free/paid), OpenRouter, LiteLLM (generic).
 
     Usage:
         factory = ProviderFactory(logger, config)
         google_client, google_paid_client = factory.create_google_clients()
-        openrouter_client = factory.create_openrouter_client()
-        lmstudio_client = factory.create_lmstudio_client()
+        openrouter_client = litellm_factory.create_litellm_client("openrouter")
+        litellm_client = litellm_factory.create_litellm_client("litellm")
     """
 
     def __init__(self, logger: Logger, config: "ConfigProtocol"):
@@ -85,7 +85,7 @@ class ProviderFactory:
         Create all available AI provider clients based on configuration.
 
         Returns:
-            Dictionary with keys: 'google', 'google_paid', 'openrouter', 'lmstudio', 'blockrun'.
+            Dictionary with keys: 'google', 'google_paid', 'openrouter', 'litellm', 'blockrun'.
         """
         google_client, google_paid_client = self.create_google_clients()
 
@@ -96,6 +96,6 @@ class ProviderFactory:
             'google': google_client,
             'google_paid': google_paid_client,
             'openrouter': litellm_clients.get('openrouter'),
-            'lmstudio': litellm_clients.get('ollama'),  # llmstudio devient le client local via LiteLLM
+            'litellm': litellm_clients.get('litellm'),
             'blockrun': litellm_clients.get('blockrun')
         }

@@ -4,9 +4,10 @@ export async function updateVisuals() {
     const noChartMsg = document.getElementById('no-chart-msg');
     
     try {
-        // Try to fetch latest chart with cache buster
+        const symbol = window.state?.currentPair;
+        const symbolParam = symbol && symbol !== '__global__' ? `&symbol=${encodeURIComponent(symbol)}` : '';
         const timestamp = Date.now();
-        const response = await fetch(`/api/visuals/charts/latest?t=${timestamp}`);
+        const response = await fetch(`/api/visuals/charts/latest?t=${timestamp}${symbolParam}`);
         
         if (response.ok) {
             const data = await response.json();

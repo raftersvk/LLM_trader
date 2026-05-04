@@ -133,7 +133,7 @@ class TokenCounter:
         Record actual token usage from API response (replaces tiktoken estimates).
 
         Args:
-            provider: Provider name (openrouter, google, lmstudio)
+            provider: Provider name (openrouter, google, litellm)
             prompt_tokens: Actual prompt token count from API
             completion_tokens: Actual completion token count from API
             cost: Optional cost from API (only OpenRouter provides this)
@@ -152,8 +152,8 @@ class TokenCounter:
                 self.session_costs.openrouter += cost
             elif provider == "google":
                 self.session_costs.google += cost
-            elif provider == "lmstudio":
-                self.session_costs.lmstudio += cost
+            elif provider == "litellm":
+                self.session_costs.litellm += cost
 
     @staticmethod
     def format_cost(cost: float) -> str:
@@ -227,7 +227,7 @@ class TokenCounter:
 
 class CostStorage:
     """Persistent storage for API costs loaded from/saved to JSON file."""
-    PROVIDERS = ("openrouter", "google", "lmstudio")
+    PROVIDERS = ("openrouter", "google", "litellm")
 
     def __init__(self, file_path: str = "data/trading/api_costs.json"):
         """

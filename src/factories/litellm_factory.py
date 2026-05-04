@@ -51,38 +51,50 @@ class LiteLLMFactory:
         Returns:
             Config dict or None
         """
-        if provider == "ollama":
-            return self._get_ollama_config()
-        elif provider == "googleai":
+        if provider == "googleai":
             return self._get_google_config()
         elif provider == "openrouter":
             return self._get_openrouter_config()
         elif provider == "blockrun":
             return self._get_blockrun_config()
+        elif provider == "litellm":
+            return self._get_litellm_config()
 
         self.logger.warning("Unknown provider: %s", provider)
         return None
 
-    def _get_ollama_config(self) -> Optional[Dict[str, Any]]:
+    def _get_litellm_config(self) -> Optional[Dict[str, Any]]:
         """
-        Ollama configuration (OpenAI-compatible local API).
+        LiteLLM configuration for generic OpenAI-compatible APIs.
 
-        Uses http://localhost:11434/v1
+        Uses LITELLM_BASE_URL, LITELLM_MODEL, and LITELLM_API_KEY from config.
+        Supports MiniMax, OpenAI-compatible endpoints, etc.
         """
-        base_url = getattr(self.config, "LM_STUDIO_BASE_URL", None)
+        base_url = getattr(self.config, "LITELLM_BASE_URL", None)
         if not base_url:
-            # Default value if not configured
-            base_url = "http://localhost:11434/v1"
+            self.logger.debug("No base URL configured for litellm provider")
+            return None
 
-        model = getattr(self.config, "LM_STUDIO_MODEL", "gemma4:31b-cloud")
+        model = getattr(self.config, "LITELLM_MODEL", None)
+        if not model:
+            self.logger.debug("No model configured for litellm provider")
+            return None
 
-        # For Ollama/LM Studio local, we use OpenAI-compatible API
-        # No API key needed
+        api_key = getattr(self.config, "LITELLM_API_KEY", None)
+        if not api_key:
+            api_key = getattr(self.config, "MINIMAX_API_KEY", None)
+        if not api_key:
+            self.logger.debug("No API key configured for litellm provider")
+            return None
+
+        self.logger.debug("LiteLLM config - base_url: %s, model: %s, api_key_prefix: %s",
+                         base_url, model, api_key[:8] if api_key else None)
+
         return {
-            "provider": "ollama",
+            "provider": "litellm",
             "base_url": base_url,
             "model": model,
-            "api_key": "ollama",  # Dummy key, local doesn't need it
+            "api_key": api_key,
         }
 
     def _get_google_config(self) -> Optional[Dict[str, Any]]:
@@ -155,7 +167,7 @@ class LiteLLMFactory:
         Returns:
             Dict with clients for each provider
         """
-        providers = ["ollama", "googleai", "openrouter", "blockrun"]
+        providers = ["googleai", "openrouter", "blockrun", "litellm"]
         clients = {}
 
         for provider in providers:

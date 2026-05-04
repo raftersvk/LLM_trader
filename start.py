@@ -166,6 +166,8 @@ class CompositionRoot:
         self.logger.install_crash_handler()
         self.loop = None
         self.shutdown_manager = None
+        self.engine_registry = None
+        self.vector_memory_registry = None
 
     async def build_dependencies(self) -> dict:
         """Build all dependencies for the trading bot via segmented provisions."""
@@ -212,7 +214,15 @@ class CompositionRoot:
 
         # Dashboard needs an analysis_engine; create one for dashboard monitoring purposes.
         # Multi-pair bots get their own engine instances per pair via the factory.
+        from src.dashboard.registries import AnalysisEngineRegistry, VectorMemoryRegistry
+
+        self.engine_registry = AnalysisEngineRegistry()
+        self.vector_memory_registry = VectorMemoryRegistry()
+
         dashboard_engine = analyzer['engine_factory'](self.config.CRYPTO_PAIR)
+        self.engine_registry.register(self.config.CRYPTO_PAIR, dashboard_engine)
+        self.vector_memory_registry.register(self.config.CRYPTO_PAIR, trading['brain_service'].vector_memory if trading['brain_service'] else None)
+
         dashboard_server = DashboardServer(
             brain_service=trading['brain_service'],
             vector_memory=trading['brain_service'].vector_memory if trading['brain_service'] else None,
@@ -223,7 +233,10 @@ class CompositionRoot:
             persistence=trading['persistence'],
             exchange_manager=infra['exchange_manager'],
             host=self.config.DASHBOARD_HOST,
-            port=self.config.DASHBOARD_PORT
+            port=self.config.DASHBOARD_PORT,
+            engine_registry=self.engine_registry,
+            vector_memory_registry=self.vector_memory_registry,
+            multi_pair_manager=trading.get('multi_pair_manager')
         )
 
         deps['dashboard_server'] = dashboard_server
@@ -500,7 +513,9 @@ class CompositionRoot:
         bot_factory = BotDependencyFactory(
             base_dependencies=base_deps,
             config=self.config,
-            logger=self.logger
+            logger=self.logger,
+            engine_registry=self.engine_registry,
+            vector_memory_registry=self.vector_memory_registry
         )
 
         multi_pair_manager = MultiPairManager(

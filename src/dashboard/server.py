@@ -14,7 +14,10 @@ from fastapi.responses import JSONResponse, Response
 from starlette.middleware.gzip import GZipMiddleware
 
 from .routers import brain, monitor, visuals, performance, ws_router
+from .routers.portfolio import PortfolioRouter
+from .routers.system import SystemRouter
 from .dashboard_state import dashboard_state
+from .registries import AnalysisEngineRegistry, VectorMemoryRegistry
 
 class DashboardServer:
     """Main application server combining all API routers."""
@@ -29,7 +32,10 @@ class DashboardServer:
                  persistence=None,
                  exchange_manager=None,
                  host="0.0.0.0",
-                 port=8000):
+                 port=8000,
+                 engine_registry=None,
+                 vector_memory_registry=None,
+                 multi_pair_manager=None):
         self.brain_service = brain_service
         self.vector_memory = vector_memory
         self.analysis_engine = analysis_engine
@@ -43,6 +49,9 @@ class DashboardServer:
         self.server_task = None
         self._server = None
         self.dashboard_state = dashboard_state
+        self.engine_registry = engine_registry or AnalysisEngineRegistry()
+        self.vector_memory_registry = vector_memory_registry or VectorMemoryRegistry()
+        self.multi_pair_manager = multi_pair_manager
         self.app = self._create_app()
 
     def _create_app(self) -> FastAPI:
@@ -321,7 +330,8 @@ class DashboardServer:
             vector_memory=self.vector_memory,
             unified_parser=self.unified_parser,
             persistence=self.persistence,
-            exchange_manager=self.exchange_manager
+            exchange_manager=self.exchange_manager,
+            vector_memory_registry=self.vector_memory_registry
         )
         try:
             rag_engine = self.brain_service.rag_engine if self.brain_service else None
@@ -333,7 +343,8 @@ class DashboardServer:
             logger=self.logger,
             dashboard_state=self.dashboard_state,
             analysis_engine=self.analysis_engine,
-            rag_engine=rag_engine
+            rag_engine=rag_engine,
+            engine_registry=self.engine_registry
         )
         performance_router = performance.PerformanceRouter(
             config=self.config,
@@ -341,12 +352,26 @@ class DashboardServer:
             dashboard_state=self.dashboard_state
         )
         visuals_router = visuals.VisualsRouter(
-            analysis_engine=self.analysis_engine
+            analysis_engine=self.analysis_engine,
+            engine_registry=self.engine_registry
         )
         websocket_router = ws_router.WebSocketRouter(
             manager_instance=ws_router.manager,
             config=self.config,
             dashboard_state=self.dashboard_state
+        )
+        portfolio_router = PortfolioRouter(
+            config=self.config,
+            logger=self.logger,
+            dashboard_state=self.dashboard_state,
+            engine_registry=self.engine_registry,
+            vector_memory_registry=self.vector_memory_registry
+        )
+        system_router = SystemRouter(
+            config=self.config,
+            logger=self.logger,
+            dashboard_state=self.dashboard_state,
+            multi_pair_manager=self.multi_pair_manager
         )
 
         app.include_router(brain_router.router)
@@ -354,6 +379,8 @@ class DashboardServer:
         app.include_router(visuals_router.router)
         app.include_router(performance_router.router)
         app.include_router(websocket_router.router)
+        app.include_router(portfolio_router.router)
+        app.include_router(system_router.router)
 
         # Mount Static Files (Frontend)
         # We assume the static folder is in the same directory as this file

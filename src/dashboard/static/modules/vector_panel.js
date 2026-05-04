@@ -22,9 +22,11 @@ export async function initVectorPanel() {
 
 export async function updateVectorData() {
     try {
+        const symbol = window.state?.currentPair;
+        const symbolParam = symbol && symbol !== '__global__' ? `&symbol=${encodeURIComponent(symbol)}` : '';
         const [vectorResponse, rulesResponse] = await Promise.all([
-            fetch(`/api/brain/vectors?limit=50&sort_by=${currentSort.by}&order=${currentSort.order}`),
-            fetch('/api/brain/rules')
+            fetch(`/api/brain/vectors?limit=50&sort_by=${currentSort.by}&order=${currentSort.order}${symbolParam}`),
+            fetch(`/api/brain/rules${symbol && symbol !== '__global__' ? `?symbol=${encodeURIComponent(symbol)}` : ''}`)
         ]);
         const data = await vectorResponse.json();
         const rulesData = rulesResponse.ok ? await rulesResponse.json() : [];

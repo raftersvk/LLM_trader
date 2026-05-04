@@ -146,8 +146,11 @@ export async function updatePerformanceData() {
     if (!chart) return;
     
     try {
+        const symbol = window.state?.currentPair;
+        const symbolParam = symbol && symbol !== '__global__' ? `?symbol=${encodeURIComponent(symbol)}` : '';
+
         // Fetch history for chart
-        const historyResponse = await fetch('/api/performance/history');
+        const historyResponse = await fetch(`/api/performance/history${symbolParam}`);
         const historyData = await historyResponse.json();
         
         let seriesData = [];
@@ -225,7 +228,7 @@ export async function updatePerformanceData() {
         }
         
         // Fetch stats separately
-        const statsResponse = await fetch('/api/performance/stats');
+        const statsResponse = await fetch(`/api/performance/stats${symbolParam}`);
         const stats = await statsResponse.json();
         
         const statsEl = document.getElementById('stats-summary');

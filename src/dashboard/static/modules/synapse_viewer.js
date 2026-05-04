@@ -77,7 +77,11 @@ export async function updateSynapses() {
     if (!nodes) return;
     
     try {
-        const response = await fetch('/api/brain/memory?limit=50');
+        const symbol = window.state?.currentPair;
+        const url = symbol && symbol !== '__global__'
+            ? `/api/brain/memory?limit=50&symbol=${encodeURIComponent(symbol)}`
+            : '/api/brain/memory?limit=50';
+        const response = await fetch(url);
         const data = await response.json();
         
         // Only update if there's new data
