@@ -31,6 +31,13 @@ blockrun_base_url = https://blockrun.ai/api
 # Examples: openai/gpt-4o, anthropic/claude-sonnet-4, google/gemini-2.5-flash
 blockrun_model = deepseek/deepseek-reasoner
 
+# Dedicated vision LiteLLM provider for chart analysis
+# Uses a separate LiteLLM endpoint when configured (e.g., different API key or base_url)
+# vision_provider = litellm
+# vision_model = openai/gpt-4o-mini  # must be a vision-capable model
+# vision_base_url = https://api.openai.com/v1  # optional, uses litellm_base_url if not set
+# Add VISION_API_KEY to keys.env for the API key
+
 [general]
 # Default cryptocurrency pair to analyze if none specified
 crypto_pair = BTC/USDC
@@ -86,6 +93,17 @@ news_allowed_feeds = seekingalpha,invezz,coinpaper,cryptopotato
 supported = binance,kucoin,gateio,mexc,hyperliquid
 # Frequency (in hours) to refresh exchange market data
 market_refresh_hours = 24
+
+[risk_management]
+# Default position size as decimal (e.g., 0.02 = 2% of capital)
+default_position_size = 0.02
+# Minimum order size in quote currency (e.g., 10.0 for $10 minimum)
+# Set to 0 to disable minimum order size check
+min_order_size = 10.0
+# Default stop loss percentage as decimal (e.g., 0.02 = 2%)
+default_stop_loss_pct = 0.02
+# Default take profit percentage as decimal (e.g., 0.04 = 4%)
+default_take_profit_pct = 0.04
 
 [demo_trading]
 # Simulated capital in quote currency (e.g., USDC) for position size calculation

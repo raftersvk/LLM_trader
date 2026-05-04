@@ -50,6 +50,7 @@ class ProviderClients:
     openrouter: Optional["BaseAIClient"] = None
     litellm: Optional["BaseAIClient"] = None
     blockrun: Optional["BaseAIClient"] = None
+    vision_litellm: Optional["BaseAIClient"] = None
 
     @classmethod
     def from_factory_dict(cls, clients: Dict[str, Any]) -> "ProviderClients":
@@ -59,5 +60,6 @@ class ProviderClients:
             google_paid=clients.get('google_paid'),
             openrouter=clients.get('openrouter'),
             litellm=clients.get('litellm'),
-            blockrun=clients.get('blockrun')
+            blockrun=clients.get('blockrun'),
+            vision_litellm=clients.get('vision_litellm')
         )

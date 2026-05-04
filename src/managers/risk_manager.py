@@ -131,6 +131,28 @@ class RiskManager(RiskManagerProtocol):
         tp_distance_pct = abs(final_tp - current_price) / current_price
         rr_ratio = tp_distance_pct / sl_distance_pct if sl_distance_pct > 0 else 0
 
+        # 7b. Enforce Minimum Order Size
+        min_order_size = self.config.MIN_ORDER_SIZE
+        if min_order_size > 0 and allocation < min_order_size:
+            self.logger.warning(
+                "Order size $%s below minimum $%s, rejecting position",
+                f"{allocation:.2f}", f"{min_order_size:.2f}"
+            )
+            return RiskAssessment(
+                direction=direction,
+                entry_price=current_price,
+                stop_loss=final_sl,
+                take_profit=final_tp,
+                quantity=0.0,
+                size_pct=0.0,
+                quote_amount=0.0,
+                entry_fee=0.0,
+                sl_distance_pct=sl_distance_pct,
+                tp_distance_pct=tp_distance_pct,
+                rr_ratio=rr_ratio,
+                volatility_level=volatility_level
+            )
+
         return RiskAssessment(
             direction=direction,
             entry_price=current_price,

@@ -267,10 +267,6 @@ class Config:
         return self.get_config('ai_providers', 'litellm_streaming', True)
 
     @property
-    def LITELLM_API_KEY(self):
-        return self.get_env('LITELLM_API_KEY')
-
-    @property
     def OPENROUTER_BASE_URL(self):
         return self.get_config('ai_providers', 'openrouter_base_url', 'https://openrouter.ai/api/v1')
 
@@ -293,6 +289,22 @@ class Config:
     @property
     def BLOCKRUN_MODEL(self):
         return self.get_config('ai_providers', 'blockrun_model', 'openai/gpt-4o')
+
+    @property
+    def VISION_PROVIDER(self):
+        return self.get_config('ai_providers', 'vision_provider', None)
+
+    @property
+    def VISION_MODEL(self):
+        return self.get_config('ai_providers', 'vision_model', None)
+
+    @property
+    def VISION_BASE_URL(self):
+        return self.get_config('ai_providers', 'vision_base_url', None)
+
+    @property
+    def VISION_API_KEY(self):
+        return self.get_env('VISION_API_KEY')
 
     # General Configuration
     @property
@@ -485,6 +497,11 @@ class Config:
     def DEFAULT_POSITION_SIZE(self):
         """Default position size as decimal (e.g. 0.02) if AI doesn't specify."""
         return float(self.get_config('risk_management', 'default_position_size', 0.02))
+
+    @property
+    def MIN_ORDER_SIZE(self):
+        """Minimum order size in quote currency (e.g., 10.0 for $10 minimum)."""
+        return float(self.get_config('risk_management', 'min_order_size', 0.0))
 
     @property
     def DEFAULT_STOP_LOSS_PCT(self):

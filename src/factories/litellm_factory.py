@@ -41,6 +41,40 @@ class LiteLLMFactory:
         self.logger.debug("LiteLLM client created for provider: %s", provider)
         return client
 
+    def create_vision_client(self) -> Optional[LitellmAIClient]:
+        """
+        Create a dedicated LiteLLM client for vision analysis.
+
+        Uses VISION_PROVIDER, VISION_BASE_URL, VISION_API_KEY, VISION_MODEL from config.
+
+        Returns:
+            LitellmAIClient or None if vision not configured
+        """
+        vision_provider = getattr(self.config, 'VISION_PROVIDER', None)
+        if not vision_provider:
+            self.logger.debug("No vision provider configured")
+            return None
+
+        config = self._get_provider_config(vision_provider)
+        if not config:
+            self.logger.debug("No configuration for vision provider: %s", vision_provider)
+            return None
+
+        base_url = getattr(self.config, 'VISION_BASE_URL', None)
+        api_key = getattr(self.config, 'VISION_API_KEY', None)
+        model = getattr(self.config, 'VISION_MODEL', None)
+
+        if base_url:
+            config["base_url"] = base_url
+        if api_key:
+            config["api_key"] = api_key
+        if model:
+            config["model"] = model
+
+        client = LitellmAIClient(config=config, logger=self.logger)
+        self.logger.debug("Vision LiteLLM client created for provider: %s", vision_provider)
+        return client
+
     def _get_provider_config(self, provider: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve config for a specific provider.
@@ -173,5 +207,9 @@ class LiteLLMFactory:
         for provider in providers:
             client = self.create_litellm_client(provider)
             clients[provider] = client
+
+        vision_client = self.create_vision_client()
+        if vision_client:
+            clients["vision_litellm"] = vision_client
 
         return clients

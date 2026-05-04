@@ -76,6 +76,14 @@ class ProviderOrchestrator:
                 config=self.config.get_model_config(self.config.BLOCKRUN_MODEL),
                 supports_chart=True,
                 has_rate_limits=False
+            ),
+            'vision_litellm': ProviderMetadata(
+                name='Vision LiteLLM',
+                client=self.clients.vision_litellm,
+                default_model=self.config.VISION_MODEL or self.config.LITELLM_MODEL,
+                config=self.config.get_model_config(self.config.VISION_MODEL or self.config.LITELLM_MODEL),
+                supports_chart=True,
+                has_rate_limits=True
             )
         }
 
@@ -242,6 +250,16 @@ class ProviderOrchestrator:
             InvocationResult with response
         """
         if effective_provider == "all":
+            if self.clients.vision_litellm:
+                vision_model = self.config.VISION_MODEL
+                self.logger.info("Using dedicated vision LiteLLM (model: %s)", vision_model)
+                return await self._invoke_litellm(
+                    self._providers["vision_litellm"],
+                    messages,
+                    vision_model or self.config.VISION_MODEL or self.config.LITELLM_MODEL,
+                    chart=True,
+                    chart_image=chart_image
+                )
             return await self.invoke_with_fallback(
                 ["googleai", "openrouter", "blockrun"], messages, chart=True, chart_image=chart_image, model=model
             )
@@ -332,23 +350,31 @@ class ProviderOrchestrator:
         metadata: ProviderMetadata,
         messages: List[Dict[str, str]],
         effective_model: str,
-        chart: bool
+        chart: bool,
+        chart_image: Optional[Union[io.BytesIO, bytes, str]] = None
     ) -> InvocationResult:
         """Invoke LiteLLM provider."""
         try:
-            response = await metadata.client.chat_completion(effective_model, messages, metadata.config)
+            if chart and chart_image:
+                response = await metadata.client.chat_completion_with_chart_analysis(
+                    effective_model, messages, chart_image, metadata.config
+                )
+            else:
+                response = await metadata.client.chat_completion(effective_model, messages, metadata.config)
             success = self._is_valid_response(response)
+            provider_name = "vision_litellm" if metadata.name == "Vision LiteLLM" else "litellm"
             return InvocationResult(
                 success=success,
                 response=response,
-                provider="litellm",
+                provider=provider_name,
                 model=effective_model
             )
         except Exception as e:
+            provider_name = "vision_litellm" if metadata.name == "Vision LiteLLM" else "litellm"
             return InvocationResult(
                 success=False,
                 response=ChatResponseModel.from_error(f"LiteLLM connection failed: {str(e)}"),
-                provider="litellm",
+                provider=provider_name,
                 model=effective_model
             )
 
