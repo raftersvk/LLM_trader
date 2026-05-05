@@ -35,6 +35,11 @@ class BotDependencyFactory:
         self.engine_registry = engine_registry
         self.vector_memory_registry = vector_memory_registry
 
+        from src.trading.portfolio_capital import PortfolioCapitalService
+        self.portfolio_capital_service = PortfolioCapitalService(
+            logger, initial_capital=config.DEMO_QUOTE_CAPITAL
+        )
+
     async def create_bot_for_pair(self, symbol: str) -> CryptoTradingBot:
         """Create an isolated bot instance for a trading pair.
 
@@ -165,7 +170,8 @@ class BotDependencyFactory:
         parser = self.base_dependencies.get('parser')
         strategy = TradingStrategy(
             self.logger, persistence, brain_service, statistics_service, memory_service,
-            risk_manager, self.config, PositionExtractor(self.logger, parser), PositionFactory(self.logger)
+            risk_manager, self.config, PositionExtractor(self.logger, parser), PositionFactory(self.logger),
+            portfolio_capital_service=self.portfolio_capital_service
         )
 
         return {

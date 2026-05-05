@@ -28,6 +28,7 @@ class TradingStrategy:
         config: Any = None,
         position_extractor=None,
         position_factory=None,
+        portfolio_capital_service=None,
     ):
         """Initialize the trading strategy with DI pattern.
 
@@ -41,6 +42,7 @@ class TradingStrategy:
             config: Configuration module
             position_extractor: PositionExtractor instance (injected from app.py)
             position_factory: PositionFactory instance (injected from start.py)
+            portfolio_capital_service: Shared portfolio capital service for multi-pair
         """
         self.logger = logger
         self.persistence = persistence
@@ -51,12 +53,21 @@ class TradingStrategy:
         self.config = config
         self.extractor = position_extractor
         self.position_factory = position_factory
+        self.portfolio_capital_service = portfolio_capital_service
 
         # Load any existing position
         self.current_position: Optional[Position] = self.persistence.load_position()
 
         if self.current_position:
             self.logger.info("Loaded existing position: %s %s @ $%s", self.current_position.direction, self.current_position.symbol, f"{self.current_position.entry_price:,.2f}")
+            if self.portfolio_capital_service:
+                self.portfolio_capital_service.reserve_position(
+                    symbol=self.current_position.symbol,
+                    quote_amount=self.current_position.quote_amount,
+                    entry_price=self.current_position.entry_price,
+                    quantity=self.current_position.size,
+                    direction=self.current_position.direction
+                )
 
     async def check_position(self, current_price: float) -> Optional[str]:
         """Check if current position hit stop loss or take profit.
@@ -160,6 +171,14 @@ class TradingStrategy:
             self.statistics_service.recalculate(self.config.DEMO_QUOTE_CAPITAL)
         except Exception as e:
             self.logger.error("Error recalculating statistics: %s", e)
+
+        # Release capital from portfolio tracking
+        if self.portfolio_capital_service:
+            net_pnl = pnl - closing_fee
+            self.portfolio_capital_service.release_position(
+                self.current_position.symbol, net_pnl
+            )
+
         await self.persistence.async_save_position(None)
         self.current_position = None
 
@@ -333,8 +352,14 @@ class TradingStrategy:
         direction = "LONG" if signal == "BUY" else "SHORT"
         market_conditions = market_conditions or {}
 
-        # Calculate quantity based on CURRENT capital (not initial)
-        capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
+        # Calculate available capital considering ALL open positions across portfolio
+        if self.portfolio_capital_service:
+            portfolio_capital = self.portfolio_capital_service.current_capital
+            available = self.portfolio_capital_service.get_available_capital(symbol, 0)
+            capital = available
+            self.logger.info("Using shared portfolio capital: $%s available (total: $%s)", f"{available:,.2f}", f"{portfolio_capital:,.2f}")
+        else:
+            capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
 
         # Delegate Risk Calculation to RiskManager
         risk_assessment = self.risk_manager.calculate_entry_parameters(
@@ -373,6 +398,16 @@ class TradingStrategy:
             confluence_factors=confluence_factors,
             market_conditions=market_conditions
         )
+
+        # Reserve capital in portfolio tracking
+        if self.portfolio_capital_service:
+            self.portfolio_capital_service.reserve_position(
+                symbol=symbol,
+                quote_amount=risk_assessment.quote_amount,
+                entry_price=current_price,
+                quantity=quantity,
+                direction=direction
+            )
 
         await self.persistence.async_save_position(self.current_position)
         self.logger.info("Opened %s position @ $%s (SL: $%s, TP: $%s, Qty: %.6f, Fee: $%.4f)", direction, f"{current_price:,.2f}", f"{final_sl:,.2f}", f"{final_tp:,.2f}", quantity, entry_fee)
@@ -637,13 +672,23 @@ class TradingStrategy:
         Returns:
             Formatted position context string with capital status
         """
-        capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
         currency = self.config.QUOTE_CURRENCY
+
+        if self.portfolio_capital_service:
+            total_capital = self.portfolio_capital_service.current_capital
+            total_allocated = self.portfolio_capital_service.total_allocated
+            available = self.portfolio_capital_service.total_unallocated
+        else:
+            capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
+            total_capital = capital
+            total_allocated = 0.0
+            available = capital
+
         if not self.current_position:
             return (
                 f"## Capital Status\n"
-                f"- Total Capital: ${capital:,.2f} {currency}\n"
-                f"- Available: ${capital:,.2f} (100%)\n\n"
+                f"- Total Capital: ${total_capital:,.2f} {currency}\n"
+                f"- Available: ${available:,.2f} (100%)\n\n"
                 f"CURRENT POSITION: None"
             )
         pos = self.current_position
@@ -654,13 +699,11 @@ class TradingStrategy:
             entry_time = entry_time.replace(tzinfo=timezone.utc)
         duration = now - entry_time
         hours = duration.total_seconds() / 3600
-        allocated = pos.quote_amount
-        available = capital - allocated
-        allocation_pct = (allocated / capital) * 100 if capital > 0 else 0
+        allocation_pct = (total_allocated / total_capital) * 100 if total_capital > 0 else 0
         context_lines = [
             "## Capital Status",
-            f"- Total Capital: ${capital:,.2f} {currency}",
-            f"- Allocated: ${allocated:,.2f} ({allocation_pct:.1f}%)",
+            f"- Total Capital: ${total_capital:,.2f} {currency}",
+            f"- Allocated (all pairs): ${total_allocated:,.2f} ({allocation_pct:.1f}%)",
             f"- Available: ${available:,.2f} ({100 - allocation_pct:.1f}%)",
             "",
             "## Current Position",
