@@ -55,3 +55,4 @@ keys.env
 *.ps1
 node_modules/
 .kilo/
+.playwright-mcp/
