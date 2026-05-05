@@ -646,10 +646,14 @@ class CompositionRoot:
 
             self.logger.info("Keyboard commands: 'a' = force analysis, 'd' = toggle dashboard, 'h' = help, 'q' = quit")
 
-            # Auto-start dashboard if enabled in config (fire-and-forget task)
+            # Auto-start dashboard if enabled in config
             if dashboard_server and self.config.DASHBOARD_ENABLED:
+                self.logger.info("Starting dashboard server first...")
                 await dashboard_server.start()
+                self.logger.info("Dashboard live at http://localhost:%s", self.config.DASHBOARD_PORT)
                 dashboard_running = True
+                # Yield to event loop to ensure dashboard server is truly started
+                await asyncio.sleep(0.1)
             elif not self.config.DASHBOARD_ENABLED:
                 self.logger.info("Dashboard disabled (config). Press 'd' to start it.")
 

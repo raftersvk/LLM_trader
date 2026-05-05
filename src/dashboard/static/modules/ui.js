@@ -1,6 +1,3 @@
-
-import { initSynapseNetwork } from './synapse_viewer.js';
-
 /**
  * UI Controller for Sidebar and Tabs
  */

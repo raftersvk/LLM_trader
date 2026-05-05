@@ -77,7 +77,7 @@ class ConsolidatedOverview {
         
         // Process pairs data for consolidated stats
         if (this.data.pairs) {
-            Object.entries(this.data.pairs).forEach(([symbol, state]) => {
+            Object.entries(this.data.pairs).forEach(([_symbol, state]) => {
                 // We would ideally get P&L from stats, but for now we'll use what's available
                 // In a real implementation, we'd fetch stats for each pair
                 if (state.current_position) {

@@ -230,8 +230,6 @@ function renderExperienceTable(experiences) {
         // split on "Label:" patterns.
         const pattern = /\b(Indicators|Structure|Confluences|Reasoning|Result|Post-trade):\s*/g;
         let match;
-        let lastKey = '_header';
-        let lastIndex = 0;
         sections['_header'] = '';
         const hits = [];
         while ((match = pattern.exec(doc)) !== null) {

@@ -1,7 +1,5 @@
 /** Performance Panel module - Detailed per-pair and cross-pair analytics. */
 
-import { initPerformanceChart as initOverviewChart, updatePerformanceData as updateOverviewData } from './performance_chart.js?v=4.5';
-
 let performanceChart = null;
 let comparisonChart = null;
 
@@ -99,7 +97,7 @@ function initPerfChart(historyData) {
         noData: { text: 'No trades yet', style: { color: '#8b949e', fontSize: '14px' } }
     };
 
-    performanceChart = new ApexCharts(container, options);
+    performanceChart = new window.ApexCharts(container, options);
     performanceChart.render();
 
     if (historyData.history && historyData.history.length > 0) {
@@ -139,7 +137,7 @@ function initComparisonChart(pairs) {
         legend: { labels: { colors: '#c9d1d9' } }
     };
 
-    comparisonChart = new ApexCharts(container, options);
+    comparisonChart = new window.ApexCharts(container, options);
     comparisonChart.render();
 }
 

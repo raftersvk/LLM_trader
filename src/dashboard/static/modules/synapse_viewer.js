@@ -5,10 +5,10 @@ let edges;
 
 export function initSynapseNetwork() {
     const container = document.getElementById('synapse-network');
-    
-    nodes = new vis.DataSet([]);
-    edges = new vis.DataSet([]);
-    
+
+    nodes = new window.vis.DataSet([]);
+    edges = new window.vis.DataSet([]);
+
     const data = { nodes, edges };
     const options = {
         nodes: {
@@ -31,7 +31,7 @@ export function initSynapseNetwork() {
         },
         physics: {
             enabled: true,
-            stabilization: { 
+            stabilization: {
                 enabled: true,
                 iterations: 200,
                 fit: true,
@@ -58,7 +58,7 @@ export function initSynapseNetwork() {
             dragView: true
         }
     };
-    network = new vis.Network(container, data, options);
+    network = new window.vis.Network(container, data, options);
     window.synapseNetwork = network;
     network.once('stabilizationIterationsDone', () => {
         network.setOptions({ physics: { enabled: false } });
@@ -136,15 +136,13 @@ export async function updateSynapses() {
             
             // Create edges: connect sequential trades WITHIN the same trade sequence
             // A trade sequence is BUY -> (UPDATE)* -> CLOSE
-            let lastBuyIndex = -1;
             let lastNodeIndex = -1;
-            
+
             for (let i = 0; i < newNodes.length; i++) {
                 const action = data.trades[i].action;
-                
+
                 if (action === 'BUY' || action === 'SELL') {
                     // Start of new sequence - no back-link from previous CLOSE
-                    lastBuyIndex = i;
                     lastNodeIndex = i;
                 } else if (lastNodeIndex >= 0) {
                     // UPDATE or CLOSE - connect to previous node in sequence
@@ -153,7 +151,7 @@ export async function updateSynapses() {
                         to: newNodes[i].id
                     });
                     lastNodeIndex = i;
-                    
+
                     // If this is a CLOSE, reset for next sequence
                     if (action.includes('CLOSE')) {
                         lastNodeIndex = -1;

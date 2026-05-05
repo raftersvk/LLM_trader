@@ -26,7 +26,7 @@ function initPortfolioChart() {
         grid: { borderColor: '#30363d', strokeDashArray: 4, yaxis: { lines: { show: true } }, padding: { bottom: 10, top: 50, right: 30, left: 20 } },
         noData: { text: 'No trades yet', style: { color: '#8b949e', fontSize: '14px' } }
     };
-    portfolioChart = new ApexCharts(container, options);
+    portfolioChart = new window.ApexCharts(container, options);
     portfolioChart.render();
 }
 

@@ -137,7 +137,7 @@ export function initPerformanceChart() {
         }
     };
 
-    chart = new ApexCharts(document.querySelector("#performance-chart"), options);
+    chart = new window.ApexCharts(document.querySelector("#performance-chart"), options);
     chart.render();
     window.performanceChart = chart;
 }
@@ -157,7 +157,7 @@ export async function updatePerformanceData() {
         let annotations = [];
         
         if (historyData.history && Array.isArray(historyData.history) && historyData.history.length > 0) {
-            historyData.history.forEach((point, index) => {
+            historyData.history.forEach((point) => {
                 const time = new Date(point.time).getTime();
                 seriesData.push({ 
                     x: time, 
@@ -176,34 +176,15 @@ export async function updatePerformanceData() {
 
                     // Only add markers for trade entry/exit actions
                     if (isBuy || isSell || isCloseLong || isCloseShort || isGenericClose) {
-                        let color = '#8b949e';
-                        let symbol = 'circle';
-                        let markerSize = 6;
-                        let labelText = '';
-
-                        if (isBuy) {
-                            color = '#00ff9d'; // Vibrant entry green
-                            symbol = 'rect'; // Triangle effectively via shape
-                            markerSize = 8;
-                        } else if (isSell) {
-                            color = '#1f6feb'; // Entry blue
-                            symbol = 'rect';
-                            markerSize = 8;
-                        } else {
-                            color = '#f85149'; // Exit red
-                            symbol = 'circle';
-                            markerSize = 5;
-                        }
-
                         annotations.push({
                             x: time,
                             y: point.value,
                             marker: {
-                                size: markerSize,
-                                fillColor: color,
+                                size: isBuy || isSell ? 8 : 5,
+                                fillColor: isBuy ? '#00ff9d' : isSell ? '#1f6feb' : '#f85149',
                                 strokeColor: '#fff',
                                 strokeWidth: 1.5,
-                                shape: symbol === 'rect' ? 'square' : 'circle' 
+                                shape: (isBuy || isSell) ? 'square' : 'circle'
                             },
                             label: {
                                 text: '', // Removing bulky text labels

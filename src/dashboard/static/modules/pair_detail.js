@@ -74,7 +74,7 @@ async function updatePairPosition(symbol) {
                 <div class="position-meta"><span>R:R ${data.rr_ratio.toFixed(1)}</span><span>${escapeHtml(String(data.confidence))}</span></div>
             </div>
         `;
-    } catch (e) {
+    } catch {
         container.innerHTML = '<div class="error">Error loading position data</div>';
     }
 }
@@ -91,7 +91,7 @@ async function updatePairPrompt(symbol) {
         const source = data.source === 'disk' ? '💾 From disk' : '🧠 From memory';
         if (meta) meta.textContent = `${source} | ${timestamp}`;
         if (content && window.marked && window.DOMPurify) {
-            viewer.innerHTML = DOMPurify.sanitize(marked.parse(content));
+            viewer.innerHTML = window.DOMPurify.sanitize(window.marked.parse(content));
             viewer.classList.add('discord-content');
         } else {
             viewer.textContent = content;
@@ -119,7 +119,7 @@ async function updatePairResponse(symbol) {
             processed = processed.replace(/\n*\{\s*"analysis"[\s\S]*?\n\}\s*$/g, '');
             processed = processed.replace(/\n{3,}/g, '\n\n');
             if (window.DOMPurify) {
-                viewer.innerHTML = DOMPurify.sanitize(marked.parse(processed.trim()));
+                viewer.innerHTML = window.DOMPurify.sanitize(window.marked.parse(processed.trim()));
             } else {
                 viewer.textContent = processed.trim();
             }
@@ -156,7 +156,7 @@ async function updatePairChart(symbol) {
             noMsg.textContent = 'Chart service unavailable';
             noMsg.style.display = 'block';
         }
-    } catch (e) {
+    } catch {
         img.style.display = 'none';
         noMsg.textContent = 'Error loading chart';
         noMsg.style.display = 'block';

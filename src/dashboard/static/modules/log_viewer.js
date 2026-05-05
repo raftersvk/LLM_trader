@@ -28,7 +28,7 @@ export async function updatePromptTab() {
         if (meta) meta.textContent = `${source} | ${timestamp}`;
         // Render prompt with markdown and discord-content styling (same as response)
         if (content && window.marked && window.DOMPurify) {
-            viewer.innerHTML = DOMPurify.sanitize(marked.parse(content));
+            viewer.innerHTML = window.DOMPurify.sanitize(window.marked.parse(content));
             viewer.classList.remove('prompt-content', 'code-block');
             viewer.classList.add('discord-content');
         } else {
@@ -68,7 +68,7 @@ export async function updateResponseTab() {
             processed = processed.replace(/\n{3,}/g, '\n\n');
             // Sanitize output to prevent XSS (prompts/responses may contain unsanitized data)
             if (window.DOMPurify) {
-                viewer.innerHTML = DOMPurify.sanitize(marked.parse(processed.trim()));
+                viewer.innerHTML = window.DOMPurify.sanitize(window.marked.parse(processed.trim()));
             } else {
                 // Safe fallback if DOMPurify fails to load
                 console.warn('DOMPurify not loaded. Rendering as safe text.');
