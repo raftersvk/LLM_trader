@@ -152,7 +152,7 @@ export async function updatePositionData(currentPrice = null, fetchFresh = false
                 </div>
             </div>
         `;
-    } catch {
+    } catch (e) {
         container.innerHTML = '<div class="error">Error loading position data</div>';
     }
 }

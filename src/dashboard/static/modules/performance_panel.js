@@ -115,6 +115,10 @@ function initComparisonChart(pairs) {
         comparisonChart = null;
     }
 
+    if (!pairs || !Array.isArray(pairs)) {
+        pairs = [];
+    }
+
     const symbols = pairs.filter(p => !p.error).map(p => p.symbol);
     const pnlData = pairs.filter(p => !p.error).map(p => p.total_pnl_pct || 0);
     const wrData = pairs.filter(p => !p.error).map(p => p.win_rate || 0);

@@ -116,22 +116,15 @@ class PerformanceRouter:
 
     async def get_statistics(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get trading statistics summary for a specific symbol or the primary one."""
-        cached = self.dashboard_state.get_cached("statistics", ttl_seconds=60.0)
-        if cached:
-            return cached
         persistence = self._get_persistence_for_symbol(symbol)
         stats_file = persistence.data_dir / "statistics.json"
         if stats_file.exists():
             try:
-                result = await asyncio.to_thread(self._load_json_file, stats_file)
-                self.dashboard_state.set_cached("statistics", result)
-                return result
+                return await asyncio.to_thread(self._load_json_file, stats_file)
             except Exception:
                 self.logger.error("Failed to load statistics for symbol %s", symbol, exc_info=True)
                 return {"error": "Failed to load stats"}
-        result = self._default_statistics()
-        self.dashboard_state.set_cached("statistics", result)
-        return result
+        return self._default_statistics()
 
     async def get_consolidated_statistics(self) -> Dict[str, Any]:
         """Get consolidated statistics across all configured pairs."""

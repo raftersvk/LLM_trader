@@ -1,15 +1,19 @@
-import { initPerformanceChart, updatePerformanceData } from './modules/performance_chart.js?v=4.5';
-import { initSynapseNetwork, updateSynapses } from './modules/synapse_viewer.js?v=4.5';
-import { updateLogs } from './modules/log_viewer.js?v=4.5';
-import { updateVisuals } from './modules/visuals.js?v=4.5';
-import { initVectorPanel, updateVectorData } from './modules/vector_panel.js?v=4.5';
-import { initFullscreen } from './modules/fullscreen.js?v=4.5';
-import { initWebSocket, startCountdownLoop } from './modules/websocket.js?v=4.5';
-import { initPositionPanel, updatePositionData } from './modules/position_panel.js?v=4.5';
-import { initUI } from './modules/ui.js?v=4.5';
-import { initStatisticsPanel, updateStatisticsData } from './modules/statistics_panel.js?v=4.5';
-import { initNewsPanel, updateNewsData } from './modules/news_panel.js?v=4.5';
-import './modules/overview.js?v=1.0';
+import { updatePerformanceData } from './modules/performance_chart.js?v=5.1';
+import { initSynapseNetwork, updateSynapses } from './modules/synapse_viewer.js?v=5.1';
+import { updateLogs } from './modules/log_viewer.js?v=5.1';
+import { updateVisuals } from './modules/visuals.js?v=5.1';
+import { initVectorPanel, updateVectorData } from './modules/vector_panel.js?v=5.1';
+import { initFullscreen } from './modules/fullscreen.js?v=5.1';
+import { initWebSocket, startCountdownLoop } from './modules/websocket.js?v=5.1';
+import { initPositionPanel, updatePositionData } from './modules/position_panel.js?v=5.1';
+import { initUI } from './modules/ui.js?v=5.1';
+import { initStatisticsPanel, updateStatisticsData } from './modules/statistics_panel.js?v=5.1';
+import { initNewsPanel, updateNewsData } from './modules/news_panel.js?v=5.1';
+import { initPortfolioOverview, updatePortfolioData } from './modules/portfolio_overview.js?v=5.1';
+import { initPerformancePanel, updatePerformancePanel } from './modules/performance_panel.js?v=5.1';
+import { initSystemMonitor, updateSystemData } from './modules/system_monitor.js?v=5.1';
+import { initPairDetail, updatePairDetail } from './modules/pair_detail.js?v=5.1';
+import './modules/overview.js?v=5.1';
 
 const state = {
     isConnected: false,
@@ -18,6 +22,7 @@ const state = {
     lastUpdateTime: null,
     currentPair: null
 };
+window.state = state;
 
 function formatCost(cost) {
     if (cost === 0 || cost === null || cost === undefined) return '$0.00';
@@ -40,8 +45,9 @@ async function fetchCosts() {
 function updateCostDisplay(data) {
     const total = data.total_session_cost || 0;
 
-    // Update main total
-    document.getElementById('overview-cost').textContent = formatCost(total);
+    // Update main total - fix: element id is 'portfolio-cost' not 'overview-cost'
+    const costEl = document.getElementById('portfolio-cost');
+    if (costEl) costEl.textContent = formatCost(total);
 }
 
 
@@ -103,7 +109,7 @@ async function fetchBrainStatus() {
 
         state.lastUpdateTime = new Date();
         updateLastUpdated();
-    } catch {
+    } catch (e) {
         const connStatus = document.getElementById('connection-status');
         const statusDot = document.querySelector('.status-dot');
 
@@ -190,6 +196,10 @@ async function updateSlowLane() {
     await updateVectorData();
     await updateStatisticsData();
     await updateNewsData();
+    await updatePortfolioData();
+    await updatePerformancePanel();
+    await updateSystemData();
+    await updatePairDetail();
 }
 
 // Initialize application
@@ -198,6 +208,9 @@ function initApp() {
 
     // Make crucial functions global immediately
     window.updateAll = updateAll;
+    window.updateVectorData = updateVectorData;
+    window.updatePerformanceData = updatePerformanceData;
+    window.updatePerformancePanel = updatePerformancePanel;
 
     window.togglePanelMinimize = togglePanelMinimize;
 
@@ -228,13 +241,16 @@ function initApp() {
             btnCopyResponse.addEventListener('click', window.copyResponseContent);
         }
 
-        initPerformanceChart();
         initSynapseNetwork();
         initVectorPanel();
         initFullscreen();
         initPositionPanel();
         initStatisticsPanel();
         initNewsPanel();
+        initPortfolioOverview();
+        initPerformancePanel();
+        initSystemMonitor();
+        initPairDetail();
         initWebSocket();
         initUI();
         startCountdownLoop();
@@ -257,6 +273,10 @@ function initApp() {
         document.addEventListener('pair-changed', (e) => {
             console.log('Pair changed to:', e.detail.symbol, '- refreshing all panels...');
             updateAll();
+            if (window.updatePairDetail) window.updatePairDetail();
+            if (window.updateVectorData) window.updateVectorData();
+            if (window.updatePerformanceData) window.updatePerformanceData();
+            if (window.updatePerformancePanel) window.updatePerformancePanel();
         });
 
         // Initialize pair selector and consolidated view button

@@ -646,7 +646,7 @@ class CompositionRoot:
 
             self.logger.info("Keyboard commands: 'a' = force analysis, 'd' = toggle dashboard, 'h' = help, 'q' = quit")
 
-            # Auto-start dashboard if enabled in config
+# Auto-start dashboard if enabled in config
             if dashboard_server and self.config.DASHBOARD_ENABLED:
                 self.logger.info("Starting dashboard server first...")
                 await dashboard_server.start()

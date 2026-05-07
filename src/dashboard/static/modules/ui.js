@@ -81,6 +81,15 @@ function setupSidebarNavigation() {
                 if (targetId === 'tab-portfolio' && window.updateAll) {
                     window.updateAll();
                 }
+                if (targetId === 'tab-pair-detail' && window.updatePairDetail) {
+                    window.updatePairDetail();
+                }
+                if (targetId === 'tab-memory' && window.updateVectorData) {
+                    window.updateVectorData();
+                }
+                if (targetId === 'tab-performance' && window.updatePerformancePanel) {
+                    window.updatePerformancePanel();
+                }
             }
 
             // Close mobile menu if open

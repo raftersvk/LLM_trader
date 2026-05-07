@@ -174,7 +174,7 @@ class DashboardServer:
                 "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
                 "font-src 'self' https://fonts.gstatic.com; "
                 "img-src 'self' data: https:; "
-                "connect-src 'self' https://*.cloudflare.com https://unpkg.com "
+                "connect-src 'self' ws: wss: https://*.cloudflare.com https://unpkg.com "
                 "https://cdn.jsdelivr.net;"
             )
             response.headers["Content-Security-Policy"] = csp
@@ -394,10 +394,16 @@ class DashboardServer:
 
     async def start(self):
         """Start the uvicorn server in an asyncio loop."""
+        import sys
+        import threading
         # Guard against double-start: if already running, do nothing
         if self.server_task and not self.server_task.done():
             return self.server_task
 
+        sys.stdout.write(f"DEBUG: start() called with host={self.host}, port={self.port}\n")
+        sys.stdout.flush()
+        sys.stdout.write(f"DEBUG: Creating uvicorn.Config...\n")
+        sys.stdout.flush()
         config = uvicorn.Config(
             app=self.app,
             host=self.host,
@@ -406,33 +412,58 @@ class DashboardServer:
             loop="asyncio",
             ws="wsproto",
             proxy_headers=True,
-            # Cloudflare IPv4 & IPv6 ranges — verified 2026-03-02
-            # Source: https://www.cloudflare.com/ips-v4/ and /ips-v6/
-            # Update periodically: Cloudflare rarely changes these but does occasionally add ranges.
-            forwarded_allow_ips=(
-                "173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,"
-                "141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,"
-                "197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,"
-                "104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,2400:cb00::/32,"
-                "2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,"
-                "2a06:98c0::/29,2c0f:f248::/32"
-            ),
         )
+        sys.stdout.write(f"DEBUG: config.port = {config.port}, config.host = {config.host}\n")
+        sys.stdout.flush()
+        sys.stdout.write(f"DEBUG: Creating uvicorn.Server...\n")
+        sys.stdout.flush()
         self._server = uvicorn.Server(config)
+        sys.stdout.write(f"DEBUG: _server created: {self._server}\n")
+        sys.stdout.flush()
 
-        # Disable uvicorn's own signal handling since we handle it ourselves
-        self._server.install_signal_handlers = lambda: None
+        def run_server():
+            sys.stdout.write(f"DEBUG: run_server thread started\n")
+            sys.stdout.flush()
+            self._server.run()
+            sys.stdout.write(f"DEBUG: run_server thread finished\n")
+            sys.stdout.flush()
 
-        # Store reference to task
-        self.server_task = asyncio.create_task(self._run_server())
-        return self.server_task
+        sys.stdout.write(f"DEBUG: Creating thread for server...\n")
+        sys.stdout.flush()
+        server_thread = threading.Thread(target=run_server, daemon=True)
+        server_thread.start()
+        sys.stdout.write(f"DEBUG: server_thread started: {server_thread}\n")
+        sys.stdout.flush()
+
+        # Wait for server to be ready
+        import time
+        for _ in range(50):  # 5 seconds max
+            time.sleep(0.1)
+            if self._server.started:
+                sys.stdout.write(f"DEBUG: server reports started!\n")
+                sys.stdout.flush()
+                break
+
+        sys.stdout.write(f"DEBUG: returning from start()\n")
+        sys.stdout.flush()
 
     async def _run_server(self):
         """Run uvicorn server with exception handling."""
+        import sys
+        sys.stdout.write(f"DEBUG: _run_server starting\n", flush=True)
         try:
+            sys.stdout.write(f"DEBUG: about to call serve()\n", flush=True)
             await self._server.serve()
+            sys.stdout.write(f"DEBUG: serve() completed\n", flush=True)
         except asyncio.CancelledError:
+            sys.stdout.write(f"DEBUG: CancelledError in _run_server\n", flush=True)
             pass
+        except Exception as e:
+            sys.stdout.write(f"DEBUG: Exception in _run_server: {e}\n", flush=True)
+            import traceback
+            traceback.print_exc(file=sys.stdout)
+            sys.stdout.flush()
+            raise
 
     async def stop(self):
         """Stop the dashboard server gracefully.

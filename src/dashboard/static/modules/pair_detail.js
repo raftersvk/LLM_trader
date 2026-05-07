@@ -74,7 +74,7 @@ async function updatePairPosition(symbol) {
                 <div class="position-meta"><span>R:R ${data.rr_ratio.toFixed(1)}</span><span>${escapeHtml(String(data.confidence))}</span></div>
             </div>
         `;
-    } catch {
+    } catch (e) {
         container.innerHTML = '<div class="error">Error loading position data</div>';
     }
 }
@@ -156,7 +156,7 @@ async function updatePairChart(symbol) {
             noMsg.textContent = 'Chart service unavailable';
             noMsg.style.display = 'block';
         }
-    } catch {
+    } catch (e) {
         img.style.display = 'none';
         noMsg.textContent = 'Error loading chart';
         noMsg.style.display = 'block';
