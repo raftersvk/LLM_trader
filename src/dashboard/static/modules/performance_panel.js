@@ -1,7 +1,9 @@
 /** Performance Panel module - Detailed per-pair and cross-pair analytics. */
 
 let performanceChart = null;
-let comparisonChart = null;
+let tradeHistory = [];
+let tradePage = 0;
+const TRADES_PER_PAGE = 10;
 
 export async function initPerformancePanel() {
     await updatePerformancePanel();
@@ -15,41 +17,133 @@ export async function updatePerformancePanel() {
         const symbol = window.state?.currentPair;
         const symbolParam = symbol && symbol !== '__global__' ? `?symbol=${encodeURIComponent(symbol)}` : '';
 
-        const [statsResp, historyResp, compareResp] = await Promise.all([
+        const [statsResp, historyResp, tradesResp] = await Promise.all([
             fetch(`/api/performance/stats${symbolParam}`),
             fetch(`/api/performance/history${symbolParam}`),
-            fetch('/api/performance/compare')
+            fetch(`/api/performance/trades${symbolParam}`)
         ]);
 
         const stats = await statsResp.json();
         const historyData = await historyResp.json();
-        const compareData = await compareResp.json();
+        const tradesData = await tradesResp.json();
 
-        renderPerformancePanel(container, stats, historyData, compareData);
+        tradeHistory = tradesData.trades || [];
+        tradePage = 0;
+
+        renderPerformancePanel(container, stats, historyData, tradeHistory);
     } catch (e) {
         container.innerHTML = `<div class="empty-state"><p>Error loading performance data</p><p style="font-size: 0.85em; color: var(--accent-danger);">${escapeHtml(e.message)}</p></div>`;
     }
 }
 
-function renderPerformancePanel(container, stats, historyData, compareData) {
-    const pairs = compareData.pairs || [];
-
+function renderPerformancePanel(container, stats, historyData, _trades) {
     container.innerHTML = `
-        <section class="panel">
-            <div class="panel-header"><h3>Performance Chart</h3></div>
-            <div id="perf-detail-chart" class="chart-container"></div>
-        </section>
         <div class="stats-grid">
             ${renderStatsCards(stats)}
         </div>
         <section class="panel" style="margin-top: 24px;">
-            <div class="panel-header"><h3>Pair Comparison</h3></div>
-            <div id="perf-comparison-chart" style="height: 300px;"></div>
+            <div class="panel-header"><h3>Performance Chart</h3></div>
+            <div id="perf-detail-chart" class="chart-container"></div>
+        </section>
+        <section class="panel" style="margin-top: 24px;">
+            <div class="panel-header">
+                <h3>Trade History</h3>
+                <div id="trade-pagination-info" style="font-size: 12px; color: var(--text-muted);"></div>
+            </div>
+            <div id="trade-history-table" style="overflow-x: auto;"></div>
+            <div id="trade-pagination-controls" style="display: flex; justify-content: center; gap: 8px; margin-top: 16px;"></div>
         </section>
     `;
 
     initPerfChart(historyData);
-    initComparisonChart(pairs);
+    renderTradeHistory();
+}
+
+function renderTradeHistory() {
+    const tableContainer = document.getElementById('trade-history-table');
+    const paginationInfo = document.getElementById('trade-pagination-info');
+    const paginationControls = document.getElementById('trade-pagination-controls');
+
+    if (!tableContainer || !tradeHistory.length) {
+        if (tableContainer) tableContainer.innerHTML = '<div class="empty-state"><p>No trades recorded yet</p></div>';
+        return;
+    }
+
+    const totalPages = Math.ceil(tradeHistory.length / TRADES_PER_PAGE);
+    const start = tradePage * TRADES_PER_PAGE;
+    const end = start + TRADES_PER_PAGE;
+    const pageTrades = tradeHistory.slice(start, end);
+
+    paginationInfo.textContent = `Showing ${start + 1}-${Math.min(end, tradeHistory.length)} of ${tradeHistory.length} trades`;
+
+    tableContainer.innerHTML = `
+        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+            <thead>
+                <tr style="border-bottom: 1px solid var(--border-color);">
+                    <th style="text-align: left; padding: 8px; color: var(--text-muted);">Time</th>
+                    <th style="text-align: left; padding: 8px; color: var(--text-muted);">Pair</th>
+                    <th style="text-align: left; padding: 8px; color: var(--text-muted);">Action</th>
+                    <th style="text-align: right; padding: 8px; color: var(--text-muted);">Price</th>
+                    <th style="text-align: right; padding: 8px; color: var(--text-muted);">Quantity</th>
+                    <th style="text-align: right; padding: 8px; color: var(--text-muted);">P&L</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${pageTrades.map(trade => {
+                    const actionClass = trade.action?.toUpperCase().includes('BUY') ? 'stat-positive' :
+                                       trade.action?.toUpperCase().includes('CLOSE') ? 'stat-negative' : '';
+                    const pnl = trade.pnl_quote !== undefined ? trade.pnl_quote : (trade.pnl !== undefined ? trade.pnl : null);
+                    const pnlDisplay = pnl !== null ? `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}` : '-';
+                    const pnlClass = pnl !== null ? (pnl >= 0 ? 'stat-positive' : 'stat-negative') : '';
+                    return `
+                        <tr style="border-bottom: 1px solid var(--border-subtle);">
+                            <td style="padding: 8px;">${formatTimestamp(trade.timestamp)}</td>
+                            <td style="padding: 8px;">${escapeHtml(trade.symbol || '-')}</td>
+                            <td style="padding: 8px;"><span class="${actionClass}">${escapeHtml(trade.action || '-')}</span></td>
+                            <td style="padding: 8px; text-align: right;">${trade.price ? '$' + parseFloat(trade.price).toFixed(4) : '-'}</td>
+                            <td style="padding: 8px; text-align: right;">${trade.quantity || trade.amount || '-'}</td>
+                            <td style="padding: 8px; text-align: right;" class="${pnlClass}">${pnlDisplay}</td>
+                        </tr>
+                    `;
+                }).join('')}
+            </tbody>
+        </table>
+    `;
+
+    paginationControls.innerHTML = '';
+    if (totalPages > 1) {
+        const prevBtn = document.createElement('button');
+        prevBtn.className = 'toolbar-btn';
+        prevBtn.textContent = '← Prev';
+        prevBtn.disabled = tradePage === 0;
+        prevBtn.onclick = () => { tradePage--; renderTradeHistory(); };
+        paginationControls.appendChild(prevBtn);
+
+        for (let i = 0; i < totalPages; i++) {
+            const btn = document.createElement('button');
+            btn.className = `toolbar-btn ${i === tradePage ? 'active' : ''}`;
+            btn.textContent = i + 1;
+            btn.onclick = () => { tradePage = i; renderTradeHistory(); };
+            paginationControls.appendChild(btn);
+        }
+
+        const nextBtn = document.createElement('button');
+        nextBtn.className = 'toolbar-btn';
+        nextBtn.textContent = 'Next →';
+        nextBtn.disabled = tradePage >= totalPages - 1;
+        nextBtn.onclick = () => { tradePage++; renderTradeHistory(); };
+        paginationControls.appendChild(nextBtn);
+    }
+}
+
+function formatTimestamp(ts) {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    return d.toLocaleString('en-US', {
+        month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+    });
 }
 
 function renderStatsCards(stats) {
@@ -104,45 +198,6 @@ function initPerfChart(historyData) {
         const seriesData = historyData.history.map(p => ({ x: new Date(p.time).getTime(), y: p.value }));
         performanceChart.updateSeries([{ name: 'Account Value', data: seriesData }]);
     }
-}
-
-function initComparisonChart(pairs) {
-    const container = document.getElementById('perf-comparison-chart');
-    if (!container) return;
-
-    if (comparisonChart) {
-        comparisonChart.destroy();
-        comparisonChart = null;
-    }
-
-    if (!pairs || !Array.isArray(pairs)) {
-        pairs = [];
-    }
-
-    const symbols = pairs.filter(p => !p.error).map(p => p.symbol);
-    const pnlData = pairs.filter(p => !p.error).map(p => p.total_pnl_pct || 0);
-    const wrData = pairs.filter(p => !p.error).map(p => p.win_rate || 0);
-
-    const options = {
-        series: [
-            { name: 'P&L %', data: pnlData },
-            { name: 'Win Rate %', data: wrData }
-        ],
-        chart: { type: 'bar', height: 300, background: '#161b22', toolbar: { show: false } },
-        colors: ['#00e396', '#00f0ff'],
-        plotOptions: { bar: { horizontal: false, columnWidth: '55%', borderRadius: 4 } },
-        dataLabels: { enabled: false },
-        stroke: { show: true, width: 2, colors: ['transparent'] },
-        theme: { mode: 'dark' },
-        xaxis: { categories: symbols, labels: { style: { colors: '#c9d1d9', fontSize: '11px' } } },
-        yaxis: { labels: { formatter: (v) => v.toFixed(1) + '%', style: { colors: '#c9d1d9', fontSize: '11px' } } },
-        tooltip: { theme: 'dark', y: { formatter: (v) => v.toFixed(2) + '%' } },
-        grid: { borderColor: '#30363d', strokeDashArray: 4 },
-        legend: { labels: { colors: '#c9d1d9' } }
-    };
-
-    comparisonChart = new window.ApexCharts(container, options);
-    comparisonChart.render();
 }
 
 function escapeHtml(text) {
