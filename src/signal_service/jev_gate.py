@@ -226,10 +226,19 @@ def build_questions() -> Dict[str, Dict[str, Any]]:
                 "Answer yes if a short-term directional trade on this market "
                 "is likely to be worth taking right now based on the state."
             ),
-            "criteria": (
-                "Illiquid, choppy or exhausted conditions are not tradeable. "
-                "Only the provided state may be used."
-            ),
+            # Decision 3.0 requires a noul criteria object with exactly the
+            # ``true`` and ``false`` keys; a plain string is rejected with
+            # ``invalid_question`` and no noul answer.
+            "criteria": {
+                "true": (
+                    "A short-term directional trade is likely to be worth "
+                    "taking based only on the provided state."
+                ),
+                "false": (
+                    "Illiquid, choppy or exhausted conditions make a trade "
+                    "not worth taking right now."
+                ),
+            },
         },
         "bias": {
             "type": "choice",
@@ -293,7 +302,14 @@ class JevSignal:
 
 
 def _normalize_score(answer: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
-    """Normalize a score answer to [0, 1]; returns (normalized, raw)."""
+    """Normalize a score answer to [0, 1]; returns (normalized, raw).
+
+    Decision 3.0 returns the expected level (e.g. ``1.69``) plus a ``legend``
+    of 2 to 10 levels starting at 0. The level is offset by the legend's
+    lowest index and divided by its span, so the top level always maps to
+    1.0; a legacy answer without a legend falls back to the previous
+    heuristics.
+    """
     raw_value = answer.get("score")
     if raw_value is None:
         return None, None
@@ -303,11 +319,26 @@ def _normalize_score(answer: Dict[str, Any]) -> tuple[Optional[float], Optional[
         return None, None
     legend = answer.get("legend")
     levels = 0
+    lowest_index: Optional[float] = None
+    highest_index: Optional[float] = None
     if isinstance(legend, dict):
         levels = len(legend)
+        try:
+            numeric_keys = [float(key) for key in legend]
+        except (TypeError, ValueError):
+            numeric_keys = []
+        if numeric_keys:
+            lowest_index = min(numeric_keys)
+            highest_index = max(numeric_keys)
     elif isinstance(legend, list):
         levels = len(legend)
-    if levels >= 2:
+    if (
+        lowest_index is not None
+        and highest_index is not None
+        and highest_index > lowest_index
+    ):
+        normalized = (raw - lowest_index) / (highest_index - lowest_index)
+    elif levels >= 2:
         normalized = raw / (levels - 1)
     elif 0.0 <= raw <= 1.0:
         normalized = raw

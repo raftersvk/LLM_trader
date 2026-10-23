@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
+from src.signal_service.jev_client import JevError
+
 _SPEC = importlib.util.spec_from_file_location(
     "bench_jev", Path(__file__).resolve().parents[1] / "scripts" / "bench_jev.py"
 )
@@ -70,6 +72,47 @@ async def test_run_mode_llm_alone_never_paces(monkeypatch):
     )
 
     assert sleeps == []
+
+
+class _ErroringClient:
+    """JEV client stub: every ask raises the typed gate error."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def ask(self, _state: Dict[str, Any], _questions: Dict[str, Any]) -> Any:
+        self.calls += 1
+        raise JevError("simulated JEV outage")
+
+
+@pytest.mark.asyncio
+async def test_run_mode_aborts_on_jev_error_when_enabled():
+    """A real run must stop on the first JEV error, not report fail-open data."""
+    client = _ErroringClient()
+    gate = bench_jev.JevGate(client=client, mode="pre")
+
+    with pytest.raises(SystemExit, match="JEV error during real benchmark"):
+        await bench_jev.run_mode(
+            "jev_pre", gate, _AlwaysBuyBase(), [], _samples(2), folds=1,
+            abort_on_jev_error=True,
+        )
+
+    assert client.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_run_mode_continues_on_jev_error_by_default():
+    """Without the flag, the historical continue-on-error behavior is kept."""
+    client = _ErroringClient()
+    gate = bench_jev.JevGate(client=client, mode="pre")
+
+    run = await bench_jev.run_mode(
+        "jev_pre", gate, _AlwaysBuyBase(), [], _samples(2), folds=1,
+    )
+
+    assert client.calls == 2
+    assert run.jev_errors == 2
+    assert len(run.predictions) == 2
 
 
 @pytest.mark.asyncio

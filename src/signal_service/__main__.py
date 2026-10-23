@@ -125,11 +125,30 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _build_jev_gate(mode: str):
-    """Build the JEV gate for a CLI mode; `off` makes no network call."""
+    """Build the JEV gate for a CLI mode; `off` makes no network call.
+
+    Provider settings come from the ``[jev]`` config section, so the default
+    Decision 3.0 endpoint and the legacy OpenCode endpoint are both selectable
+    without code changes. The API key is read from keys.env, never logged.
+    """
     parsed = parse_mode(mode)
     if parsed is JevMode.OFF:
         return None
-    return JevGate(client=JevClient(), mode=parsed)
+    try:
+        from src.config.loader import Config
+
+        config = Config()
+        client = JevClient(
+            base_url=config.JEV_BASE_URL,
+            model=config.JEV_MODEL,
+            api_key=config.JEV_API_KEY,
+            api_key_host=config.JEV_API_KEY_HOST,
+            timeout_seconds=config.JEV_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("JEV config unavailable (%s); using built-in defaults", exc)
+        client = JevClient()
+    return JevGate(client=client, mode=parsed)
 
 
 def _load_engine_factory():

@@ -90,6 +90,71 @@ def test_parse_noul_choice_score():
     assert signal.score_raw == pytest.approx(3.0)
 
 
+def test_parse_decision_3_score_normalized_by_legend_length():
+    """Decision 3.0 score is the expected level among 2-10 legend levels."""
+    three = JevResponse(
+        model="vllm-sr/d3-flash",
+        answers={
+            "confidence": {
+                "type": "score",
+                "score": 1.69,
+                "probabilities": {"0": 0.05, "1": 0.21, "2": 0.74},
+                "confidence": 0.55,
+                "legend": {"0": "low", "1": "medium", "2": "high"},
+            }
+        },
+        latency_ms=90,
+    )
+    signal = parse_jev_signal(three)
+    assert signal.confidence == pytest.approx(0.845)
+    assert signal.score_raw == pytest.approx(1.69)
+
+    ten = JevResponse(
+        model="vllm-sr/d3-flash",
+        answers={
+            "confidence": {
+                "type": "score",
+                "score": 9.0,
+                "legend": {str(level): f"level {level}" for level in range(10)},
+            }
+        },
+        latency_ms=90,
+    )
+    # Nine is the highest level: the normalized confidence saturates at 1.0.
+    assert parse_jev_signal(ten).confidence == pytest.approx(1.0)
+
+
+def test_parse_score_with_negative_legend_indices_uses_offset():
+    """A legend with negative indices still maps its top level to 1.0."""
+    response = JevResponse(
+        model="vllm-sr/d3-flash",
+        answers={
+            "confidence": {
+                "type": "score",
+                "score": 1.0,
+                "legend": {"-1": "bearish", "0": "neutral", "1": "bullish"},
+            }
+        },
+        latency_ms=90,
+    )
+    signal = parse_jev_signal(response)
+    assert signal.confidence == pytest.approx(1.0)
+    assert signal.score_raw == pytest.approx(1.0)
+
+    mid = JevResponse(
+        model="vllm-sr/d3-flash",
+        answers={
+            "confidence": {
+                "type": "score",
+                "score": 0.0,
+                "legend": {"-1": "bearish", "0": "neutral", "1": "bullish"},
+            }
+        },
+        latency_ms=90,
+    )
+    assert parse_jev_signal(mid).confidence == pytest.approx(0.5)
+
+
 def test_parse_tradeability_threshold_and_missing_fields():
     below = parse_jev_signal(_response(tradeable=0.2))
     assert below.tradeability is False
@@ -129,6 +194,7 @@ def test_build_questions_uses_typed_questions():
     questions = build_questions()
     assert set(questions) == {"tradeability", "bias", "regime", "confidence"}
     assert questions["tradeability"]["type"] == "noul"
+    assert set(questions["tradeability"]["criteria"]) == {"true", "false"}
     assert questions["bias"]["type"] == "choice"
     assert set(questions["bias"]["criteria"]) == ALLOWED_BIAS
     assert questions["regime"]["type"] == "choice"

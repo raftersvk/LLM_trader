@@ -1,28 +1,38 @@
 """Async client for the JEV System One decision endpoint.
 
 JEV returns typed answers (noul / choice / score) for one shared state. The
-OpenCode-hosted endpoint serves the free ``jev-1.13-free`` model without any
-authentication, so this client never sends credentials.
+default provider is Decision 3.0 (``https://decision.vllm-sr.ai``), which
+requires a bearer API key and always receives ``state`` as JSON text. The
+legacy OpenCode-hosted endpoint remains usable by overriding ``base_url``,
+``model`` and leaving ``api_key`` empty.
 
 Only the model actually used by the server is logged, together with latency
-and status. Payloads, prompts, headers and keys are never logged.
+and token usage. Payloads, prompts, headers and keys are never logged.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, Tuple
+from urllib.parse import urlsplit
 
 import aiohttp
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ENDPOINT = "https://opencode.ai/inference/systemone/v1/systemone"
-DEFAULT_MODEL = "jev-1.13-free"
+#: Decision 3.0 provider (free key required).
+DEFAULT_BASE_URL = "https://decision.vllm-sr.ai"
+DEFAULT_ENDPOINT_PATH = "/v1/systemone"
+DEFAULT_MODEL = "vllm-sr/d3-flash"
+#: Legacy OpenCode provider, still selectable through configuration.
+OPENCODE_BASE_URL = "https://opencode.ai/inference/systemone"
+OPENCODE_MODEL = "jev-1.13-free"
+DEFAULT_ENDPOINT = DEFAULT_BASE_URL + DEFAULT_ENDPOINT_PATH
 DEFAULT_TIMEOUT_SECONDS = 8.0
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_BACKOFF_BASE = 0.5
@@ -59,6 +69,14 @@ class JevTimeoutError(JevError):
     """The JEV request exceeded the configured timeout."""
 
 
+class JevAuthError(JevError):
+    """The provider rejected the API key (401/403); retrying cannot help."""
+
+    def __init__(self, message: str, status: int = 401) -> None:
+        """Keep the HTTP status for the caller."""
+        super().__init__(message, status=status, retryable=False)
+
+
 class JevTransport(Protocol):
     """Minimal HTTP transport contract, injectable for offline tests."""
 
@@ -66,13 +84,14 @@ class JevTransport(Protocol):
         self,
         url: str,
         payload: Dict[str, Any],
+        headers: Dict[str, str],
         timeout_seconds: float,
     ) -> Tuple[int, Dict[str, str], bytes]:
         """POST a JSON payload and return (status, headers, body)."""
 
 
 class AiohttpTransport:
-    """Default aiohttp transport; no authentication headers are ever sent."""
+    """Default aiohttp transport; sends only the headers given by the client."""
 
     def __init__(self, session: Optional[aiohttp.ClientSession] = None) -> None:
         """Optionally reuse an existing aiohttp session."""
@@ -83,6 +102,7 @@ class AiohttpTransport:
         self,
         url: str,
         payload: Dict[str, Any],
+        headers: Dict[str, str],
         timeout_seconds: float,
     ) -> Tuple[int, Dict[str, str], bytes]:
         """POST JSON and read the full response body."""
@@ -91,10 +111,11 @@ class AiohttpTransport:
             session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_seconds))
             self._session = session
         response_headers: Dict[str, str] = {}
+        request_headers = {"Content-Type": "application/json", **headers}
         async with session.post(
             url,
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers=request_headers,
         ) as response:
             response_headers = {key.lower(): value for key, value in response.headers.items()}
             body = await response.read()
@@ -144,8 +165,6 @@ def _error_message(body: bytes) -> str:
     if not text:
         return "empty response body"
     try:
-        import json
-
         payload = json.loads(text)
     except ValueError:
         return text[:300]
@@ -175,8 +194,11 @@ class JevClient:
 
     def __init__(
         self,
-        endpoint: str = DEFAULT_ENDPOINT,
+        endpoint: Optional[str] = None,
         model: str = DEFAULT_MODEL,
+        api_key: Optional[str] = None,
+        base_url: str = DEFAULT_BASE_URL,
+        api_key_host: Optional[str] = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         backoff_base: float = DEFAULT_BACKOFF_BASE,
@@ -186,11 +208,15 @@ class JevClient:
         jitter_ratio: float = 0.25,
         rng: Optional[random.Random] = None,
     ) -> None:
-        """Configure endpoint, model, timeout and retry policy.
+        """Configure provider, model, credentials, timeout and retry policy.
 
         Args:
-            endpoint: Full System One URL.
-            model: Model id sent in the payload (``jev-1.13-free`` by default).
+            endpoint: Full System One URL; overrides ``base_url`` when given.
+            model: Model id sent in the payload (``vllm-sr/d3-flash`` default).
+            api_key: Bearer token for Decision 3.0. Empty for legacy OpenCode.
+            base_url: Provider base URL; ``/v1/systemone`` is appended.
+            api_key_host: Host allowed to receive the bearer token. Defaults
+                to the Decision 3.0 host; the key is never sent elsewhere.
             timeout_seconds: Per-attempt wall-clock timeout.
             max_retries: Retries after the first attempt (bounded).
             backoff_base: First backoff delay in seconds.
@@ -202,8 +228,33 @@ class JevClient:
         """
         if max_retries < 0:
             raise ValueError("max_retries must be >= 0")
-        self.endpoint = endpoint
+        self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
+        self.endpoint = endpoint or (self.base_url + DEFAULT_ENDPOINT_PATH)
         self.model = model
+        self.api_key = api_key or None
+        # Bind the bearer token to the host that issued it. A request to any
+        # other base_url (for example the unauthenticated legacy OpenCode
+        # provider) must never receive the Decision 3.0 token.
+        self.api_key_host = (
+            api_key_host
+            if api_key_host is not None
+            else (urlsplit(DEFAULT_BASE_URL).hostname or "")
+        ).lower()
+        endpoint_host = (urlsplit(self.endpoint).hostname or "").lower()
+        if self.api_key and endpoint_host != self.api_key_host:
+            # Never log the key itself; the host pair explains the 401s.
+            logger.warning(
+                "JEV API key withheld: endpoint host %r does not match "
+                "api_key_host %r",
+                endpoint_host, self.api_key_host,
+            )
+        # Only the Authorization header ever carries the key; it is never
+        # included in logs, error messages or the request payload.
+        self._headers: Dict[str, str] = (
+            {"Authorization": f"Bearer {self.api_key}"}
+            if self.api_key and endpoint_host == self.api_key_host
+            else {}
+        )
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.backoff_base = backoff_base
@@ -234,7 +285,9 @@ class JevClient:
             JevTimeoutError: when every attempt timed out.
             JevError: on any other non-retryable or exhausted failure.
         """
-        payload = {"model": self.model, "state": state, "questions": questions}
+        # Decision 3.0 requires ``state`` as a string: JSON text, not an object.
+        state_text = state if isinstance(state, str) else json.dumps(state, separators=(",", ":"))
+        payload = {"model": self.model, "state": state_text, "questions": questions}
         attempt = 0
         last_timeout: Optional[BaseException] = None
         while attempt <= self.max_retries:
@@ -242,7 +295,9 @@ class JevClient:
             started = time.monotonic()
             try:
                 status, headers, body = await asyncio.wait_for(
-                    self.transport.post(self.endpoint, payload, self.timeout_seconds),
+                    self.transport.post(
+                        self.endpoint, payload, dict(self._headers), self.timeout_seconds
+                    ),
                     timeout=self.timeout_seconds,
                 )
             except asyncio.TimeoutError as exc:
@@ -272,6 +327,14 @@ class JevClient:
                 return self._parse_response(body, latency_ms)
 
             message = _error_message(body)
+            if status in (401, 403):
+                # A missing, revoked or forbidden key cannot be fixed by
+                # retrying, and the message never contains the key itself.
+                raise JevAuthError(
+                    f"JEV authentication failed with status {status}: {message}",
+                    status=status,
+                )
+
             if status == 429:
                 retry_after = _retry_after_seconds(headers)
                 logger.warning(
@@ -334,8 +397,6 @@ class JevClient:
 
     def _parse_response(self, body: bytes, latency_ms: int) -> JevResponse:
         """Parse and validate a 200 response; never logs the payload."""
-        import json
-
         try:
             data = json.loads(body.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
@@ -361,8 +422,10 @@ class JevClient:
         )
         self.last_response = response
         logger.info(
-            "JEV response received: requested_model=%s model=%s latency_ms=%d answers=%d",
-            self.model, response.model, response.latency_ms, len(response.answers),
+            "JEV response received: model=%s latency_ms=%d answers=%d "
+            "input_tokens=%s output_tokens=%s",
+            response.model, response.latency_ms, len(response.answers),
+            response.input_tokens, response.output_tokens,
         )
         return response
 
