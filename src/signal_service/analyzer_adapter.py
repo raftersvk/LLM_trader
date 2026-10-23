@@ -15,6 +15,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
+import numpy as np
+
 from src.signal_service.contract import (
     ALLOWED_ACTIONS,
     Signal,
@@ -543,7 +545,9 @@ class ReplayDataInjector:
         """
         self.analyzer = analyzer
         self.engine = analyzer.engine
-        self.candles: List[Sequence[float]] = list(candles)
+        # Keep the CCXT 6-column NumPy layout the live collector produces:
+        # consumers slice columns (ohlcv[:, 1:6]) and read column 4 as the close.
+        self.candles: np.ndarray = np.array(candles, dtype=np.float64)
         self.timestamps = list(timestamps)
         self._original_collect = None
         self._original_enrich = None

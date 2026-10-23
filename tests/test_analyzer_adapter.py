@@ -660,3 +660,79 @@ def test_truncate_context_accepts_numpy_candles():
         empty_context, np.empty((0, 6)), [], "1h", _hour(15),
     ) is False
     assert empty_context.ohlcv_candles is None
+
+
+def test_csv_loader_emits_ccxt_six_column_arrays(tmp_path):
+    """A replayed CSV must produce the same 6-column layout as the live collector.
+
+    Regression: the loader used to drop the timestamp column and emit
+    [open, high, low, close, volume], so `truncate_context_to_as_of` read the
+    VOLUME as `current_price` and the chart generator (which needs
+    ohlcv[:, 1:6]) could not index the rows.
+    """
+    np = pytest.importorskip("numpy")
+    from src.signal_service.__main__ import _load_candles_csv
+
+    path = tmp_path / "BTC_USDT_1h.csv"
+    path.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-10-23T10:00:00Z,100.0,110.0,90.0,105.0,111111.0\n"
+        "2026-10-23T11:00:00Z,105.0,115.0,95.0,110.0,222222.0\n"
+        "2026-10-23T12:00:00Z,110.0,120.0,100.0,115.0,333333.0\n"
+        "2026-10-23T13:00:00Z,115.0,125.0,105.0,120.0,444444.0\n",
+        encoding="utf-8",
+    )
+
+    candles, timestamps = _load_candles_csv(str(path))
+
+    assert isinstance(candles, np.ndarray)
+    assert candles.shape == (4, 6)
+    assert candles.dtype == np.float64
+    # Column 0 is the CCXT timestamp in milliseconds.
+    assert candles[0, 0] == datetime(2026, 10, 23, 10, tzinfo=timezone.utc).timestamp() * 1000
+    assert candles[0, 1:].tolist() == [100.0, 110.0, 90.0, 105.0, 111111.0]
+    assert [ts.hour for ts in timestamps] == [10, 11, 12, 13]
+
+
+@pytest.mark.asyncio
+async def test_csv_replay_round_trip_uses_close_not_volume(tmp_path):
+    """CSV -> loader -> ReplayDataInjector -> truncate must expose close prices."""
+    np = pytest.importorskip("numpy")
+    from src.analyzer.pattern_engine.chart_generator import ChartGenerator
+    from src.signal_service.__main__ import _load_candles_csv
+
+    path = tmp_path / "BTC_USDT_1h.csv"
+    path.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-10-23T10:00:00Z,100.0,110.0,90.0,105.0,111111.0\n"
+        "2026-10-23T11:00:00Z,105.0,115.0,95.0,110.0,222222.0\n"
+        "2026-10-23T12:00:00Z,110.0,120.0,100.0,115.0,333333.0\n"
+        "2026-10-23T13:00:00Z,115.0,125.0,105.0,120.0,444444.0\n",
+        encoding="utf-8",
+    )
+    candles, timestamps = _load_candles_csv(str(path))
+
+    engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine.data_collector = FetchingDataCollector(timestamps, candles)
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    injector = ReplayDataInjector(analyzer, candles, timestamps)
+    injector.install()
+    try:
+        # as_of = close of the 12:00 candle: only candles 10..12 are visible.
+        injector.set_as_of(datetime(2026, 10, 23, 13, tzinfo=timezone.utc))
+        context = engine.context
+        assert len(context.timestamps) == 3
+        # 115.0 is the close of the last visible candle; 333333.0 is its volume.
+        assert context.current_price == 115.0
+        assert np.asarray(context.ohlcv_candles)[:, 4].tolist() == [105.0, 110.0, 115.0]
+        assert np.asarray(context.ohlcv_candles)[:, 5].tolist() == [111111.0, 222222.0, 333333.0]
+
+        # The chart generator slices ohlcv[:, 1:6]; that requires the CCXT layout.
+        chart_generator = ChartGenerator()
+        figure = chart_generator._create_simple_candlestick_chart(  # pylint: disable=protected-access
+            context.ohlcv_candles, SYMBOL, "1h", 600, 900, timestamps=context.timestamps,
+        )
+        assert len(figure.data) >= 2
+        assert figure.data[0].close.tolist() == [105.0, 110.0, 115.0]
+    finally:
+        injector.restore()

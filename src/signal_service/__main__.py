@@ -32,6 +32,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Tuple
 
+import numpy as np
+
 from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
 from src.signal_service.contract import parse_iso, timeframe_seconds
 from src.signal_service.service import SignalService
@@ -173,9 +175,17 @@ async def _run_command(args: argparse.Namespace) -> None:
     await service.run()
 
 
-def _load_candles_csv(path: str) -> Tuple[List[list], List[datetime]]:
-    """Load an OHLCV csv (freqtrade-exported or generated) into candles+timestamps."""
-    candles: List[list] = []
+def _load_candles_csv(path: str) -> Tuple[np.ndarray, List[datetime]]:
+    """Load an OHLCV csv into the CCXT candle layout used by the live collector.
+
+    Returns:
+        A float64 array of shape (n, 6) with rows
+        ``[timestamp_ms, open, high, low, close, volume]`` (the layout every
+        consumer expects: chart generation slices ``[:, 1:6]`` and
+        ``truncate_context_to_as_of`` reads column 4 as the close), plus the
+        parallel list of candle open times.
+    """
+    rows: List[List[float]] = []
     timestamps: List[datetime] = []
     with open(path, "r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
@@ -192,9 +202,10 @@ def _load_candles_csv(path: str) -> Tuple[List[list], List[datetime]]:
                 values = row[1:6]
             else:
                 raise ValueError(f"Unsupported csv header: {header}")
-            candles.append([float(v) for v in values])
+            timestamp_ms = open_at.timestamp() * 1000.0
+            rows.append([timestamp_ms] + [float(v) for v in values])
             timestamps.append(open_at)
-    return candles, timestamps
+    return np.array(rows, dtype=np.float64).reshape(len(rows), 6), timestamps
 
 
 
