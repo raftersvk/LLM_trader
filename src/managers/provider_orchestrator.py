@@ -106,7 +106,13 @@ class ProviderOrchestrator:
     def supports_chart(self, provider: str) -> bool:
         """Check if provider supports chart analysis."""
         if provider == "all":
-            return self.is_available("googleai") or self.is_available("openrouter") or self.is_available("blockrun")
+            return (
+                self.is_available("googleai")
+                or self.is_available("openrouter")
+                or self.is_available("blockrun")
+                or self.is_available("litellm")
+                or self.is_available("vision_litellm")
+            )
         metadata = self._providers.get(provider)
         return metadata.supports_chart if metadata and metadata.is_available() else False
 
@@ -144,7 +150,7 @@ class ProviderOrchestrator:
         if provider == "googleai":
             return await self._invoke_google(metadata, messages, effective_model, chart, chart_image)
         if provider == "litellm":
-            return await self._invoke_litellm(metadata, messages, effective_model, chart)
+            return await self._invoke_litellm(metadata, messages, effective_model, chart, chart_image)
         if provider == "openrouter":
             return await self._invoke_openrouter(metadata, messages, effective_model, chart, chart_image)
         if provider == "blockrun":
