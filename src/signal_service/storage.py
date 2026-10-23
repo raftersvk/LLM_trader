@@ -19,6 +19,9 @@ from src.signal_service.contract import Signal, utc_now_iso
 
 DedupKey = Tuple[str, str, str]
 
+#: Repository root (src/signal_service/storage.py -> project root).
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,7 +33,7 @@ class SignalStorage:
 
         Args:
             path: Absolute path of the JSONL file, e.g.
-                /home/djelinux/TradingBots/trading-stack/runtime/signals/BTC_USDT_1h.jsonl
+                data/signals/BTC_USDT_1h.jsonl (or an absolute path)
         """
         self.path = path
         directory = os.path.dirname(path)
@@ -145,8 +148,14 @@ class SignalStorage:
 
 
 def default_signals_dir() -> str:
-    """Return the runtime signals directory of the trading stack."""
-    return "/home/djelinux/TradingBots/trading-stack/runtime/signals"
+    """Return the default signals directory (repo-local, never a foreign home).
+
+    Override with ``LLM_TRADER_SIGNALS_DIR`` or the CLI ``--output`` flag.
+    """
+    return os.environ.get(
+        "LLM_TRADER_SIGNALS_DIR",
+        os.path.join(PROJECT_ROOT, "data", "signals"),
+    )
 
 
 def signal_file_path(signals_dir: str, symbol: str, timeframe: str) -> str:

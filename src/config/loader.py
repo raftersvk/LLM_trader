@@ -5,6 +5,7 @@ Loads private keys from keys.env and public configuration from config.ini.
 
 import configparser
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict
 from dotenv import dotenv_values
@@ -12,8 +13,10 @@ from dotenv import dotenv_values
 # Get the root directory (where keys.env is located) and config directory (where config.ini is located)
 ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
 CONFIG_DIR = ROOT_DIR / "config"
-KEYS_ENV_PATH = ROOT_DIR / "keys.env"
-CONFIG_INI_PATH = CONFIG_DIR / "config.ini"
+# Environment overrides keep the paths configurable (CLI --config, alternate
+# keys file) without editing committed code.
+KEYS_ENV_PATH = Path(os.environ.get("LLM_TRADER_KEYS_ENV", str(ROOT_DIR / "keys.env")))
+CONFIG_INI_PATH = Path(os.environ.get("LLM_TRADER_CONFIG_INI", str(CONFIG_DIR / "config.ini")))
 
 VALID_PROVIDERS = {"litellm", "googleai", "openrouter", "blockrun", "all"}
 

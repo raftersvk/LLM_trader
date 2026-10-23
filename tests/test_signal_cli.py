@@ -1,6 +1,7 @@
 """Tests for the signal service `validate` subcommand and its script wrapper."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -104,3 +105,63 @@ def test_script_delegates_and_reports_missing_schema(tmp_path):
 
     assert result.returncode == 2
     assert "schema file not found" in result.stdout
+
+
+def test_defaults_are_repo_relative(monkeypatch):
+    """Defaults derive from the repo, never from a personal home directory."""
+    import importlib
+
+    from src.signal_service import storage
+
+    repo_root = storage.PROJECT_ROOT
+    monkeypatch.delenv("LLM_TRADER_SIGNALS_DIR", raising=False)
+    monkeypatch.delenv("SIGNAL_SCHEMA_PATH", raising=False)
+    from src.signal_service import __main__ as cli
+
+    importlib.reload(cli)
+
+    assert cli.DEFAULT_SIGNALS_DIR == os.path.join(repo_root, "data", "signals")
+    assert cli.DEFAULT_REPLAY_OUTPUT == os.path.join(repo_root, "data", "signals_backtest")
+    assert cli.DEFAULT_SCHEMA_PATH == os.path.join(
+        os.path.dirname(repo_root), "trading-stack", "contracts", "signal.schema.json",
+    )
+
+
+def test_signals_dir_default_can_be_overridden(monkeypatch, tmp_path):
+    from src.signal_service import storage
+
+    monkeypatch.setenv("LLM_TRADER_SIGNALS_DIR", str(tmp_path / "elsewhere"))
+    assert storage.default_signals_dir() == str(tmp_path / "elsewhere")
+
+
+def test_config_override_wires_the_loader_env(tmp_path, monkeypatch):
+    from src.signal_service.__main__ import _apply_config_override
+
+    monkeypatch.delenv("LLM_TRADER_CONFIG_INI", raising=False)
+    config = tmp_path / "custom.ini"
+    config.write_text("", encoding="utf-8")
+
+    try:
+        _apply_config_override(str(config))
+        assert Path(os.environ["LLM_TRADER_CONFIG_INI"]) == config.resolve()
+    finally:
+        monkeypatch.delenv("LLM_TRADER_CONFIG_INI", raising=False)
+
+
+def test_smoke_script_skips_missing_schema(tmp_path):
+    """The offline smoke test must stay self-contained without the shared schema."""
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, str(repo_root / "scripts" / "smoke_signal_service.py")],
+        cwd=repo_root,
+        env={
+            **{k: v for k, v in os.environ.items() if not k.startswith("LLM_TRADER_")},
+            "SIGNAL_SCHEMA_PATH": str(tmp_path / "missing.json"),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping JSON schema validation" in result.stderr

@@ -1,12 +1,13 @@
 """Extract trading signals from AI responses."""
 
+from __future__ import annotations
+
 import re
 from re import Pattern
 from typing import Tuple, Optional, Dict, Any, TYPE_CHECKING
 
-from src.logger.logger import Logger
-
 if TYPE_CHECKING:
+    from src.logger.logger import Logger
     from src.parsing.unified_parser import UnifiedParser
 
 

@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -22,12 +23,43 @@ from src.signal_service.storage import SignalStorage
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("smoke_signal_service")
 
-SCHEMA_PATH = "/home/djelinux/TradingBots/trading-stack/contracts/signal.schema.json"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#: Shared contract from the sibling trading-stack checkout (optional for smoke).
+SCHEMA_PATH = os.environ.get(
+    "SIGNAL_SCHEMA_PATH",
+    os.path.join(os.path.dirname(PROJECT_ROOT), "trading-stack", "contracts", "signal.schema.json"),
+)
+
+# Fenced like real model output, so the engine's JSON extraction path runs.
+def _configure_offline_runtime() -> str:
+    """Let config-dependent imports load without real keys.
+
+    The extractor import pulls src.trading, which loads the config singleton.
+    Point it at a temp empty keys file and the committed config example so the
+    smoke stays offline and needs no secrets.
+
+    Returns:
+        Path of the temp keys file to clean up, or "" when untouched.
+    """
+    temp_keys = ""
+    if not os.environ.get("LLM_TRADER_KEYS_ENV"):
+        handle = tempfile.NamedTemporaryFile("w", suffix=".env", delete=False)
+        handle.close()
+        temp_keys = handle.name
+        os.environ["LLM_TRADER_KEYS_ENV"] = temp_keys
+    if not os.environ.get("LLM_TRADER_CONFIG_INI"):
+        example = os.path.join(PROJECT_ROOT, "config", "config.ini.example")
+        if os.path.isfile(example):
+            os.environ["LLM_TRADER_CONFIG_INI"] = example
+    return temp_keys
+
 
 CANNED_RESPONSE = (
+    "```json\n"
     '{"signal": "BUY", "confidence": "HIGH", "stop_loss": 67000.0, '
     '"take_profit": 70000.0, "position_size": 5, '
-    '"reasoning": "Trend + breakout with volume confirmation."}'
+    '"reasoning": "Trend + breakout with volume confirmation."}\n'
+    "```"
 )
 
 
@@ -47,6 +79,31 @@ class FakeRagEngine:
     context_builder = type("CB", (), {"get_latest_article_urls": lambda self: {}})()
 
 
+class MinimalJsonParser:
+    """Offline stand-in for UnifiedParser.extract_json_block (no config, no keys)."""
+
+    _BLOCK = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+
+    def extract_json_block(self, text, unwrap_key=None):
+        match = self._BLOCK.search(text)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return None
+        if unwrap_key and isinstance(data.get(unwrap_key), dict):
+            return data[unwrap_key]
+        return data
+
+
+class FakeResultProcessor:
+    """Stand-in for AnalysisResultProcessor, exposing a parser like the bot."""
+
+    def __init__(self) -> None:
+        self.unified_parser = MinimalJsonParser()
+
+
 class FakeEngine:
     """Canned AnalysisEngine stand-in exposing the same hooks as the real one."""
 
@@ -60,6 +117,7 @@ class FakeEngine:
         self.model_manager = FakeModelManager()
         self.rag_engine = FakeRagEngine()
         self.context = self.Context()
+        self.result_processor = FakeResultProcessor()
 
     async def analyze_market(self, **_kwargs):
         self.last_response = True
@@ -71,7 +129,18 @@ class FakeEngine:
 
 
 def _validate_with_jsonschema(signals_dir: str) -> None:
-    import jsonschema
+    """Validate against the shared schema when both it and jsonschema exist."""
+    if not os.path.isfile(SCHEMA_PATH):
+        logger.warning(
+            "Shared schema not found at %s: skipping JSON schema validation "
+            "(set SIGNAL_SCHEMA_PATH to enable it)", SCHEMA_PATH,
+        )
+        return
+    try:
+        import jsonschema
+    except ImportError:
+        logger.warning("jsonschema not installed: skipping JSON schema validation")
+        return
 
     with open(SCHEMA_PATH, "r", encoding="utf-8") as handle:
         schema = json.load(handle)
@@ -85,6 +154,19 @@ def _validate_with_jsonschema(signals_dir: str) -> None:
 
 def main() -> int:
     """Run the offline smoke test."""
+    temp_keys = _configure_offline_runtime()
+    try:
+        return _run_smoke()
+    finally:
+        if temp_keys:
+            try:
+                os.unlink(temp_keys)
+            except OSError:
+                pass
+
+
+def _run_smoke() -> int:
+    """Run the smoke assertions with an offline config already in place."""
     with tempfile.TemporaryDirectory() as signals_dir:
         engine = FakeEngine(CANNED_RESPONSE)
         analyzer = PairAnalyzer(

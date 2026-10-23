@@ -19,6 +19,7 @@ from src.signal_service.analyzer_adapter import PairAnalyzer, analyze_and_store
 from src.signal_service.contract import iso_z, timeframe_seconds, utc_now_iso
 from src.signal_service.storage import (
     SignalStorage,
+    default_signals_dir,
     heartbeat_path,
     signal_file_path,
     write_heartbeat,
@@ -37,7 +38,7 @@ class SignalService:
         pairs: List[str],
         timeframe: str = "1h",
         analyzer_factory: PairAnalyzerFactory = None,  # type: ignore[assignment]
-        signals_dir: str = "/home/djelinux/TradingBots/trading-stack/runtime/signals",
+        signals_dir: str = default_signals_dir(),
         buffer_seconds: int = 120,
         timeout_seconds: float = 300.0,
         max_cycles: Optional[int] = None,

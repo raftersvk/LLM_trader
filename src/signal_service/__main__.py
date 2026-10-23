@@ -10,14 +10,14 @@ Example:
         --pairs BTC/USDT --timeframe 1h \
         --start 2026-01-01 --end 2026-04-01 \
         --candles data/BTC_USDT_1h.csv \
-        --output /home/djelinux/TradingBots/trading-stack/runtime/signals_backtest \
+        --output data/signals_backtest \
         --no-news
 
 Debug (replay the hourly analysis every minute, no need to wait an hour):
     python -m src.signal_service run \
         --pairs BTC/USDT,ETH/USDT --timeframe 1h \
         --debug-cycle-seconds 60 --no-dedup \
-        --output /home/djelinux/TradingBots/trading-stack/runtime/signals_debug
+        --output data/signals_debug
 """
 
 from __future__ import annotations
@@ -37,13 +37,28 @@ import numpy as np
 from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
 from src.signal_service.contract import parse_iso, timeframe_seconds
 from src.signal_service.service import SignalService
-from src.signal_service.storage import SignalStorage, signal_file_path
+from src.signal_service.storage import (
+    PROJECT_ROOT,
+    SignalStorage,
+    default_signals_dir,
+    signal_file_path,
+)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SIGNALS_DIR = "/home/djelinux/TradingBots/trading-stack/runtime/signals"
+DEFAULT_SIGNALS_DIR = default_signals_dir()
+#: Default replay output next to the signals dir (repo-local).
+DEFAULT_REPLAY_OUTPUT = os.path.join(os.path.dirname(DEFAULT_SIGNALS_DIR), "signals_backtest")
 #: Shared contract from the sibling trading-stack checkout; override with --schema.
-DEFAULT_SCHEMA_PATH = "/home/djelinux/TradingBots/trading-stack/contracts/signal.schema.json"
+DEFAULT_SCHEMA_PATH = os.environ.get(
+    "SIGNAL_SCHEMA_PATH",
+    os.path.join(os.path.dirname(PROJECT_ROOT), "trading-stack", "contracts", "signal.schema.json"),
+)
+
+
+def _apply_config_override(config_path: str) -> None:
+    """Point the config loader at --config; it reads this env var when imported."""
+    os.environ["LLM_TRADER_CONFIG_INI"] = os.path.abspath(config_path)
 
 
 def _parse_bool_flag(value: str) -> bool:
@@ -52,7 +67,10 @@ def _parse_bool_flag(value: str) -> bool:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m src.signal_service")
-    parser.add_argument("--config", default="config/config.ini", help="Config file path")
+    parser.add_argument(
+        "--config", default="config/config.ini",
+        help="Config file path (overrides the loader's default config.ini)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="Run the candle-aligned scheduler")
@@ -82,7 +100,7 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--end", required=True, help="e.g. 2026-04-01")
     replay.add_argument("--as-of", default=None, help="Freeze 'now' at this ISO timestamp")
     replay.add_argument("--candles", required=True, help="OHLCV csv (time,open,high,low,close,volume)")
-    replay.add_argument("--output", default="/home/djelinux/TradingBots/trading-stack/runtime/signals_backtest")
+    replay.add_argument("--output", default=DEFAULT_REPLAY_OUTPUT)
     replay.add_argument("--no-news", action="store_true")
     replay.add_argument("--use-chart", type=_parse_bool_flag, default="true")
     replay.add_argument("--timeout-seconds", type=float, default=300.0)
@@ -406,6 +424,8 @@ def main(argv: List[str] = None) -> int:
     """CLI entry point."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     args = _build_parser().parse_args(argv)
+    if args.config:
+        _apply_config_override(args.config)
     command = args.command
     if command == "validate":
         return _validate_command(args)
