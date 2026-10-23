@@ -25,7 +25,7 @@ _SPEC.loader.exec_module(bench_jev)
 class _AlwaysBuyBase:
     """Base pipeline stub: every state yields a BUY decision."""
 
-    def decide(self, _state: Dict[str, Any]) -> Any:
+    async def decide(self, _candles: List[Any], _index: int, _state: Dict[str, Any]) -> Any:
         return bench_jev.BaseDecision("BUY", 1.0)
 
 
@@ -46,7 +46,7 @@ async def test_run_mode_paces_every_jev_call(monkeypatch):
 
     await bench_jev.run_mode(
         "jev_pre_post", gate, _AlwaysBuyBase(), [], _samples(3), folds=1,
-        is_llm=False, delay_seconds=0.25,
+        delay_seconds=0.25,
     )
 
     # pre + post per state: 3 states -> 6 calls, each paced.
@@ -66,7 +66,7 @@ async def test_run_mode_llm_alone_never_paces(monkeypatch):
 
     await bench_jev.run_mode(
         "llm_alone", gate, _AlwaysBuyBase(), [], _samples(4), folds=1,
-        is_llm=False, delay_seconds=0.25,
+        delay_seconds=0.25,
     )
 
     assert sleeps == []
@@ -167,3 +167,17 @@ async def test_llm_backend_reports_unsupported_pair(monkeypatch):
     assert backend.available is False
     assert "No exchange supports" in (backend.reason or "")
     assert engine.init_calls == []
+
+
+@pytest.mark.asyncio
+async def test_unavailable_llm_backend_does_not_crash_the_run():
+    """--base llm without config/keys must still yield a HOLD report, not TypeError."""
+    backend = bench_jev.LLMBackend("BTC/USDT", "1h")  # never initialized: unavailable
+    gate = bench_jev.JevGate(client=None, mode="off")
+
+    run = await bench_jev.run_mode(
+        "llm_alone", gate, backend, [], _samples(2), folds=1,
+    )
+
+    assert [prediction.action for prediction in run.predictions] == ["HOLD", "HOLD"]
+    assert all("unavailable" in (prediction.error or "") for prediction in run.predictions)

@@ -194,8 +194,10 @@ class MomentumBaseline:
 
     name = "momentum-proxy"
 
-    def decide(self, state: Dict[str, Any]) -> BaseDecision:
-        """BUY above +1%, SELL below -1%, HOLD otherwise."""
+    async def decide(
+        self, _candles: List["Candle"], _index: int, state: Dict[str, Any],
+    ) -> BaseDecision:
+        """BUY above +1%, SELL below -1%, HOLD otherwise (ignores candles/index)."""
         returns = state.get("returns") or {}
         momentum = returns.get("4")
         if momentum is None:
@@ -478,7 +480,6 @@ async def run_mode(
     candles: List[Candle],
     samples: List[Tuple[int, Dict[str, Any], Dict[int, float]]],
     folds: int,
-    is_llm: bool,
     delay_seconds: float = 0.0,
 ) -> ModeRun:
     """Evaluate one pipeline over all states, walk-forward fold by fold.
@@ -497,12 +498,11 @@ async def run_mode(
             fold_of[position] = fold
 
     for position, (index, state, _future) in enumerate(samples):
-        base_latency: Optional[int] = None
-        if is_llm:
-            decision = await base_backend.decide(candles, index, state)
-            base_latency = decision.latency_ms
-        else:
-            decision = base_backend.decide(state)
+        # Uniform interface for every backend: an unavailable LLMBackend still
+        # implements decide() and returns a HOLD with its error, so the
+        # benchmark can write its report instead of crashing.
+        decision = await base_backend.decide(candles, index, state)
+        base_latency = decision.latency_ms
 
         action = decision.action
         error = decision.error
@@ -694,7 +694,6 @@ async def run_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
             candles=candles,
             samples=samples,
             folds=folds,
-            is_llm=is_llm,
             # Pacing applies to real JEV calls only; the offline stand-in is local.
             delay_seconds=args.delay_seconds if real_benchmark else 0.0,
         )
