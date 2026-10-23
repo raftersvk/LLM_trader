@@ -165,3 +165,48 @@ def test_smoke_script_skips_missing_schema(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "skipping JSON schema validation" in result.stderr
+
+
+def test_has_closed_candle_matches_truncate_rule():
+    """The skip guard must use the same close rule as truncate_context_to_as_of."""
+    from datetime import datetime, timedelta, timezone
+
+    from src.signal_service.__main__ import _has_closed_candle
+
+    opened = datetime(2026, 10, 23, 12, tzinfo=timezone.utc)
+    timestamps = [opened]
+
+    assert _has_closed_candle(timestamps, "1h", opened + timedelta(hours=1)) is True
+    assert _has_closed_candle(
+        timestamps, "1h", opened + timedelta(minutes=59),
+    ) is False
+    assert _has_closed_candle([], "1h", opened + timedelta(hours=5)) is False
+
+
+def test_replay_fails_clearly_when_window_precedes_csv(tmp_path):
+    """A --start before the csv data must not die with a raw traceback."""
+    import asyncio
+
+    from src.signal_service.__main__ import _build_parser, _replay_command
+
+    candles = tmp_path / "BTC_USDT_1h.csv"
+    candles.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-10-23T12:00:00Z,110.0,120.0,100.0,115.0,333333.0\n",
+        encoding="utf-8",
+    )
+    args = _build_parser().parse_args([
+        "replay",
+        "--pairs", "BTC/USDT",
+        "--start", "2026-01-01",
+        "--end", "2026-01-02",
+        "--candles", str(candles),
+        "--output", str(tmp_path / "signals"),
+    ])
+
+    with pytest.raises(ValueError) as excinfo:
+        asyncio.run(_replay_command(args))
+
+    message = str(excinfo.value)
+    assert "no candle closed at or before" in message
+    assert "check --start/--end/--as-of or the csv range" in message

@@ -35,7 +35,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
-from src.signal_service.contract import parse_iso, timeframe_seconds
+from src.signal_service.contract import (
+    SignalValidationError,
+    iso_z,
+    parse_iso,
+    timeframe_seconds,
+)
 from src.signal_service.service import SignalService
 from src.signal_service.storage import (
     PROJECT_ROOT,
@@ -264,6 +269,20 @@ def _load_candles_csv(path: str) -> Tuple[np.ndarray, List[datetime]]:
 
 
 
+def _has_closed_candle(
+    timestamps: List[datetime],
+    timeframe: str,
+    as_of: datetime,
+) -> bool:
+    """Return True when at least one candle closed at or before `as_of`.
+
+    Mirrors `truncate_context_to_as_of`, so replay can skip a dataless window
+    instead of raising SignalValidationError mid-run.
+    """
+    period = timedelta(seconds=timeframe_seconds(timeframe))
+    return any(ts + period <= as_of for ts in timestamps)
+
+
 async def _replay_command(args: argparse.Namespace) -> None:
     pairs: List[str] = args.pairs.split(",")
     if len(pairs) != 1:
@@ -273,6 +292,20 @@ async def _replay_command(args: argparse.Namespace) -> None:
     start = parse_iso(args.start if "T" in args.start else args.start + "T00:00:00Z")
     end = parse_iso(args.end if "T" in args.end else args.end + "T00:00:00Z")
     period = timedelta(seconds=timeframe_seconds(args.timeframe))
+    as_of_cap = parse_iso(args.as_of) if args.as_of else None
+
+    # Load and validate the series before touching exchanges or engines, and
+    # fail clearly when the requested window has no usable data at all.
+    candles, timestamps = _load_candles_csv(args.candles)
+    if not timestamps:
+        raise ValueError(f"no candles found in {args.candles}: nothing to replay")
+    last_as_of = min(end, as_of_cap) if as_of_cap is not None else end
+    if not _has_closed_candle(timestamps, args.timeframe, last_as_of):
+        raise ValueError(
+            f"no candle closed at or before {iso_z(last_as_of)} in {args.candles} "
+            f"(earliest candle opens {iso_z(timestamps[0])}); "
+            "check --start/--end/--as-of or the csv range"
+        )
 
     root = _load_engine_factory()
     deps = await root.build_dependencies()
@@ -292,11 +325,9 @@ async def _replay_command(args: argparse.Namespace) -> None:
     )
     storage = SignalStorage(signal_file_path(args.output, symbol, args.timeframe))
 
-    candles, timestamps = _load_candles_csv(args.candles)
     injector = ReplayDataInjector(analyzer, candles, timestamps)
     injector.install()
 
-    as_of_cap = parse_iso(args.as_of) if args.as_of else None
     candle = start
     produced = 0
     while candle < end:
@@ -304,7 +335,20 @@ async def _replay_command(args: argparse.Namespace) -> None:
             break
         # No future data: only candles closed at or before `candle + period`.
         as_of = min(candle + period, datetime.now(timezone.utc))
-        injector.set_as_of(as_of)
+        if not _has_closed_candle(timestamps, args.timeframe, as_of):
+            logger.warning(
+                "Skipping candle %s: no candle closed at or before %s "
+                "(replay range starts before the csv data)",
+                iso_z(candle), iso_z(as_of),
+            )
+            candle = candle + period
+            continue
+        try:
+            injector.set_as_of(as_of)
+        except SignalValidationError as exc:
+            logger.warning("Skipping candle %s: %s", iso_z(candle), exc)
+            candle = candle + period
+            continue
         try:
             signal = await asyncio.wait_for(
                 analyzer.analyze(candle_open_time=candle.isoformat()),
