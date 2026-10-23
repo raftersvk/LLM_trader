@@ -51,12 +51,56 @@ def test_non_litellm_provider_keeps_its_own_routing():
             "provider": "openrouter",
             "base_url": "https://openrouter.ai/api/v1",
             "api_key": "test-key",
-            "model": "some/model",
+            "model": "google/gemini-3-flash-preview",
         },
         logger=MagicMock(),
     )
 
     assert "custom_llm_provider" not in client.litellm_kwargs
+
+
+@pytest.mark.asyncio
+async def test_openrouter_request_keeps_provider_prefix():
+    """OpenRouter models must reach LiteLLM prefixed, or routing breaks."""
+    client = LitellmAIClient(
+        config={
+            "provider": "openrouter",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key": "test-key",
+            "model": "google/gemini-3-flash-preview",
+        },
+        logger=MagicMock(),
+    )
+    captured = {}
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="ok"),
+                finish_reason="stop",
+            )
+        ],
+        usage=None,
+        id="response-id",
+        model="google/gemini-3-flash-preview",
+    )
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return response
+
+    with patch(
+        "src.platforms.ai_providers.litellm_client.acompletion",
+        new=fake_acompletion,
+    ):
+        await client.chat_completion(
+            "deepseek/deepseek-r1:free",
+            [{"role": "user", "content": "hello"}],
+            {},
+        )
+
+    assert captured["model"] == "openrouter/deepseek/deepseek-r1:free"
+    assert captured["base_url"] == "https://openrouter.ai/api/v1"
+    assert "custom_llm_provider" not in captured
 
 
 @pytest.mark.asyncio
