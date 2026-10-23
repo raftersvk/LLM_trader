@@ -111,10 +111,11 @@ class ClosedCandleWindow:
     async def _collect_and_truncate(self, *args: Any, **kwargs: Any) -> Any:
         result = await self._original_collect(*args, **kwargs)
         context = self.engine.context
+        timestamps = getattr(context, "timestamps", None)
         kept = truncate_context_to_as_of(
             context,
             getattr(context, "ohlcv_candles", None),
-            list(getattr(context, "timestamps", None) or []),
+            list(timestamps) if timestamps is not None else [],
             self.timeframe,
             self.as_of,
         )

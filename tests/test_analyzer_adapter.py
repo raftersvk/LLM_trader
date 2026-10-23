@@ -633,3 +633,30 @@ async def test_error_result_is_unapproved_hold_with_reason():
     assert "invalid LLM response: Invalid response format" in signal.reasoning
     assert signal.model == "deepseek-v4.1-flash"
     assert signal.provider == "litellm"
+
+
+def test_truncate_context_accepts_numpy_candles():
+    """NumPy OHLCV arrays must never be evaluated by truthiness (ambiguous)."""
+    np = pytest.importorskip("numpy")
+    from types import SimpleNamespace
+    from src.signal_service.analyzer_adapter import truncate_context_to_as_of
+
+    candles = np.array([
+        [1.0, 1.0, 2.0, 0.5, 100.0, 10.0],
+        [2.0, 2.0, 3.0, 1.5, 200.0, 20.0],
+        [3.0, 3.0, 4.0, 2.5, 300.0, 30.0],
+    ])
+    timestamps = [_hour(13), _hour(14), _hour(15)]
+
+    context = SimpleNamespace(ohlcv_candles=None, timestamps=None, current_price=None)
+    kept = truncate_context_to_as_of(context, candles, timestamps, "1h", _hour(15))
+
+    assert kept is True
+    assert len(context.ohlcv_candles) == 2
+    assert context.current_price == 200.0
+
+    empty_context = SimpleNamespace(ohlcv_candles=None, timestamps=None, current_price=None)
+    assert truncate_context_to_as_of(
+        empty_context, np.empty((0, 6)), [], "1h", _hour(15),
+    ) is False
+    assert empty_context.ohlcv_candles is None
