@@ -42,6 +42,8 @@ from src.signal_service.storage import SignalStorage, signal_file_path
 logger = logging.getLogger(__name__)
 
 DEFAULT_SIGNALS_DIR = "/home/djelinux/TradingBots/trading-stack/runtime/signals"
+#: Shared contract from the sibling trading-stack checkout; override with --schema.
+DEFAULT_SCHEMA_PATH = "/home/djelinux/TradingBots/trading-stack/contracts/signal.schema.json"
 
 
 def _parse_bool_flag(value: str) -> bool:
@@ -88,6 +90,10 @@ def _build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate", help="Validate JSONL signal files")
     validate.add_argument("--input", default=DEFAULT_SIGNALS_DIR)
     validate.add_argument("--file", default=None, help="Validate a single JSONL file")
+    validate.add_argument(
+        "--schema", default=DEFAULT_SCHEMA_PATH,
+        help="Shared signal JSON schema (default: the sibling trading-stack checkout)",
+    )
     return parser
 
 
@@ -295,19 +301,33 @@ async def _replay_command(args: argparse.Namespace) -> None:
     print(f"Replay complete for {symbol}: {produced} signals written to {storage.path}")
 
 
-def _validate_file(path: str, schema_path: str) -> Tuple[int, int]:
-    """Validate one JSONL file; returns (valid_signals, failures)."""
-    from src.signal_service.contract import Signal
+def _load_schema_validator(schema_path: str) -> Any:
+    """Load the shared signal schema as a jsonschema validator.
 
-    schema = None
+    Args:
+        schema_path: Path to the shared contract JSON schema.
+
+    Returns:
+        A Draft 2020-12 validator, or None when jsonschema is not installed
+        (structural contract validation still runs).
+
+    Raises:
+        OSError: when the schema file cannot be read.
+        ValueError: when the schema is not valid JSON.
+    """
     with open(schema_path, "r", encoding="utf-8") as handle:
         schema = json.load(handle)
-    validator = None
     try:
         import jsonschema
-        validator = jsonschema.Draft202012Validator(schema)
     except ImportError:
-        validator = None
+        print("jsonschema not installed: structural (contract) validation only")
+        return None
+    return jsonschema.Draft202012Validator(schema)
+
+
+def _validate_file(path: str, validator: Any) -> Tuple[int, int]:
+    """Validate one JSONL file; returns (valid_signals, failures)."""
+    from src.signal_service.contract import Signal
 
     valid = 0
     failures = 0
@@ -331,27 +351,40 @@ def _validate_file(path: str, schema_path: str) -> Tuple[int, int]:
 def _validate_command(args: argparse.Namespace) -> int:
     import os
 
-    schema_path = "/home/djelinux/TradingBots/trading-stack/contracts/signal.schema.json"
+    schema_path = args.schema
+    if not os.path.isfile(schema_path):
+        print(
+            f"schema file not found: {schema_path}\n"
+            f"Pass --schema PATH to point at the shared contract "
+            f"(default: {DEFAULT_SCHEMA_PATH})"
+        )
+        return 2
+    try:
+        validator = _load_schema_validator(schema_path)
+    except (OSError, ValueError) as exc:
+        print(f"cannot load schema {schema_path}: {exc}")
+        return 2
+
     files = [args.file] if args.file else []
     if not files:
+        if not os.path.isdir(args.input):
+            print(f"input directory not found: {args.input}")
+            return 2
         files = sorted(
             os.path.join(args.input, name)
             for name in os.listdir(args.input)
             if name.endswith(".jsonl")
         )
-    checked = 0
-    failures = 0
-    for path in files:
-        valid, errors = _validate_file(path, schema_path)
-        checked += valid
-        failures += errors
-        print(f"{path}: ok={valid} errors={errors}")
-    if args.file is None and not os.path.isdir(args.input):
-        print(f"input directory not found: {args.input}")
-        return 2
     if not files:
         print(f"no .jsonl files found in {args.input}")
         return 2
+    checked = 0
+    failures = 0
+    for path in files:
+        valid, errors = _validate_file(path, validator)
+        checked += valid
+        failures += errors
+        print(f"{path}: ok={valid} errors={errors}")
     print(f"checked={checked} failures={failures}")
     return 0 if failures == 0 else 1
 
