@@ -60,6 +60,9 @@ class ModelManager(ModelManagerProtocol):
         self.model_pricing = model_pricing
         self._clients = provider_clients
         self._orchestrator = orchestrator
+        # Last response finish_reason (e.g. "stop", "length"), for callers that
+        # must detect truncated/empty LLM responses.
+        self.last_finish_reason: Optional[str] = None
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -265,6 +268,11 @@ class ModelManager(ModelManagerProtocol):
         if not response.choices or not response.choices[0].message:
             return self.unified_parser.format_error_response("No content in response")
         content = response.choices[0].message.content
+        self.last_finish_reason = getattr(response.choices[0], "finish_reason", None)
+        self.logger.info(
+            "AI response finish_reason=%s content_len=%s",
+            self.last_finish_reason, len(content or ""),
+        )
         self.logger.info("Full response content: %s", content)
         await self._track_cost(result, response, content)
         return content
