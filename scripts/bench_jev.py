@@ -498,6 +498,9 @@ async def run_mode(
             issues every call at full speed and trips the free-usage cap,
             after which the gate fails open and every JEV mode silently
             degrades to llm_alone.
+        abort_on_jev_error: Raise ``SystemExit`` on the first gate error
+            instead of continuing with fail-open results. Real runs enable it
+            so an exhausted quota cannot masquerade as a benchmark.
     """
     run = ModeRun(mode=mode)
     bounds = split_folds(len(samples), folds)
