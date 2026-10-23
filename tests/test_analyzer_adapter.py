@@ -21,6 +21,8 @@ SYMBOL = "BTC/USDT"
 
 
 class FakeModelManager:
+    last_finish_reason = None
+
     def supports_image_analysis(self, *_args, **_kwargs) -> bool:
         return False
 
@@ -46,11 +48,12 @@ class FakeContext:
 class FakeEngine:
     """Same surface as AnalysisEngine for the calls used by the adapter."""
 
-    def __init__(self, raw_response=None, result=None, current_price=68000.0):
+    def __init__(self, raw_response=None, result=None, current_price=68000.0, config=None):
         self.last_llm_response = raw_response
         self.model_manager = FakeModelManager()
         self.rag_engine = FakeRagEngine()
         self.context = FakeContext(current_price=current_price)
+        self.config = config
         self._result = result
         self.calls = []
 
@@ -68,7 +71,7 @@ RAW_BUY = (
 
 RESULT_META = {
     "model": "deepseek-v4.1-flash",
-    "provider": "opencode-go",
+    "provider": "litellm",
 }
 
 
@@ -93,7 +96,7 @@ async def test_buy_signal_risk_approved():
     assert signal.tp == 70000.0
     assert signal.confidence == 0.90
     assert signal.model == "deepseek-v4.1-flash"
-    assert signal.provider == "opencode-go"
+    assert signal.provider == "litellm"
     assert signal.raw_response_hash == hash_raw_response(RAW_BUY)
     assert signal.schema_version == "1.0"
     assert_stateless(engine)
@@ -548,3 +551,66 @@ def test_debug_cycle_dedupes_by_default(tmp_path):
 
     assert len(analyzers["BTC/USDT"].candles_seen) == 3
     assert len(service.storages["BTC/USDT"].load_all()) == 1
+
+
+class FakeEngineConfig:
+    """Minimal Config surface used for model/provider fallbacks."""
+
+    LITELLM_MODEL = "deepseek-v4.1-flash"
+    PROVIDER = "litellm"
+
+
+@pytest.mark.asyncio
+async def test_empty_truncated_response_is_not_a_clean_hold():
+    """finish_reason=length + empty content must be an explicit, unapproved HOLD."""
+    engine = FakeEngine(raw_response="", result=dict(RESULT_META), config=FakeEngineConfig())
+    engine.model_manager.last_finish_reason = "length"
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.sl is None and signal.tp is None
+    assert signal.reasoning.strip(), "reasoning must explain the failure"
+    assert "invalid LLM response" in signal.reasoning
+    assert "finish_reason=length" in signal.reasoning
+    assert signal.model == "deepseek-v4.1-flash"
+    assert signal.provider == "litellm"
+    assert signal.raw_response_hash is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_response_reports_real_model_not_unspecified():
+    """A parsed response that reports 'unspecified' must use the configured model."""
+    engine = FakeEngine(
+        raw_response=RAW_BUY,
+        result={"model": "unspecified", "provider": "unspecified", "raw_response": RAW_BUY},
+        config=FakeEngineConfig(),
+    )
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze()
+
+    assert signal.model == "deepseek-v4.1-flash"
+    assert signal.provider == "litellm"
+    assert signal.raw_response_hash == hash_raw_response(RAW_BUY)
+
+
+@pytest.mark.asyncio
+async def test_error_result_is_unapproved_hold_with_reason():
+    """An error result is an explicit, unapproved HOLD, never approved silently."""
+    engine = FakeEngine(
+        raw_response="",
+        result={"error": "Invalid response format", "raw_response": ""},
+        config=FakeEngineConfig(),
+    )
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL)
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert "invalid LLM response: Invalid response format" in signal.reasoning
+    assert signal.model == "deepseek-v4.1-flash"
+    assert signal.provider == "litellm"

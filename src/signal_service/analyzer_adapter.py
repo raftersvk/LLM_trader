@@ -35,6 +35,7 @@ DEFAULT_MIN_RR = 1.5
 DEFAULT_MIN_CONFIDENCE = 0.6
 DEFAULT_POSITION_SIZE_PCT = 0.05
 PROMPT_VERSION = "llm-trader-signal-v1"
+_UNKNOWN_LABELS = frozenset({"", "unknown", "unspecified", "none", "null"})
 
 
 def _as_utc(moment: datetime) -> datetime:
@@ -121,8 +122,17 @@ class ClosedCandleWindow:
         return result
 
     def __enter__(self) -> Dict[str, bool]:
-        self._original_collect = self.engine.data_collector.collect_data
-        self.engine.data_collector.collect_data = self._collect_and_truncate
+        collector = getattr(self.engine, "data_collector", None)
+        if collector is None:
+            # Test doubles and injected engines may not expose a collector; the
+            # production AnalysisEngine always does. Never fail the analysis.
+            logger.warning(
+                "Engine (%s) exposes no data_collector: closed-candle window not enforced",
+                self.timeframe,
+            )
+            return self.state
+        self._original_collect = collector.collect_data
+        collector.collect_data = self._collect_and_truncate
         return self.state
 
     def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
@@ -222,13 +232,62 @@ class PairAnalyzer:
                 candle_open_dt=candle_open_dt,
             )
 
-        if not isinstance(result, dict) or result.get("error"):
-            error = str(result.get("error")) if isinstance(result, dict) else "unknown"
-            return self._hold_fallback(reasoning=f"analysis error: {error}", candle_open_dt=candle_open_dt)
+        raw_response = ""
+        if isinstance(result, dict):
+            raw_response = getattr(self.engine, "last_llm_response", None) or result.get("raw_response") or ""
 
-        raw_response = getattr(self.engine, "last_llm_response", None) or result.get("raw_response") or ""
+        invalid_reason = self._invalid_response_reason(result, raw_response)
+        if invalid_reason:
+            logger.warning("Invalid LLM response for %s: %s", self.symbol, invalid_reason)
+            model, provider = self._resolve_model_provider(result if isinstance(result, dict) else {})
+            return self._hold_fallback(
+                reasoning=invalid_reason,
+                candle_open_dt=candle_open_dt,
+                model=model,
+                provider=provider,
+                raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+            )
+
         draft = self._extract_draft(result, raw_response)
         return self._build_signal(draft, raw_response, candle_open_time)
+
+    def _resolve_model_provider(self, result: Dict[str, Any]) -> tuple[str, str]:
+        """Resolve the real model/provider, never returning 'unspecified'."""
+        engine_config = getattr(self.engine, "config", None)
+        model = str(result.get("model") or "").strip()
+        provider = str(result.get("provider") or "").strip()
+        fallback_model = str(getattr(engine_config, "LITELLM_MODEL", "") or "").strip()
+        fallback_provider = str(getattr(engine_config, "PROVIDER", "") or "").strip()
+        if not model or model.lower() in _UNKNOWN_LABELS:
+            model = fallback_model or "unknown"
+        if not provider or provider.lower() in _UNKNOWN_LABELS:
+            provider = fallback_provider or "unknown"
+        return model, provider
+
+    def _invalid_response_reason(self, result: Any, raw_response: str) -> Optional[str]:
+        """Return why an LLM response is unusable, or None when it is usable.
+
+        Detects the silent-HOLD trap: an empty/truncated completion must never
+        become a clean, risk-approved HOLD.
+        """
+        if not isinstance(result, dict):
+            return "invalid LLM response: no result"
+        if result.get("error"):
+            return f"invalid LLM response: {result['error']}"
+        finish_reason = (
+            result.get("finish_reason")
+            or getattr(getattr(self.engine, "model_manager", None), "last_finish_reason", None)
+        )
+        empty = not raw_response.strip()
+        if finish_reason == "length":
+            label = "empty content" if empty else "truncated content"
+            return f"invalid LLM response: {label} (finish_reason=length)"
+        if finish_reason == "content_filter":
+            return "invalid LLM response: content filtered (finish_reason=content_filter)"
+        if empty:
+            suffix = f" (finish_reason={finish_reason})" if finish_reason else ""
+            return f"invalid LLM response: empty content{suffix}"
+        return None
 
     async def _analyze_market(self) -> Dict[str, Any]:
         """Call the engine statelessly (one analysis, no continuity state)."""
@@ -247,8 +306,7 @@ class PairAnalyzer:
         """Extract the decision from the raw LLM response via PositionExtractor."""
         from src.trading.position_extractor import PositionExtractor  # local import: optional dep
 
-        model = str(result.get("model") or "unknown")
-        provider = str(result.get("provider") or "unknown")
+        model, provider = self._resolve_model_provider(result)
         raw_hash = hash_raw_response(raw_response) if raw_response else None
 
         if raw_response:
@@ -406,15 +464,28 @@ class PairAnalyzer:
         return None
 
     # --------------------------------------------------------------- fallback
-    def _hold_fallback(self, reasoning: str, candle_open_dt: Optional[datetime] = None) -> Signal:
+    def _hold_fallback(
+        self,
+        reasoning: str,
+        candle_open_dt: Optional[datetime] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+        raw_response_hash: Optional[str] = None,
+    ) -> Signal:
         """Build the deterministic HOLD fallback signal.
 
         Args:
             reasoning: Human-readable cause, stored in the signal.
             candle_open_dt: Open time of the analysed candle; defaults to the
                 current candle when no closed candle was supplied.
+            model: Real model name; falls back to config.LITELLM_MODEL.
+            provider: Real provider name; falls back to config.PROVIDER.
+            raw_response_hash: sha256 fingerprint of the raw response, if any.
         """
         candle_open_dt = candle_open_dt or self.current_candle_bounds()
+        resolved_model, resolved_provider = self._resolve_model_provider(
+            {"model": model, "provider": provider}
+        )
         open_at, close_at, expires_at = self._candle_times(candle_open_dt)
         signal = Signal(
             schema_version="1.0",
@@ -433,9 +504,10 @@ class PairAnalyzer:
             tp=None,
             position_size_pct=DEFAULT_POSITION_SIZE_PCT,
             reasoning=reasoning[:8000],
-            model="unknown",
-            provider="unknown",
+            model=resolved_model,
+            provider=resolved_provider,
             prompt_version=PROMPT_VERSION,
+            raw_response_hash=raw_response_hash,
         )
         signal.validate()
         return signal

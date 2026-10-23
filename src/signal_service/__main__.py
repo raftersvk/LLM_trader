@@ -27,6 +27,7 @@ import asyncio
 import csv
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Tuple
@@ -313,6 +314,19 @@ def _validate_command(args: argparse.Namespace) -> int:
     return 0 if failures == 0 else 1
 
 
+def _force_exit(code: int) -> None:
+    """Exit even when background libraries keep non-daemon threads alive.
+
+    CompositionRoot opens an aiohttp session, ChromaDB and the embedding model;
+    some of them leave threads running, so a normal return can hang after a
+    bounded run (e.g. --max-cycles). Logs are flushed before the hard exit.
+    """
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 def main(argv: List[str] = None) -> int:
     """CLI entry point."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -322,10 +336,10 @@ def main(argv: List[str] = None) -> int:
         return _validate_command(args)
     if command == "run":
         asyncio.run(_run_command(args))
-        return 0
+        _force_exit(0)
     if command == "replay":
         asyncio.run(_replay_command(args))
-        return 0
+        _force_exit(0)
     print(f"Unknown command: {command}")
     return 2
 
