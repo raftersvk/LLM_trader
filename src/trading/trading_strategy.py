@@ -406,6 +406,24 @@ class TradingStrategy:
         self.logger.info("Position sizing: Capital=$%s, Size=%.2f%%, Allocation=$%s, Quantity=%.6f", f"{capital:,.2f}", final_size_pct * 100, f"{risk_assessment.quote_amount:,.2f}", quantity)
         self.logger.info("Risk metrics: SL=%.2f%%, TP=%.2f%%, R/R=%.2f", sl_distance_pct * 100, tp_distance_pct * 100, rr_ratio)
 
+        # Reserve capital in portfolio tracking before opening. The availability
+        # check above is not atomic: another pair may have reserved the funds in
+        # the meantime, in which case the position must not be created/persisted.
+        if self.portfolio_capital_service:
+            reserved = self.portfolio_capital_service.reserve_position(
+                symbol=symbol,
+                quote_amount=risk_assessment.quote_amount,
+                entry_price=current_price,
+                quantity=quantity,
+                direction=direction
+            )
+            if not reserved:
+                self.logger.warning(
+                    "Order rejected: could not reserve $%s for %s (insufficient unallocated capital)",
+                    f"{risk_assessment.quote_amount:,.2f}", symbol
+                )
+                return None
+
         # Create position using Factory
         self.current_position = self.position_factory.create_position(
             symbol=symbol,
@@ -415,16 +433,6 @@ class TradingStrategy:
             confluence_factors=confluence_factors,
             market_conditions=market_conditions
         )
-
-        # Reserve capital in portfolio tracking
-        if self.portfolio_capital_service:
-            self.portfolio_capital_service.reserve_position(
-                symbol=symbol,
-                quote_amount=risk_assessment.quote_amount,
-                entry_price=current_price,
-                quantity=quantity,
-                direction=direction
-            )
 
         await self.persistence.async_save_position(self.current_position)
         self.logger.info("Opened %s position @ $%s (SL: $%s, TP: $%s, Qty: %.6f, Fee: $%.4f)", direction, f"{current_price:,.2f}", f"{final_sl:,.2f}", f"{final_tp:,.2f}", quantity, entry_fee)
