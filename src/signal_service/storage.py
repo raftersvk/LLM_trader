@@ -2,7 +2,8 @@
 
 One JSONL file per (symbol, timeframe). Writes are guarded by fcntl.flock,
 flushed and fsynced. Signals are deduplicated by
-(symbol, timeframe, candle_open_time). Invalid lines skipped on read never
+(symbol, timeframe, candle_open_time) under that same lock, so concurrent
+processes cannot both append one candle. Invalid lines skipped on read never
 corrupt the file or break future append-only writes.
 """
 
@@ -26,7 +27,11 @@ logger = logging.getLogger(__name__)
 
 
 class SignalStorage:
-    """Append-only JSONL storage with locking, deduplication and TTL checks."""
+    """Append-only JSONL storage with locking, deduplication and TTL checks.
+
+    Appends hold LOCK_EX across the dedup scan, the check and the write, so
+    concurrent processes cannot both append a signal for the same candle.
+    """
 
     def __init__(self, path: str) -> None:
         """Open (or create) the JSONL file at `path`.
@@ -68,7 +73,12 @@ class SignalStorage:
         self._dedup_loaded = True
 
     def is_duplicate(self, signal: Signal) -> bool:
-        """Return True when a signal already exists for the same candle."""
+        """Return True when a signal already exists for the same candle.
+
+        This reads the local cache only; `append` re-scans the file inside its
+        locked critical section, which is what makes dedup correct when several
+        processes write the same JSONL.
+        """
         if not self._dedup_loaded:
             self._load_dedup_keys()
         return self._dedup_key_for(signal) in self._dedup_keys
@@ -90,17 +100,20 @@ class SignalStorage:
             SignalValidationError: when the signal violates the contract.
         """
         signal.validate()
-        if dedupe and self.is_duplicate(signal):
-            logger.info(
-                "Duplicate signal for (%s, %s, %s): not appended",
-                signal.symbol, signal.timeframe, signal.candle_open_time,
-            )
-            return False
-
         line = json.dumps(signal.to_dict(), separators=(",", ":"), sort_keys=False)
         with open(self.path, "a", encoding="utf-8") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
+                if dedupe:
+                    # Re-scan inside the critical section: another process may
+                    # have appended this candle since our cache was loaded.
+                    self._load_dedup_keys()
+                    if self._dedup_key_for(signal) in self._dedup_keys:
+                        logger.info(
+                            "Duplicate signal for (%s, %s, %s): not appended",
+                            signal.symbol, signal.timeframe, signal.candle_open_time,
+                        )
+                        return False
                 handle.write(line + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())

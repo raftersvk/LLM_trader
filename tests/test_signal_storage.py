@@ -138,3 +138,19 @@ def test_output_path_helpers(tmp_path):
     from src.signal_service.storage import signal_file_path
     path = signal_file_path(str(tmp_path), "BTC/USDT", "1h")
     assert os.path.basename(path) == "BTC_USDT_1h.jsonl"
+
+def test_dedup_is_checked_inside_the_write_lock(tmp_path):
+    """Two processes with primed caches must not append the same candle twice."""
+    path = str(tmp_path / "BTC_USDT_1h.jsonl")
+    first = SignalStorage(path)
+    second = SignalStorage(path)
+    signal = make_signal()
+
+    # Both caches are loaded (empty) before either process writes.
+    assert first.is_duplicate(signal) is False
+    assert second.is_duplicate(signal) is False
+
+    assert first.append(signal) is True
+    # The second instance's stale cache must not let a duplicate through.
+    assert second.append(signal) is False
+    assert len(second.load_all()) == 1
