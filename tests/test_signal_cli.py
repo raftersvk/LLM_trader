@@ -388,7 +388,9 @@ async def test_future_end_produces_no_future_rows_or_calls(tmp_path, monkeypatch
         json.loads(line)
         for line in (tmp_path / "signals" / "BTC_USDT_1h.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert rows, "the closed part of the range must still be analysed"
+    assert len(rows) == 2, "only candles present in the csv may be analysed"
+    csv_opens = {first, second}
+    assert all(parse_iso(row["candle_open_time"]) in csv_opens for row in rows)
     now = datetime.now(timezone.utc)
     # Signals must describe closed candles only (expires_at is legitimately
     # one timeframe later by contract, so it is the close that matters).
@@ -398,3 +400,36 @@ async def test_future_end_produces_no_future_rows_or_calls(tmp_path, monkeypatch
     assert engine.analyze_candles, "expected analyses for the closed range"
     assert all(parse_iso(stamp) < now for stamp in engine.analyze_candles)
     assert len(engine.analyze_candles) == len(rows)
+
+
+@pytest.mark.asyncio
+async def test_replay_skips_off_grid_start(tmp_path, monkeypatch, caplog):
+    """A --start off the candle grid skips windows instead of inventing candles."""
+    import logging
+
+    from src.signal_service import __main__ as cli
+
+    engine = _SkipTestEngine()
+    monkeypatch.setattr(cli, "_load_engine_factory", lambda: _SkipTestRoot(engine))
+    candles = tmp_path / "BTC_USDT_1h.csv"
+    candles.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-01-01T03:00:00Z,110.0,120.0,100.0,115.0,333333.0\n",
+        encoding="utf-8",
+    )
+    args = cli._build_parser().parse_args([
+        "replay",
+        "--pairs", "BTC/USDT",
+        "--start", "2026-01-01T00:30:00Z",
+        "--end", "2026-01-01T04:30:00Z",
+        "--candles", str(candles),
+        "--output", str(tmp_path / "signals"),
+        "--no-news",
+    ])
+
+    with caplog.at_level(logging.WARNING):
+        await cli._replay_command(args)
+
+    assert engine.analyze_candles == []
+    assert not (tmp_path / "signals" / "BTC_USDT_1h.jsonl").exists()
+    assert "not present in" in caplog.text

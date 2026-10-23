@@ -375,12 +375,23 @@ async def _replay_command(args: argparse.Namespace) -> None:
     injector = ReplayDataInjector(analyzer, candles, timestamps)
     injector.install()
 
+    csv_opens = set(timestamps)
     produced = 0
     # Only windows that closed at or before now: a future --end must never
     # fabricate signals for candles that have not happened yet.
     for candle, as_of in _replay_candles(
         start, end, args.timeframe, as_of_cap, now,
     ):
+        # The analysed candle must exist in the series: a --start off the
+        # candle grid, missing csv rows, or a range extending past the last
+        # candle must not invent a signal for a candle the csv never has.
+        if candle not in csv_opens:
+            logger.warning(
+                "Skipping candle %s: not present in %s "
+                "(misaligned --start or range beyond the csv data)",
+                iso_z(candle), args.candles,
+            )
+            continue
         if not _has_closed_candle(timestamps, args.timeframe, as_of):
             logger.warning(
                 "Skipping candle %s: no candle closed at or before %s "
