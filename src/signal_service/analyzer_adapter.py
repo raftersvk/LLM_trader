@@ -38,6 +38,7 @@ DEFAULT_MIN_CONFIDENCE = 0.6
 DEFAULT_POSITION_SIZE_PCT = 0.05
 PROMPT_VERSION = "llm-trader-signal-v1"
 _UNKNOWN_LABELS = frozenset({"", "unknown", "unspecified", "none", "null"})
+_NEWS_ORIGINAL_ATTR = "_signal_service_original_retrieve_context"
 
 
 def _as_utc(moment: datetime) -> datetime:
@@ -179,21 +180,39 @@ class PairAnalyzer:
 
     # ------------------------------------------------------------ ablation flags
     def _apply_flags(self) -> None:
-        """Apply use_news / use_chart ablation flags to the engine."""
+        """Bind this pair's use_news / use_chart ablations to its engine.
+
+        `model_manager` and `rag_engine` are process-wide singletons shared by
+        every per-pair engine, so this must run before *each* analysis: another
+        pair's flags may be in effect, and a one-shot application would let the
+        last started pair silently override the earlier ones.
+        """
         self._flags_applied = True
         try:
             self.engine.model_manager.supports_image_analysis = lambda *_args, **_kwargs: self.use_chart  # type: ignore[assignment]
         except AttributeError:
             pass
-        if not self.use_news:
-            self._neutralize_news()
+        self._bind_news_ablation(self.use_news)
 
-    def _neutralize_news(self) -> None:
-        """Make the RAG/news layer a no-op so no article can reach the prompt."""
+    def _bind_news_ablation(self, enabled: bool) -> None:
+        """Enable or disable news retrieval on the (possibly shared) RAG engine.
+
+        The original retrieval is saved on the RAG engine itself, so an earlier
+        pair's neutralization can be undone for a pair that keeps news enabled.
+        """
         rag_engine = getattr(self.engine, "rag_engine", None)
         if rag_engine is None:
             return
-
+        original = getattr(rag_engine, _NEWS_ORIGINAL_ATTR, None)
+        if enabled:
+            if original is not None:
+                rag_engine.retrieve_context = original  # type: ignore[assignment]
+            return
+        if original is None:
+            try:
+                setattr(rag_engine, _NEWS_ORIGINAL_ATTR, rag_engine.retrieve_context)
+            except AttributeError:
+                return
         async def _empty_context(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
             return ("", {})
 
@@ -213,8 +232,9 @@ class PairAnalyzer:
         Returns:
             A validated Signal (HOLD fallback on any failure).
         """
-        if not self._flags_applied:
-            self._apply_flags()
+        # Re-apply on every analysis: engine model managers and RAG engines are
+        # shared process-wide, so another pair's flags may currently be bound.
+        self._apply_flags()
 
         candle_open_dt = parse_iso(candle_open_time) if candle_open_time is not None else None
         result: Dict[str, Any]

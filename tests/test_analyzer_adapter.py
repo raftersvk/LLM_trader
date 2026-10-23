@@ -1088,3 +1088,52 @@ async def test_replay_install_binds_news_ablation_flag():
         assert await engine.rag_engine.retrieve_context() == ("", {})
     finally:
         injector.restore()
+
+
+class SharedModelManager:
+    """Process-wide model manager stub shared by several per-pair engines."""
+
+    last_finish_reason = None
+
+    def supports_image_analysis(self, *_args, **_kwargs) -> bool:
+        return True
+
+
+@pytest.mark.asyncio
+async def test_flags_reapplied_for_shared_model_manager():
+    """Each pair re-binds its chart flag before its own analysis."""
+    shared_manager = SharedModelManager()
+    engine_a = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine_b = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine_a.model_manager = shared_manager
+    engine_b.model_manager = shared_manager
+    analyzer_a = PairAnalyzer(engine=engine_a, symbol=SYMBOL, timeframe="1h", use_chart=False)
+    analyzer_b = PairAnalyzer(engine=engine_b, symbol=SYMBOL, timeframe="1h", use_chart=True)
+
+    await analyzer_a.analyze()
+    assert shared_manager.supports_image_analysis("BTC/USDT") is False
+    await analyzer_b.analyze()
+    assert shared_manager.supports_image_analysis("BTC/USDT") is True
+    # A's second cycle must not inherit B's flag.
+    await analyzer_a.analyze()
+    assert shared_manager.supports_image_analysis("BTC/USDT") is False
+
+
+@pytest.mark.asyncio
+async def test_news_ablation_restored_for_shared_rag_engine():
+    """A later news-enabled pair un-does another pair's neutralization."""
+    shared_rag = MarkerRagEngine()
+    engine_a = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine_b = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine_a.rag_engine = shared_rag
+    engine_b.rag_engine = shared_rag
+    analyzer_a = PairAnalyzer(engine=engine_a, symbol=SYMBOL, timeframe="1h", use_news=True)
+    analyzer_b = PairAnalyzer(engine=engine_b, symbol=SYMBOL, timeframe="1h", use_news=False)
+
+    await analyzer_a.analyze()
+    assert await shared_rag.retrieve_context() == ("LIVE NEWS CONTEXT", {})
+    await analyzer_b.analyze()
+    assert await shared_rag.retrieve_context() == ("", {})
+    # A's second cycle must get live news back, not B's neutralized stub.
+    await analyzer_a.analyze()
+    assert await shared_rag.retrieve_context() == ("LIVE NEWS CONTEXT", {})
