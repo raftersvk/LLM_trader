@@ -142,6 +142,24 @@ async def test_legacy_opencode_provider_needs_no_auth():
 
 
 @pytest.mark.asyncio
+async def test_decision_key_is_not_forwarded_to_legacy_host():
+    """The Decision token stays bound to decision.vllm-sr.ai, never OpenCode."""
+    transport = FakeTransport([(200, {}, _body(model=OPENCODE_MODEL))])
+    client = _client(
+        transport,
+        base_url=OPENCODE_BASE_URL,
+        model=OPENCODE_MODEL,
+        api_key="sk-vsr-secret-value",
+    )
+
+    await client.ask(STATE, QUESTIONS)
+
+    assert transport.calls[0]["url"] == OPENCODE_BASE_URL + "/v1/systemone"
+    assert transport.calls[0]["headers"] == {}
+    assert client.api_key_host == "decision.vllm-sr.ai"
+
+
+@pytest.mark.asyncio
 async def test_api_key_and_state_are_never_logged(caplog):
     """Only model, latency and usage are logged; no key, header or state."""
     transport = FakeTransport([(200, {}, _body(**_decision_answers()))])

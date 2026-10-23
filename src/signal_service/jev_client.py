@@ -19,6 +19,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, Tuple
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -197,6 +198,7 @@ class JevClient:
         model: str = DEFAULT_MODEL,
         api_key: Optional[str] = None,
         base_url: str = DEFAULT_BASE_URL,
+        api_key_host: Optional[str] = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         backoff_base: float = DEFAULT_BACKOFF_BASE,
@@ -213,6 +215,8 @@ class JevClient:
             model: Model id sent in the payload (``vllm-sr/d3-flash`` default).
             api_key: Bearer token for Decision 3.0. Empty for legacy OpenCode.
             base_url: Provider base URL; ``/v1/systemone`` is appended.
+            api_key_host: Host allowed to receive the bearer token. Defaults
+                to the Decision 3.0 host; the key is never sent elsewhere.
             timeout_seconds: Per-attempt wall-clock timeout.
             max_retries: Retries after the first attempt (bounded).
             backoff_base: First backoff delay in seconds.
@@ -228,10 +232,21 @@ class JevClient:
         self.endpoint = endpoint or (self.base_url + DEFAULT_ENDPOINT_PATH)
         self.model = model
         self.api_key = api_key or None
+        # Bind the bearer token to the host that issued it. A request to any
+        # other base_url (for example the unauthenticated legacy OpenCode
+        # provider) must never receive the Decision 3.0 token.
+        self.api_key_host = (
+            api_key_host
+            if api_key_host is not None
+            else (urlsplit(DEFAULT_BASE_URL).hostname or "")
+        ).lower()
+        endpoint_host = (urlsplit(self.endpoint).hostname or "").lower()
         # Only the Authorization header ever carries the key; it is never
         # included in logs, error messages or the request payload.
         self._headers: Dict[str, str] = (
-            {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+            {"Authorization": f"Bearer {self.api_key}"}
+            if self.api_key and endpoint_host == self.api_key_host
+            else {}
         )
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries

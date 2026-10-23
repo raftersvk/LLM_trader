@@ -179,6 +179,8 @@ model = vllm-sr/d3-flash
 # Name of the key in keys.env that holds the provider token (empty = no auth).
 api_key_env = DECISION_API_KEY
 timeout_seconds = 8
-# Legacy OpenCode provider (no auth): uncomment both lines instead of the above.
+# Legacy OpenCode provider (no auth): uncomment all three lines instead of the above.
+# Blank api_key_env so the Decision 3.0 token is never sent to opencode.ai.
 # base_url = https://opencode.ai/inference/systemone
 # model = jev-1.13-free
+# api_key_env =
