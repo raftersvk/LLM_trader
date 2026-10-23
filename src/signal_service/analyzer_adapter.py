@@ -29,6 +29,7 @@ from src.signal_service.contract import (
     parse_iso,
     timeframe_seconds,
 )
+from src.signal_service.jev_gate import GateResult, JevGate, build_state
 from src.signal_service.storage import SignalStorage, write_heartbeat
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,7 @@ class PairAnalyzer:
         min_confidence: float = DEFAULT_MIN_CONFIDENCE,
         use_news: bool = True,
         use_chart: bool = True,
+        jev_gate: Optional[JevGate] = None,
     ) -> None:
         """Bind a dedicated engine for a single pair.
 
@@ -167,6 +169,8 @@ class PairAnalyzer:
             min_confidence: Minimum confidence to approve risk.
             use_news: Enable news context (ablation flag).
             use_chart: Enable chart image analysis (ablation flag).
+            jev_gate: Optional JEV gate; modes pre/post/pre_post. When omitted
+                or off, no JEV call is made and behaviour is unchanged.
         """
         self.engine = engine
         self.symbol = symbol
@@ -175,6 +179,7 @@ class PairAnalyzer:
         self.min_confidence = min_confidence
         self.use_news = use_news
         self.use_chart = use_chart
+        self.jev_gate = jev_gate
         self._flags_applied = False
 
     # ------------------------------------------------------------ ablation flags
@@ -216,6 +221,27 @@ class PairAnalyzer:
         if not self._flags_applied:
             self._apply_flags()
 
+        # JEV gate: `pre` only decides whether the LLM is called; `post` vetoes a
+        # non-HOLD decision. The phase-1 risk layer keeps flagging an explicit
+        # JEV bias conflict whenever a JEV payload is attached.
+        as_of = self._analysis_as_of(candle_open_time)
+        pre_result: Optional[GateResult] = None
+        state: Optional[Dict[str, Any]] = None
+        if self.jev_gate is not None and self.jev_gate.uses_pre():
+            # Live-mode context may still hold the candles truncated during the
+            # previous cycle: refresh and truncate before gating so the
+            # pre-gate decides on the candle that just closed.
+            await self._refresh_context(as_of)
+            state = self._jev_state(as_of)
+            if state is None:
+                logger.warning("JEV pre-gate skipped for %s: no closed-candle state", self.symbol)
+            else:
+                pre_result = await self.jev_gate.check_pre(state)
+                if pre_result.consulted and not pre_result.allowed:
+                    logger.info("JEV pre-gate blocked %s: %s", self.symbol, pre_result.reason)
+                    return self._gate_blocked_signal(pre_result, candle_open_time)
+
+        # Hide the still-forming candle from the analysis window.
         candle_open_dt = parse_iso(candle_open_time) if candle_open_time is not None else None
         result: Dict[str, Any]
         window_state: Dict[str, bool] = {"empty": False}
@@ -251,9 +277,30 @@ class PairAnalyzer:
                 raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
             )
 
+        veto_reason: Optional[str] = None
         try:
             draft = self._extract_draft(result, raw_response)
-            return self._build_signal(draft, raw_response, candle_open_time)
+
+            post_result: Optional[GateResult] = None
+            if self.jev_gate is not None and self.jev_gate.uses_post() and draft.action in ("BUY", "SELL"):
+                # Rebuild the state from the just-refreshed context: after
+                # _analyze_market (and the closed-candle window truncation) the
+                # context includes the candle analysed this cycle, so the post
+                # gate never decides on a one-candle-stale series.
+                state = self._jev_state(as_of)
+                if state is None:
+                    logger.warning("JEV post-gate skipped for %s: no closed-candle state", self.symbol)
+                else:
+                    post_result = await self.jev_gate.check_post(state, draft.action)
+                    if not post_result.allowed:
+                        veto_reason = post_result.reason
+                        logger.info("JEV post-gate vetoed %s %s: %s", self.symbol, draft.action, veto_reason)
+
+            jev_result = post_result if post_result is not None and post_result.signal else pre_result
+            if jev_result is not None and jev_result.signal is not None:
+                draft.jev = jev_result.signal.to_payload()
+
+            return self._build_signal(draft, raw_response, candle_open_time, veto_reason=veto_reason)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # Extraction and contract validation failures must still produce a
             # signal: one explicable-but-invalid LLM answer must not lose the
@@ -267,6 +314,77 @@ class PairAnalyzer:
                 provider=provider,
                 raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
             )
+
+    # --------------------------------------------------------------- jev state
+    async def _refresh_context(self, as_of: datetime) -> None:
+        """Collect fresh candles and truncate the context to closed-at-or-before as_of.
+
+        The pre-gate runs before the analysis, but the engine context may still
+        hold the candles truncated during the previous cycle. Refreshing here
+        lets the pre-gate decide on the candle that just closed instead of the
+        previous one. Best-effort: any collection error leaves the context
+        untouched and the gate fails open downstream.
+        """
+        collector = getattr(self.engine, "data_collector", None)
+        if collector is None:
+            return
+        try:
+            await collector.collect_data()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("JEV pre-gate data refresh failed for %s: %s", self.symbol, exc)
+            return
+        context = self.engine.context
+        if context is None:
+            return
+        timestamps = getattr(context, "timestamps", None)
+        truncate_context_to_as_of(
+            context,
+            getattr(context, "ohlcv_candles", None),
+            list(timestamps) if timestamps is not None else [],
+            self.timeframe,
+            as_of,
+        )
+
+    def _analysis_as_of(self, candle_open_time: Optional[str]) -> datetime:
+        """Reference time of the analysis: the analysed candle close or now."""
+        if candle_open_time is not None:
+            return parse_iso(candle_open_time) + timedelta(seconds=timeframe_seconds(self.timeframe))
+        return datetime.now(timezone.utc)
+
+    def _jev_state(self, as_of: datetime) -> Optional[Dict[str, Any]]:
+        """Build the no-look-ahead JEV state from the engine's closed candles."""
+        context = getattr(self.engine, "context", None)
+        candles = getattr(context, "ohlcv_candles", None) if context is not None else None
+        # OHLCV data is a NumPy array in the real engine: never use truthiness.
+        if candles is None or len(candles) == 0:
+            return None
+        timestamps = getattr(context, "timestamps", None)
+        try:
+            if timestamps is not None and len(timestamps) == len(candles):
+                return build_state(
+                    self.symbol,
+                    self.timeframe,
+                    candles,
+                    timestamps=[self._as_datetime(ts) for ts in timestamps],
+                    as_of=as_of,
+                )
+            # No timestamps: be conservative and drop the last (possibly forming) candle.
+            if len(candles) < 3:
+                return None
+            return build_state(self.symbol, self.timeframe, list(candles)[:-1])
+        except (ValueError, TypeError) as exc:
+            logger.warning("Cannot build JEV state for %s: %s", self.symbol, exc)
+            return None
+
+    @staticmethod
+    def _as_datetime(value: Any) -> datetime:
+        """Coerce datetime / epoch milliseconds / ISO string to aware UTC."""
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, (int, float)):
+            seconds = float(value) / 1000.0 if float(value) > 1e11 else float(value)
+            return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        return parse_iso(str(value))
 
     def _resolve_model_provider(self, result: Dict[str, Any]) -> tuple[str, str]:
         """Resolve the real model/provider, never returning 'unspecified'."""
@@ -425,6 +543,7 @@ class PairAnalyzer:
         draft: SignalDraft,
         raw_response: str,
         candle_open_time: Optional[str],
+        veto_reason: Optional[str] = None,
     ) -> Signal:
         candle_open_dt = (
             parse_iso(candle_open_time)
@@ -435,10 +554,16 @@ class PairAnalyzer:
         confidence_float = confidence_to_float(draft.confidence_raw)
         entry_price = self._entry_price()
         approved, reason = self._risk_approved(draft, confidence_float, entry_price)
+        if veto_reason is not None:
+            approved = False
+            reason = veto_reason
         if not approved:
             logger.info(
                 "risk_approved=false for %s %s: %s", self.symbol, draft.action, reason
             )
+        reasoning = draft.reasoning
+        if veto_reason is not None:
+            reasoning = f"{reasoning} [JEV veto: {veto_reason}]"[:8000]
         signal = Signal(
             schema_version="1.0",
             decision_id=build_decision_id(self.symbol, self.timeframe, open_at),
@@ -459,7 +584,7 @@ class PairAnalyzer:
                 if draft.position_size is not None
                 else DEFAULT_POSITION_SIZE_PCT
             ),
-            reasoning=draft.reasoning,
+            reasoning=reasoning,
             model=draft.model,
             provider=draft.provider,
             prompt_version=draft.prompt_version,
@@ -487,6 +612,45 @@ class PairAnalyzer:
         return None
 
     # --------------------------------------------------------------- fallback
+    # --------------------------------------------------------------- fallback
+    def _gate_blocked_signal(self, result: GateResult, candle_open_time: Optional[str]) -> Signal:
+        """Build the HOLD signal produced when the JEV pre-gate blocks the LLM.
+
+        The LLM is never called in this path. The signal stays contract-valid:
+        HOLD, risk_approved=false, `source="jev"` and the JEV payload.
+        """
+        candle_open_dt = (
+            parse_iso(candle_open_time)
+            if candle_open_time is not None
+            else self.current_candle_bounds()
+        )
+        open_at, close_at, expires_at = self._candle_times(candle_open_dt)
+        jev_signal = result.signal
+        signal = Signal(
+            schema_version="1.0",
+            decision_id=build_decision_id(self.symbol, self.timeframe, open_at),
+            source="jev",
+            symbol=self.symbol,
+            timeframe=self.timeframe,
+            candle_open_time=open_at,
+            candle_close_time=close_at,
+            created_at=iso_z(datetime.now(timezone.utc)),
+            expires_at=expires_at,
+            action="HOLD",
+            confidence=0.0,
+            risk_approved=False,
+            sl=None,
+            tp=None,
+            position_size_pct=DEFAULT_POSITION_SIZE_PCT,
+            reasoning=result.reason[:8000],
+            model=jev_signal.model if jev_signal is not None else "unknown",
+            provider="jev",
+            prompt_version=PROMPT_VERSION,
+            jev=jev_signal.to_payload() if jev_signal is not None else None,
+        )
+        signal.validate()
+        return signal
+
     def _hold_fallback(
         self,
         reasoning: str,
