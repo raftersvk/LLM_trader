@@ -45,6 +45,7 @@ from src.trading import (
 )
 from src.trading.vector_memory import VectorMemoryService
 from src.dashboard.server import DashboardServer
+from src.dashboard.registries import AnalysisEngineRegistry, VectorMemoryRegistry
 from src.notifiers import DiscordNotifier, ConsoleNotifier
 from src.utils.keyboard_handler import KeyboardHandler
 from src.parsing.unified_parser import UnifiedParser
@@ -166,8 +167,10 @@ class CompositionRoot:
         self.logger.install_crash_handler()
         self.loop = None
         self.shutdown_manager = None
-        self.engine_registry = None
-        self.vector_memory_registry = None
+        # Created up front so the trading layer and BotDependencyFactory receive
+        # the real registries rather than None and can register per-pair services.
+        self.engine_registry = AnalysisEngineRegistry()
+        self.vector_memory_registry = VectorMemoryRegistry()
 
     async def build_dependencies(self) -> dict:
         """Build all dependencies for the trading bot via segmented provisions."""
@@ -213,12 +216,8 @@ class CompositionRoot:
         }
 
         # Dashboard needs an analysis_engine; create one for dashboard monitoring purposes.
-        # Multi-pair bots get their own engine instances per pair via the factory.
-        from src.dashboard.registries import AnalysisEngineRegistry, VectorMemoryRegistry
-
-        self.engine_registry = AnalysisEngineRegistry()
-        self.vector_memory_registry = VectorMemoryRegistry()
-
+        # Multi-pair bots get their own engine instances per pair via the factory,
+        # which was provisioned above with these registries.
         dashboard_engine = analyzer['engine_factory'](self.config.CRYPTO_PAIR)
         self.engine_registry.register(self.config.CRYPTO_PAIR, dashboard_engine)
         self.vector_memory_registry.register(self.config.CRYPTO_PAIR, trading['brain_service'].vector_memory if trading['brain_service'] else None)

@@ -111,8 +111,16 @@ class PortfolioCapitalService:
             direction: LONG or SHORT
 
         Returns:
-            True if reservation succeeded, False if insufficient capital
+            True if reservation succeeded, False if capital is unavailable or
+            the symbol already has an allocation
         """
+        if symbol in self._state.positions:
+            self.logger.warning(
+                "Cannot reserve $%s for %s: position already allocated",
+                f"{quote_amount:,.2f}", symbol
+            )
+            return False
+
         available = self.total_unallocated
         if available < quote_amount:
             self.logger.warning(

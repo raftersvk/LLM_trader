@@ -52,6 +52,17 @@ class LitellmAIClient(BaseAIClient):
             # We use a dummy value
             self.litellm_kwargs["api_key"] = "ollama"
 
+        extra_headers = config.get("extra_headers")
+        if extra_headers:
+            self.litellm_kwargs["extra_headers"] = dict(extra_headers)
+
+        # LiteLLM routes by provider prefix, while OpenAI-compatible endpoints
+        # such as OpenCode Go expect the bare model id (provider-prefixed ids
+        # are rejected with HTTP 400 "Model is unavailable"). Force the OpenAI
+        # routing and keep the configured model id unchanged.
+        if self.provider == "litellm":
+            self.litellm_kwargs["custom_llm_provider"] = "openai"
+
         self.logger.debug(
             "LitellmAIClient initialized - provider: %s, model: %s, base_url: %s, api_key_set: %s",
             self.provider,
@@ -59,8 +70,6 @@ class LitellmAIClient(BaseAIClient):
             self.base_url,
             bool(self.api_key),
         )
-        if self.api_key:
-            self.logger.debug("API key prefix: %s", self.api_key[:8])
 
     async def _initialize_client(self) -> None:
         """LiteLLM does not need specific async initialization."""
@@ -177,7 +186,7 @@ class LitellmAIClient(BaseAIClient):
             )
             response = await acompletion(
                 model=full_model,
-                messages=messages,
+                messages=messages_with_image,
                 **params,
                 **self.litellm_kwargs,
             )
@@ -247,11 +256,29 @@ class LitellmAIClient(BaseAIClient):
             )
 
     def _get_full_model_name(self, model: str) -> str:
-        """Return the model name as-is from config.
+        """Build the LiteLLM model identifier for this client's provider.
 
-        LiteLLM expects the model identifier as configured by the user.
+        The ``litellm`` provider targets an OpenAI-compatible endpoint (OpenCode
+        Go) that only accepts the bare model id; its OpenAI routing comes from
+        the ``custom_llm_provider`` override set in ``__init__``. Every other
+        provider keeps the ``<provider>/<model>`` prefix, which is what makes
+        LiteLLM resolve that provider's transport (e.g. ``openrouter/``) rather
+        than inferring one from the model name and ignoring the base_url.
         """
-        return model if model else self.default_model
+        if not model:
+            model = self.default_model
+
+        if self.provider == "litellm":
+            return model
+        if self.provider == "openrouter":
+            return f"openrouter/{model}"
+        # OpenAI-compatible endpoints (BlockRun, LM Studio, Ollama) use the
+        # openai/ prefix together with their configured base_url.
+        if self.base_url:
+            return f"openai/{model}"
+        if self.provider == "ollama":
+            return f"ollama/{model}"
+        return f"{self.provider}/{model}"
 
     def _build_litellm_params(self, model_config: Dict[str, Any]) -> Dict[str, Any]:
         """Build LiteLLM params from model config."""
@@ -274,8 +301,10 @@ class LitellmAIClient(BaseAIClient):
 
     def _create_response_from_litellm(self, response) -> ChatResponseModel:
         """Convert LiteLLM response to standard ChatResponseModel."""
+        finish_reason = None
         if hasattr(response, "choices") and response.choices:
             choice = response.choices[0]
+            finish_reason = getattr(choice, "finish_reason", None)
             if hasattr(choice, "message"):
                 content = choice.message.content if choice.message else ""
             elif hasattr(choice, "text"):
@@ -289,6 +318,11 @@ class LitellmAIClient(BaseAIClient):
         else:
             content = str(response)
 
+        if content is None:
+            content = ""
+        elif not isinstance(content, str):
+            content = str(content)
+
         usage = UsageModel(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         if hasattr(response, "usage") and response.usage:
             usage = UsageModel(
@@ -299,7 +333,7 @@ class LitellmAIClient(BaseAIClient):
 
         choice_model = ChoiceModel(
             message=MessageModel(role="assistant", content=content),
-            finish_reason="stop",
+            finish_reason=finish_reason,
             index=0,
         )
         return ChatResponseModel(

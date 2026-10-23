@@ -204,7 +204,7 @@ class ModelManager(ModelManagerProtocol):
         provider_name = (provider_override or self.provider or "unknown").lower()
         if model_override:
             return provider_name, model_override
-        if provider_name in ("googleai", "openrouter", "local"):
+        if provider_name in ("googleai", "openrouter", "litellm"):
             return provider_name, self._orchestrator.resolve_model(provider_name)
         if provider_name == "all":
             chain: List[str] = []
@@ -213,6 +213,8 @@ class ModelManager(ModelManagerProtocol):
             if chart:
                 if self.config.OPENROUTER_BASE_MODEL:
                     chain.append(self.config.OPENROUTER_BASE_MODEL)
+                if self.config.LITELLM_MODEL:
+                    chain.append(self.config.LITELLM_MODEL)
             else:
                 if self.config.LITELLM_MODEL:
                     chain.append(self.config.LITELLM_MODEL)
