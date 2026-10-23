@@ -208,14 +208,23 @@ async def test_hold_fallback_on_timeout():
 
 @pytest.mark.asyncio
 async def test_no_raw_response_stored_in_signal():
+    """The privacy guarantee: only reasoning survives, never the raw JSON."""
     engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
     analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL)
     signal = await analyzer.analyze()
-    dumped = repr(signal.to_dict())
-    assert "breakout" not in dumped or "reasoning" in dumped
-    # only the reasoning text (a summarised form) is allowed, never the full
-    # raw response; verify the raw text is limited to its reasoning field.
-    assert signal.to_dict().get("raw_response") is None
+
+    payload = signal.to_dict()
+    dumped = json.dumps(payload)
+
+    # No raw-response key and no raw JSON structure in the serialized signal.
+    assert "raw_response" not in payload
+    for token in ('"raw_response"', '"stop_loss"', '"take_profit"', '"position_size"', '"signal"', '"HIGH"'):
+        assert token not in dumped, f"raw response token leaked into the signal: {token}"
+
+    # The legitimate summarised reasoning text is preserved intact.
+    assert payload["reasoning"] == "breakout"
+    # Auditability comes from the hash, not from retaining the response.
+    assert signal.raw_response_hash == hash_raw_response(RAW_BUY)
 
 
 @pytest.mark.asyncio
