@@ -17,6 +17,7 @@ from typing import Callable, Dict, List, Optional
 
 from src.signal_service.analyzer_adapter import PairAnalyzer, analyze_and_store
 from src.signal_service.contract import iso_z, timeframe_seconds, utc_now_iso
+from src.signal_service.jev_gate import JevGate
 from src.signal_service.storage import (
     SignalStorage,
     default_signals_dir,
@@ -42,6 +43,7 @@ class SignalService:
         buffer_seconds: int = 120,
         timeout_seconds: float = 300.0,
         max_cycles: Optional[int] = None,
+        jev_gate: Optional[JevGate] = None,
         debug_cycle_seconds: Optional[float] = None,
         dedupe: bool = True,
     ) -> None:
@@ -55,6 +57,8 @@ class SignalService:
             buffer_seconds: Extra wait after candle close before analysis.
             timeout_seconds: Hard timeout per analysis (HOLD fallback after).
             max_cycles: Optional stop after N candle cycles (for testing).
+            jev_gate: Optional JEV gate attached to each analyzer that does not
+                already carry one. Default mode is off (no JEV call).
             debug_cycle_seconds: Debug mode. When set, the service analyses the
                 last closed candle every N seconds instead of waiting for the
                 next candle close (lets you replay the 1h analysis every minute).
@@ -68,6 +72,7 @@ class SignalService:
         self.buffer_seconds = buffer_seconds
         self.timeout_seconds = timeout_seconds
         self.max_cycles = max_cycles
+        self.jev_gate = jev_gate
         self.debug_cycle_seconds = debug_cycle_seconds
         self.dedupe = dedupe
         self._stop_requested = False
@@ -80,7 +85,10 @@ class SignalService:
         if symbol not in self.storages:
             self.storages[symbol] = SignalStorage(signal_file_path(self.signals_dir, symbol, self.timeframe))
         if symbol not in self.analyzers:
-            self.analyzers[symbol] = self.analyzer_factory(symbol)
+            analyzer = self.analyzer_factory(symbol)
+            if self.jev_gate is not None and getattr(analyzer, "jev_gate", None) is None:
+                analyzer.jev_gate = self.jev_gate
+            self.analyzers[symbol] = analyzer
         return self.analyzers[symbol], self.storages[symbol]
 
     def request_stop(self) -> None:
@@ -174,8 +182,10 @@ class SignalService:
         seconds, so the hourly analysis can be replayed once a minute.
         """
         logger.info(
-            "Signal service starting: pairs=%s timeframe=%s buffer=%ss debug_cycle=%s",
-            self.pairs, self.timeframe, self.buffer_seconds, self.debug_cycle_seconds,
+            "Signal service starting: pairs=%s timeframe=%s buffer=%ss jev_mode=%s debug_cycle=%s",
+            self.pairs, self.timeframe, self.buffer_seconds,
+            self.jev_gate.mode.value if self.jev_gate is not None else "off",
+            self.debug_cycle_seconds,
         )
         cycles = 0
         if self.debug_cycle_seconds:
