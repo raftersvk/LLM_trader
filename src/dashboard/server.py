@@ -393,17 +393,11 @@ class DashboardServer:
         return app
 
     async def start(self):
-        """Start the uvicorn server in an asyncio loop."""
-        import sys
-        import threading
+        """Start the uvicorn server as a background asyncio task."""
         # Guard against double-start: if already running, do nothing
         if self.server_task and not self.server_task.done():
             return self.server_task
 
-        sys.stdout.write(f"DEBUG: start() called with host={self.host}, port={self.port}\n")
-        sys.stdout.flush()
-        sys.stdout.write(f"DEBUG: Creating uvicorn.Config...\n")
-        sys.stdout.flush()
         config = uvicorn.Config(
             app=self.app,
             host=self.host,
@@ -413,55 +407,40 @@ class DashboardServer:
             ws="wsproto",
             proxy_headers=True,
         )
-        sys.stdout.write(f"DEBUG: config.port = {config.port}, config.host = {config.host}\n")
-        sys.stdout.flush()
-        sys.stdout.write(f"DEBUG: Creating uvicorn.Server...\n")
-        sys.stdout.flush()
         self._server = uvicorn.Server(config)
-        sys.stdout.write(f"DEBUG: _server created: {self._server}\n")
-        sys.stdout.flush()
+        self.server_task = asyncio.create_task(
+            self._run_server(),
+            name=f"DashboardServer-{self.port}"
+        )
 
-        def run_server():
-            sys.stdout.write(f"DEBUG: run_server thread started\n")
-            sys.stdout.flush()
-            self._server.run()
-            sys.stdout.write(f"DEBUG: run_server thread finished\n")
-            sys.stdout.flush()
-
-        sys.stdout.write(f"DEBUG: Creating thread for server...\n")
-        sys.stdout.flush()
-        server_thread = threading.Thread(target=run_server, daemon=True)
-        server_thread.start()
-        sys.stdout.write(f"DEBUG: server_thread started: {server_thread}\n")
-        sys.stdout.flush()
-
-        # Wait for server to be ready
-        for _ in range(50):  # 5 seconds max
+        # Wait for server to be ready (5 seconds max)
+        for _ in range(50):
             await asyncio.sleep(0.1)
-            if self._server.started:
-                sys.stdout.write(f"DEBUG: server reports started!\n")
-                sys.stdout.flush()
+            if self._server.started or self.server_task.done():
                 break
 
-        sys.stdout.write(f"DEBUG: returning from start()\n")
-        sys.stdout.flush()
+        if not self._server.started:
+            if self.server_task.done() and not self.server_task.cancelled():
+                error = self.server_task.exception()
+                if error:
+                    self.logger.error("Dashboard server failed to start: %s", error)
+            else:
+                self.logger.warning(
+                    "Dashboard server did not report started within 5 seconds (port %s may be in use)",
+                    self.port
+                )
+
+        return self.server_task
 
     async def _run_server(self):
-        """Run uvicorn server with exception handling."""
-        import sys
-        sys.stdout.write(f"DEBUG: _run_server starting\n", flush=True)
+        """Run the uvicorn server until it is stopped."""
         try:
-            sys.stdout.write(f"DEBUG: about to call serve()\n", flush=True)
             await self._server.serve()
-            sys.stdout.write(f"DEBUG: serve() completed\n", flush=True)
         except asyncio.CancelledError:
-            sys.stdout.write(f"DEBUG: CancelledError in _run_server\n", flush=True)
-            pass
+            self.logger.info("Dashboard server task cancelled")
+            raise
         except Exception as e:
-            sys.stdout.write(f"DEBUG: Exception in _run_server: {e}\n", flush=True)
-            import traceback
-            traceback.print_exc(file=sys.stdout)
-            sys.stdout.flush()
+            self.logger.error("Dashboard server failed: %s", e, exc_info=True)
             raise
 
     async def stop(self):
