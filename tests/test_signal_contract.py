@@ -148,3 +148,13 @@ def test_jev_payload_shape():
     assert round_trip(signal).jev == signal.jev
     with pytest.raises(SignalValidationError):
         Signal(**make_signal_kwargs(jev={"unexpected": 1})).validate()
+
+def test_package_all_names_are_defined():
+    """Every __all__ entry must exist, otherwise star-import raises AttributeError."""
+    from typing import get_args
+
+    import src.signal_service as package
+
+    missing = [name for name in package.__all__ if not hasattr(package, name)]
+    assert missing == []
+    assert set(get_args(package.Action)) == ALLOWED_ACTIONS

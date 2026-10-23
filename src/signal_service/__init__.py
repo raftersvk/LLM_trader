@@ -6,6 +6,7 @@ signals consumed by Freqtrade through JSONL files.
 
 from src.signal_service.contract import (
     ALLOWED_ACTIONS,
+    Action,
     CONFIDENCE_MAP,
     SIGNAL_SCHEMA_VERSION,
     Signal,

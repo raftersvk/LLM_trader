@@ -12,7 +12,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 SIGNAL_SCHEMA_VERSION = "1.0"
 
@@ -25,6 +25,9 @@ SUPPORTED_TIMEFRAMES = {
     "4h": 14400,
     "1d": 86400,
 }
+
+#: The only signal actions in contract v1.
+Action = Literal["BUY", "SELL", "HOLD"]
 
 ALLOWED_ACTIONS = frozenset({"BUY", "SELL", "HOLD"})
 
