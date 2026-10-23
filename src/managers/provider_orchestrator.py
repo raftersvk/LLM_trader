@@ -106,7 +106,13 @@ class ProviderOrchestrator:
     def supports_chart(self, provider: str) -> bool:
         """Check if provider supports chart analysis."""
         if provider == "all":
-            return self.is_available("googleai") or self.is_available("openrouter") or self.is_available("blockrun")
+            return (
+                self.is_available("googleai")
+                or self.is_available("openrouter")
+                or self.is_available("blockrun")
+                or self.is_available("litellm")
+                or self.is_available("vision_litellm")
+            )
         metadata = self._providers.get(provider)
         return metadata.supports_chart if metadata and metadata.is_available() else False
 
@@ -144,7 +150,7 @@ class ProviderOrchestrator:
         if provider == "googleai":
             return await self._invoke_google(metadata, messages, effective_model, chart, chart_image)
         if provider == "litellm":
-            return await self._invoke_litellm(metadata, messages, effective_model, chart)
+            return await self._invoke_litellm(metadata, messages, effective_model, chart, chart_image)
         if provider == "openrouter":
             return await self._invoke_openrouter(metadata, messages, effective_model, chart, chart_image)
         if provider == "blockrun":
@@ -261,7 +267,7 @@ class ProviderOrchestrator:
                     chart_image=chart_image
                 )
             return await self.invoke_with_fallback(
-                ["googleai", "openrouter", "blockrun"], messages, chart=True, chart_image=chart_image, model=model
+                ["googleai", "openrouter", "blockrun", "litellm"], messages, chart=True, chart_image=chart_image, model=model
             )
         if self.is_available(effective_provider):
             effective_model = self.resolve_model(effective_provider, model)
@@ -445,7 +451,7 @@ class ProviderOrchestrator:
             elif provider == "googleai":
                 self.logger.error("Google AI client not initialized. Check GOOGLE_STUDIO_API_KEY in keys.env")
             elif provider == "litellm":
-                self.logger.error("LiteLLM client not initialized. Check LITELLM_BASE_URL in config.ini")
+                self.logger.error("LiteLLM client not initialized. Check LITELLM_BASE_URL in config.ini and LITELLM_API_KEY in keys.env")
             elif provider == "blockrun":
                 self.logger.error("BlockRun client not initialized. Check BLOCKRUN_WALLET_KEY in keys.env")
 
