@@ -85,3 +85,85 @@ async def test_pace_is_noop_without_delay(monkeypatch):
     await bench_jev._pace(-1.0)
 
     assert real_sleep_calls == []
+
+
+class _FakeExchangeManager:
+    """Exchange manager stub resolving one supported pair."""
+
+    def __init__(self, exchange: Any = "fake-exchange") -> None:
+        self._exchange = exchange
+        self.asked: List[str] = []
+
+    async def find_symbol_exchange(self, symbol: str):
+        self.asked.append(symbol)
+        return (self._exchange, "fake")
+
+
+class _RecordingEngine:
+    """Engine stub recording initialize_for_symbol and exposing a context."""
+
+    def __init__(self) -> None:
+        self.context = None
+        self.init_calls: List[Dict[str, Any]] = []
+
+    def initialize_for_symbol(self, symbol=None, exchange=None, timeframe=None):
+        self.init_calls.append(
+            {"symbol": symbol, "exchange": exchange, "timeframe": timeframe}
+        )
+        self.context = type("Ctx", (), {"ohlcv_candles": None, "timestamps": []})()
+
+
+@pytest.mark.asyncio
+async def test_llm_backend_initializes_engine_before_use(monkeypatch):
+    """The engine must be initialized, otherwise the injector crashes on context=None."""
+    import types
+
+    engine = _RecordingEngine()
+    exchange_manager = _FakeExchangeManager()
+
+    class _Root:
+        async def build_dependencies(self):
+            return {
+                "exchange_manager": exchange_manager,
+                "market_analyzer_factory": lambda _symbol: engine,
+            }
+
+    monkeypatch.setitem(
+        sys.modules, "start", types.SimpleNamespace(CompositionRoot=_Root),
+    )
+    backend = bench_jev.LLMBackend("BTC/USDT", "1h")
+
+    await backend.initialize()
+
+    assert backend.available is True, backend.reason
+    assert exchange_manager.asked == ["BTC/USDT"]
+    assert engine.init_calls == [
+        {"symbol": "BTC/USDT", "exchange": "fake-exchange", "timeframe": "1h"}
+    ]
+    assert backend.exchange_id == "fake"
+
+
+@pytest.mark.asyncio
+async def test_llm_backend_reports_unsupported_pair(monkeypatch):
+    """An unsupported pair must mark the backend unavailable, not crash."""
+    import types
+
+    engine = _RecordingEngine()
+
+    class _Root:
+        async def build_dependencies(self):
+            return {
+                "exchange_manager": _FakeExchangeManager(exchange=None),
+                "market_analyzer_factory": lambda _symbol: engine,
+            }
+
+    monkeypatch.setitem(
+        sys.modules, "start", types.SimpleNamespace(CompositionRoot=_Root),
+    )
+    backend = bench_jev.LLMBackend("NOPE/USDT", "1h")
+
+    await backend.initialize()
+
+    assert backend.available is False
+    assert "No exchange supports" in (backend.reason or "")
+    assert engine.init_calls == []

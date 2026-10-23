@@ -221,6 +221,7 @@ class LLMBackend:
         self.timeframe = timeframe
         self.available = False
         self.reason: Optional[str] = None
+        self.exchange_id: Optional[str] = None
         self._analyzer = None
         self._injector = None
 
@@ -231,7 +232,17 @@ class LLMBackend:
 
             root = CompositionRoot()
             deps = await root.build_dependencies()
+            exchange_manager = deps["exchange_manager"]
+            exchange, exchange_id = await exchange_manager.find_symbol_exchange(self.symbol)
+            if exchange is None:
+                raise RuntimeError(f"No exchange supports {self.symbol!r}")
             engine = deps["market_analyzer_factory"](self.symbol)
+            # AnalysisEngine.context stays None until initialize_for_symbol();
+            # ReplayDataInjector.install() would otherwise crash on None.
+            engine.initialize_for_symbol(
+                symbol=self.symbol, exchange=exchange, timeframe=self.timeframe,
+            )
+            self.exchange_id = exchange_id
             from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
 
             self._analyzer = PairAnalyzer(
