@@ -631,6 +631,31 @@ async def analyze_with_timeout(
         )
 
 
+def _refresh_heartbeat(
+    analyzer: PairAnalyzer,
+    storage: SignalStorage,
+    candle_open_time: Optional[str],
+    signal: Optional[Signal] = None,
+) -> None:
+    """Best-effort heartbeat refresh; never masks the caller's own failure."""
+    try:
+        if signal is not None:
+            heartbeat_candle = signal.candle_open_time
+        elif candle_open_time is not None:
+            heartbeat_candle = iso_z(parse_iso(candle_open_time))
+        else:
+            heartbeat_candle = iso_z(analyzer.current_candle_bounds())
+        write_heartbeat(
+            signals_dir=storage.path.rsplit("/", 1)[0],
+            symbol=analyzer.symbol,
+            timeframe=analyzer.timeframe,
+            candle_open_time=heartbeat_candle,
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # Liveness must not turn a storage/analysis error into a different one.
+        logger.warning("Heartbeat refresh failed for %s: %s", analyzer.symbol, exc)
+
+
 async def analyze_and_store(
     analyzer: PairAnalyzer,
     storage: SignalStorage,
@@ -640,19 +665,21 @@ async def analyze_and_store(
 ) -> Signal:
     """Analyze one closed candle for a pair and append the signal to its JSONL file.
 
-    Heartbeat is refreshed regardless of the outcome.
+    Heartbeat is refreshed regardless of the outcome, including analysis,
+    validation and append failures.
 
     Args:
         dedupe: Passed to storage. Set False only for debug output directories.
     """
-    signal = await analyze_with_timeout(analyzer, timeout_seconds, candle_open_time=candle_open_time)
-    appended = storage.append(signal, dedupe=dedupe)
-    write_heartbeat(
-        signals_dir=storage.path.rsplit("/", 1)[0],
-        symbol=analyzer.symbol,
-        timeframe=analyzer.timeframe,
-        candle_open_time=signal.candle_open_time,
-    )
+    signal: Optional[Signal] = None
+    appended = False
+    try:
+        signal = await analyze_with_timeout(
+            analyzer, timeout_seconds, candle_open_time=candle_open_time,
+        )
+        appended = storage.append(signal, dedupe=dedupe)
+    finally:
+        _refresh_heartbeat(analyzer, storage, candle_open_time, signal)
     if not appended:
         logger.info("Signal for %s already stored: skipped", signal.decision_id)
     return signal

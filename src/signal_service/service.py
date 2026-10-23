@@ -141,6 +141,13 @@ class SignalService:
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.exception("Cycle failed for %s: %s", symbol, exc)
                 results[symbol] = "error"
+                # Keep liveness truthful: a failed pair is still running, so
+                # TTL monitoring must not report it as dead.
+                try:
+                    write_heartbeat(self.signals_dir, symbol, self.timeframe, candle_open_iso)
+                    self.heartbeats[symbol] = utc_now_iso()
+                except Exception as heartbeat_exc:  # pylint: disable=broad-exception-caught
+                    logger.warning("Heartbeat refresh failed for %s: %s", symbol, heartbeat_exc)
         logger.info("Cycle done for candle %s: %s", candle_open, results)
         return results
 

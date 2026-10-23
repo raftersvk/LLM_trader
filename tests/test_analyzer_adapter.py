@@ -798,3 +798,63 @@ async def test_contract_invalid_output_is_stored_with_heartbeat(tmp_path):
     heartbeat = json.loads((signals_dir / "heartbeat.json").read_text(encoding="utf-8"))
     assert heartbeat["symbol"] == SYMBOL
     assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"
+
+
+class FailingStorage:
+    """Storage stub whose append always fails (e.g. disk or permission error)."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def append(self, _signal, dedupe=True):
+        raise OSError("disk full")
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_refreshed_when_append_fails(tmp_path):
+    """A failed append must not leave heartbeat.json stale for the pair."""
+    engine = FakeEngine(
+        raw_response=RAW_BUY, result=dict(RESULT_META), config=FakeEngineConfig(),
+    )
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    signals_dir = tmp_path / "signals"
+    signals_dir.mkdir()
+    storage = FailingStorage(str(signals_dir / "BTC_USDT_1h.jsonl"))
+
+    with pytest.raises(OSError):
+        await analyze_and_store(
+            analyzer, storage, 5.0, candle_open_time="2026-10-23T14:00:00Z",
+        )
+
+    heartbeat = json.loads((signals_dir / "heartbeat.json").read_text(encoding="utf-8"))
+    assert heartbeat["symbol"] == SYMBOL
+    assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"
+
+
+class RaisingAnalyzer:
+    """Analyzer whose analysis blows up outside analyze()'s own fallback."""
+
+    symbol = SYMBOL
+    timeframe = "1h"
+
+    async def analyze(self, candle_open_time=None):
+        raise RuntimeError("boom")
+
+
+def test_run_cycle_refreshes_heartbeat_on_failure(tmp_path):
+    """A pair whose cycle errors still gets a fresh heartbeat (liveness)."""
+    from src.signal_service.service import SignalService
+
+    service = SignalService(
+        pairs=[SYMBOL],
+        timeframe="1h",
+        analyzer_factory=lambda _symbol: RaisingAnalyzer(),
+        signals_dir=str(tmp_path),
+    )
+
+    results = asyncio.run(service.run_cycle(_hour(14)))
+
+    assert results[SYMBOL] == "error"
+    heartbeat = json.loads((tmp_path / "heartbeat.json").read_text(encoding="utf-8"))
+    assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"
+    assert SYMBOL in service.heartbeats
