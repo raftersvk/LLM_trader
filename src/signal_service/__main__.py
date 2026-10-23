@@ -23,7 +23,7 @@ import json
 import logging
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
 from src.signal_service.contract import parse_iso, timeframe_seconds
@@ -83,14 +83,59 @@ def _load_engine_factory():
     return CompositionRoot()
 
 
+async def _build_initialized_engines(
+    pairs: List[str],
+    engine_factory: Callable[[str], Any],
+    exchange_manager: Any,
+    timeframe: str,
+) -> Dict[str, Any]:
+    """Create and initialize one AnalysisEngine per pair.
+
+    An AnalysisEngine must be initialized with its symbol, exchange and
+    timeframe before analysis. Otherwise the data collector has no fetcher and
+    every analysis falls back to HOLD.
+
+    Args:
+        pairs: Trading pairs to prepare.
+        engine_factory: Callable symbol -> AnalysisEngine (composition root).
+        exchange_manager: ExchangeManager used to resolve the pair's exchange.
+        timeframe: Candle timeframe label.
+
+    Returns:
+        Map symbol -> initialized engine.
+
+    Raises:
+        RuntimeError: when no exchange supports one of the requested pairs.
+    """
+    engines: Dict[str, Any] = {}
+    for symbol in pairs:
+        exchange, exchange_id = await exchange_manager.find_symbol_exchange(symbol)
+        if exchange is None:
+            raise RuntimeError(
+                f"No exchange supports {symbol!r}: analysis engine not initialized. "
+                "Fix the pair list or the exchange configuration."
+            )
+        engine = engine_factory(symbol)
+        engine.initialize_for_symbol(symbol=symbol, exchange=exchange, timeframe=timeframe)
+        engines[symbol] = engine
+        logger.info("Initialized analysis engine for %s on %s (%s)", symbol, exchange_id, timeframe)
+    return engines
+
+
 async def _run_command(args: argparse.Namespace) -> None:
     root = _load_engine_factory()
     deps = await root.build_dependencies()
-    engine_factory = deps["market_analyzer_factory"]
+    pairs = [pair.strip() for pair in args.pairs.split(",") if pair.strip()]
+    engines = await _build_initialized_engines(
+        pairs,
+        deps["market_analyzer_factory"],
+        deps["exchange_manager"],
+        args.timeframe,
+    )
 
     def analyzer_factory(symbol: str) -> PairAnalyzer:
         return PairAnalyzer(
-            engine=engine_factory(symbol),
+            engine=engines[symbol],
             symbol=symbol,
             timeframe=args.timeframe,
             use_news=args.use_news,
@@ -98,7 +143,7 @@ async def _run_command(args: argparse.Namespace) -> None:
         )
 
     service = SignalService(
-        pairs=args.pairs.split(","),
+        pairs=pairs,
         timeframe=args.timeframe,
         analyzer_factory=analyzer_factory,
         signals_dir=args.output,
@@ -146,7 +191,13 @@ async def _replay_command(args: argparse.Namespace) -> None:
 
     root = _load_engine_factory()
     deps = await root.build_dependencies()
-    engine = deps["market_analyzer_factory"](symbol)
+    engines = await _build_initialized_engines(
+        [symbol],
+        deps["market_analyzer_factory"],
+        deps["exchange_manager"],
+        args.timeframe,
+    )
+    engine = engines[symbol]
     analyzer = PairAnalyzer(
         engine=engine,
         symbol=symbol,

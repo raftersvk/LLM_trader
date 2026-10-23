@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional
 
 from src.signal_service.analyzer_adapter import PairAnalyzer, analyze_and_store
-from src.signal_service.contract import timeframe_seconds, utc_now_iso
+from src.signal_service.contract import iso_z, timeframe_seconds, utc_now_iso
 from src.signal_service.storage import (
     SignalStorage,
     heartbeat_path,
@@ -103,16 +103,28 @@ class SignalService:
 
     # ------------------------------------------------------------------ cycle
     async def run_cycle(self, candle_open: Optional[datetime] = None) -> Dict[str, str]:
-        """Analyze one candle for every pair (sequential in v1).
+        """Analyze one closed candle for every pair (sequential in v1).
+
+        Args:
+            candle_open: Open time of the candle that just closed. Defaults to
+                the candle currently running, whose close is in the future and
+                therefore never analysed by the scheduler.
 
         Returns:
             Map symbol -> decision_id produced (or "duplicate"/"error").
         """
+        candle_open_dt = candle_open if candle_open is not None else self._current_candle_open()
+        candle_open_iso = iso_z(candle_open_dt)
         results: Dict[str, str] = {}
         for symbol in self.pairs:
             analyzer, storage = self._pair_state(symbol)
             try:
-                signal = await analyze_and_store(analyzer, storage, self.timeout_seconds)
+                signal = await analyze_and_store(
+                    analyzer,
+                    storage,
+                    self.timeout_seconds,
+                    candle_open_time=candle_open_iso,
+                )
                 results[symbol] = signal.decision_id
                 self.heartbeats[symbol] = utc_now_iso()
                 write_heartbeat(self.signals_dir, symbol, self.timeframe, signal.candle_open_time)

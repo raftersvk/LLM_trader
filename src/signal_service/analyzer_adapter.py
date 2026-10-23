@@ -37,6 +37,100 @@ DEFAULT_POSITION_SIZE_PCT = 0.05
 PROMPT_VERSION = "llm-trader-signal-v1"
 
 
+def _as_utc(moment: datetime) -> datetime:
+    """Normalize a datetime to timezone-aware UTC."""
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def truncate_context_to_as_of(
+    context: Any,
+    candles: Any,
+    timestamps: Sequence[datetime],
+    timeframe: str,
+    as_of: datetime,
+) -> bool:
+    """Keep only candles closed at or before `as_of` in the analysis context.
+
+    A candle opened at T closes at T + timeframe; it is only usable when that
+    close is at or before `as_of`. This is the single no-look-ahead rule used
+    both by live analysis (hide the forming candle) and by replay.
+
+    Args:
+        context: AnalysisContext-like object carrying ohlcv_candles/timestamps.
+        candles: OHLCV rows aligned with `timestamps`.
+        timestamps: Candle open times.
+        timeframe: Candle timeframe label.
+        as_of: Latest allowed candle close time.
+
+    Returns:
+        True when at least one closed candle remains, False otherwise.
+    """
+    period = timedelta(seconds=timeframe_seconds(timeframe))
+    ordered = [(_as_utc(ts), index) for index, ts in enumerate(timestamps)]
+    keep = [(ts, index) for ts, index in ordered if ts + period <= as_of]
+    if candles is None or len(candles) == 0 or not keep:
+        context.ohlcv_candles = None
+        context.timestamps = []
+        context.current_price = None
+        return False
+    count = min(len(keep), len(candles))
+    kept_candles = candles[:count]
+    context.ohlcv_candles = kept_candles
+    context.timestamps = [ts for ts, _index in keep[:count]]
+    try:
+        context.current_price = float(kept_candles[-1][4])
+    except (IndexError, TypeError, ValueError):
+        context.current_price = None
+    return True
+
+
+class ClosedCandleWindow:
+    """Hide the still-forming candle from a single analysis.
+
+    Installed around one `PairAnalyzer.analyze(candle_open_time=...)` call:
+    after the engine collects market data, the context is truncated to candles
+    closed at or before the analysed candle's close, and `current_price` is
+    recomputed from the last closed candle.
+    """
+
+    def __init__(self, engine: Any, timeframe: str, candle_open_dt: datetime) -> None:
+        """Bind the window to an engine and the analysed candle.
+
+        Args:
+            engine: AnalysisEngine whose collector must be wrapped.
+            timeframe: Candle timeframe label.
+            candle_open_dt: Open time of the candle being analysed.
+        """
+        self.engine = engine
+        self.timeframe = timeframe
+        self.as_of = candle_open_dt + timedelta(seconds=timeframe_seconds(timeframe))
+        self.state: Dict[str, bool] = {"empty": False}
+        self._original_collect = None
+
+    async def _collect_and_truncate(self, *args: Any, **kwargs: Any) -> Any:
+        result = await self._original_collect(*args, **kwargs)
+        context = self.engine.context
+        kept = truncate_context_to_as_of(
+            context,
+            getattr(context, "ohlcv_candles", None),
+            list(getattr(context, "timestamps", None) or []),
+            self.timeframe,
+            self.as_of,
+        )
+        self.state["empty"] = not kept
+        return result
+
+    def __enter__(self) -> Dict[str, bool]:
+        self._original_collect = self.engine.data_collector.collect_data
+        self.engine.data_collector.collect_data = self._collect_and_truncate
+        return self.state
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+        if self._original_collect is not None:
+            self.engine.data_collector.collect_data = self._original_collect
+
+
+
 class PairAnalyzer:
     """Turns one AnalysisEngine analysis into a contract-valid Signal."""
 
@@ -97,8 +191,11 @@ class PairAnalyzer:
         """Run a stateless analysis and return a validated Signal.
 
         Args:
-            candle_open_time: Optional override of the analysed candle open
-                time (ISO-8601). Defaults to the engine's latest candle.
+            candle_open_time: Optional open time of the closed candle to
+                analyse (ISO-8601). When provided, the still-forming candle is
+                hidden from the analysis: only candles closed at or before this
+                candle's close are visible. Defaults to the engine's current
+                (live) behaviour.
 
         Returns:
             A validated Signal (HOLD fallback on any failure).
@@ -106,28 +203,44 @@ class PairAnalyzer:
         if not self._flags_applied:
             self._apply_flags()
 
+        candle_open_dt = parse_iso(candle_open_time) if candle_open_time is not None else None
         result: Dict[str, Any]
-        raw_response: str = ""
+        window_state: Dict[str, bool] = {"empty": False}
         try:
-            result = await self.engine.analyze_market(
-                previous_response=None,
-                previous_indicators=None,
-                position_context="",
-                performance_context="",
-                brain_service=None,
-                dynamic_thresholds=None,
-            )
+            if candle_open_dt is None:
+                result = await self._analyze_market()
+            else:
+                with ClosedCandleWindow(self.engine, self.timeframe, candle_open_dt) as window_state:
+                    result = await self._analyze_market()
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Analysis failed for %s: %s", self.symbol, exc)
-            return self._hold_fallback(reasoning=f"analysis error: {exc}")
+            return self._hold_fallback(reasoning=f"analysis error: {exc}", candle_open_dt=candle_open_dt)
+
+        if window_state["empty"]:
+            return self._hold_fallback(
+                reasoning="no closed candle available at candle close",
+                candle_open_dt=candle_open_dt,
+            )
 
         if not isinstance(result, dict) or result.get("error"):
             error = str(result.get("error")) if isinstance(result, dict) else "unknown"
-            return self._hold_fallback(reasoning=f"analysis error: {error}")
+            return self._hold_fallback(reasoning=f"analysis error: {error}", candle_open_dt=candle_open_dt)
 
         raw_response = getattr(self.engine, "last_llm_response", None) or result.get("raw_response") or ""
         draft = self._extract_draft(result, raw_response)
         return self._build_signal(draft, raw_response, candle_open_time)
+
+    async def _analyze_market(self) -> Dict[str, Any]:
+        """Call the engine statelessly (one analysis, no continuity state)."""
+        return await self.engine.analyze_market(
+            previous_response=None,
+            previous_indicators=None,
+            position_context="",
+            performance_context="",
+            brain_service=None,
+            dynamic_thresholds=None,
+        )
+
 
     # ----------------------------------------------------------------- extraction
     def _extract_draft(self, result: Dict[str, Any], raw_response: str) -> SignalDraft:
@@ -293,9 +406,15 @@ class PairAnalyzer:
         return None
 
     # --------------------------------------------------------------- fallback
-    def _hold_fallback(self, reasoning: str) -> Signal:
-        """Build the deterministic HOLD fallback signal."""
-        candle_open_dt = self.current_candle_bounds()
+    def _hold_fallback(self, reasoning: str, candle_open_dt: Optional[datetime] = None) -> Signal:
+        """Build the deterministic HOLD fallback signal.
+
+        Args:
+            reasoning: Human-readable cause, stored in the signal.
+            candle_open_dt: Open time of the analysed candle; defaults to the
+                current candle when no closed candle was supplied.
+        """
+        candle_open_dt = candle_open_dt or self.current_candle_bounds()
         open_at, close_at, expires_at = self._candle_times(candle_open_dt)
         signal = Signal(
             schema_version="1.0",
@@ -381,43 +500,51 @@ class ReplayDataInjector:
     def set_as_of(self, as_of: datetime) -> None:
         """Slice the stored series strictly to candles closed at or before `as_of`."""
         context = self.engine.context
-        keep = [ts for ts in self.timestamps
-                if ts + timedelta(seconds=timeframe_seconds(self.analyzer.timeframe)) <= as_of]
-        if not keep:
+        kept = truncate_context_to_as_of(
+            context, self.candles, self.timestamps, self.analyzer.timeframe, as_of,
+        )
+        if not kept:
             raise SignalValidationError("no candles available at or before as_of")
-        count = len(keep)
-        context.ohlcv_candles = self.candles[:count]  # type: ignore[assignment]
-        context.timestamps = keep  # type: ignore[assignment]
-        context.current_price = float(context.ohlcv_candles[-1][4])
 
 
-async def analyze_with_timeout(analyzer: PairAnalyzer, timeout_seconds: float) -> Signal:
+async def analyze_with_timeout(
+    analyzer: PairAnalyzer,
+    timeout_seconds: float,
+    candle_open_time: Optional[str] = None,
+) -> Signal:
     """Run one analysis with a hard timeout and HOLD fallback.
 
     Args:
         analyzer: PairAnalyzer to run.
         timeout_seconds: Maximum allowed wall time for the LLM call.
+        candle_open_time: Open time of the closed candle being analysed.
 
     Returns:
         The produced Signal, or a deterministic HOLD fallback on timeout.
     """
     try:
-        return await asyncio.wait_for(analyzer.analyze(), timeout=timeout_seconds)
+        return await asyncio.wait_for(
+            analyzer.analyze(candle_open_time=candle_open_time), timeout=timeout_seconds,
+        )
     except asyncio.TimeoutError:
         logger.warning("Analysis timed out after %.0fs: HOLD fallback", timeout_seconds)
-        return analyzer._hold_fallback(reasoning="analysis timeout")  # pylint: disable=protected-access
+        candle_open_dt = parse_iso(candle_open_time) if candle_open_time is not None else None
+        return analyzer._hold_fallback(  # pylint: disable=protected-access
+            reasoning="analysis timeout", candle_open_dt=candle_open_dt,
+        )
 
 
 async def analyze_and_store(
     analyzer: PairAnalyzer,
     storage: SignalStorage,
     timeout_seconds: float = 300.0,
+    candle_open_time: Optional[str] = None,
 ) -> Signal:
-    """Analyze one candle for a pair and append the signal to its JSONL file.
+    """Analyze one closed candle for a pair and append the signal to its JSONL file.
 
     Heartbeat is refreshed regardless of the outcome.
     """
-    signal = await analyze_with_timeout(analyzer, timeout_seconds)
+    signal = await analyze_with_timeout(analyzer, timeout_seconds, candle_open_time=candle_open_time)
     appended = storage.append(signal)
     write_heartbeat(
         signals_dir=storage.path.rsplit("/", 1)[0],

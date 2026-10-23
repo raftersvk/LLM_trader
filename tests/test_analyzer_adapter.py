@@ -4,7 +4,8 @@ The adapter must analyze stateless, extract via PositionExtractor, hash the
 raw response and compute risk_approved per the contract rules.
 """
 
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -274,3 +275,218 @@ def test_replay_injector_no_look_ahead():
 
     injector.restore()
     assert callable(engine.data_collector.collect_data)
+
+# --------------------------------------------------------------------------
+# Regression tests: closed-candle propagation and engine initialization
+# --------------------------------------------------------------------------
+
+class FetchingDataCollector:
+    """Fake collector that fills the context with a fixed OHLCV series."""
+
+    def __init__(self, timestamps, candles):
+        self.timestamps = timestamps
+        self.candles = candles
+        self.calls = 0
+
+    async def collect_data(self, context, *_args, **_kwargs):
+        self.calls += 1
+        context.ohlcv_candles = list(self.candles)
+        context.timestamps = list(self.timestamps)
+        return {"success": True, "errors": [], "market_context": "", "article_urls": {}}
+
+
+class ObservingEngine(FakeEngine):
+    """Engine that collects data like the real one and records the visible window."""
+
+    def __init__(self, collector, result=None):
+        super().__init__(raw_response=RAW_BUY, result=result or dict(RESULT_META))
+        self.data_collector = collector
+        self.observed = {}
+
+    async def analyze_market(self, **kwargs):
+        self.calls.append(kwargs)
+        await self.data_collector.collect_data(self.context)
+        candles = self.context.ohlcv_candles or []
+        self.observed = {
+            "count": len(candles),
+            "current_price": self.context.current_price,
+            "last_open": self.context.timestamps[-1] if self.context.timestamps else None,
+        }
+        return self._result
+
+
+def _hour(hour, day=23):
+    return datetime(2026, 10, day, hour, tzinfo=timezone.utc)
+
+
+def test_forming_candle_is_hidden_from_analysis():
+    """(c) The candle still forming at analysis time must be truncated away."""
+    timestamps = [_hour(13), _hour(14), _hour(15)]  # 15:00 is still forming
+    candles = [
+        [1.0, 1.0, 1.2, 0.9, 100.0, 10.0],
+        [2.0, 2.0, 2.2, 1.9, 200.0, 20.0],
+        [3.0, 3.0, 3.2, 2.9, 300.0, 30.0],
+    ]
+    collector = FetchingDataCollector(timestamps, candles)
+    engine = ObservingEngine(collector)
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h", use_news=False)
+    original_collect = engine.data_collector.collect_data
+
+    signal = asyncio.run(analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z"))
+
+    assert engine.observed["count"] == 2, "forming 15:00 candle must be hidden"
+    assert engine.observed["last_open"] == _hour(14)
+    assert engine.observed["current_price"] == 200.0, "price must come from the last closed candle"
+    assert signal.candle_open_time == "2026-10-23T14:00:00Z"
+    assert signal.candle_close_time == "2026-10-23T15:00:00Z"
+    # The collector wrapper is installed for one analysis and then restored.
+    assert engine.data_collector.collect_data == original_collect
+
+
+def test_no_closed_candle_falls_back_to_hold():
+    """(d) When only the forming candle exists, the adapter returns HOLD."""
+    timestamps = [_hour(15)]  # nothing has closed yet for the 14:00 candle
+    candles = [[3.0, 3.0, 3.2, 2.9, 300.0, 30.0]]
+    engine = ObservingEngine(FetchingDataCollector(timestamps, candles))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h", use_news=False)
+
+    signal = asyncio.run(analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z"))
+
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.sl is None and signal.tp is None
+    assert "no closed candle" in signal.reasoning
+    assert signal.candle_open_time == "2026-10-23T14:00:00Z"
+
+
+class RecordingAnalyzer:
+    """Minimal PairAnalyzer stand-in recording the candle it was asked about."""
+
+    def __init__(self, symbol, timeframe="1h"):
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.candles_seen = []
+
+    async def analyze(self, candle_open_time=None):
+        from src.signal_service.contract import Signal
+
+        open_at = candle_open_time
+        open_dt = datetime.fromisoformat(open_at.replace("Z", "+00:00"))
+        signal = Signal(
+            schema_version="1.0",
+            decision_id=build_decision_id(self.symbol, self.timeframe, open_at),
+            source="llm_trader",
+            symbol=self.symbol,
+            timeframe=self.timeframe,
+            candle_open_time=open_at,
+            candle_close_time=iso_z(open_dt + timedelta(hours=1)),
+            created_at=iso_z(datetime.now(timezone.utc)),
+            expires_at=iso_z(open_dt + timedelta(hours=2)),
+            action="HOLD",
+            confidence=0.0,
+            risk_approved=False,
+            sl=None,
+            tp=None,
+            position_size_pct=0.05,
+            reasoning="test",
+            model="test",
+            provider="test",
+        )
+        signal.validate()
+        self.candles_seen.append(candle_open_time)
+        return signal
+
+
+def test_run_cycle_passes_the_closed_candle(tmp_path):
+    """(a) run_cycle must analyse the candle that just closed, not the forming one."""
+    from src.signal_service.service import SignalService
+
+    analyzers = {}
+
+    def analyzer_factory(symbol):
+        analyzers[symbol] = RecordingAnalyzer(symbol)
+        return analyzers[symbol]
+
+    service = SignalService(
+        pairs=["BTC/USDT"],
+        timeframe="1h",
+        analyzer_factory=analyzer_factory,
+        signals_dir=str(tmp_path),
+    )
+    results = asyncio.run(service.run_cycle(_hour(14)))
+
+    assert analyzers["BTC/USDT"].candles_seen == ["2026-10-23T14:00:00Z"]
+    assert results["BTC/USDT"] == "btc-usdt-1h-2026-10-23t14:00:00z"
+    stored = service.storages["BTC/USDT"].load_all()
+    assert len(stored) == 1
+    assert stored[0].candle_open_time == "2026-10-23T14:00:00Z"
+    assert stored[0].candle_close_time == "2026-10-23T15:00:00Z"
+
+
+class RecordingEngine(FakeEngine):
+    """Engine recording initialize_for_symbol calls."""
+
+    def __init__(self, log):
+        super().__init__(raw_response=RAW_BUY, result=dict(RESULT_META))
+        self.initialized = []
+        self._log = log
+
+    def initialize_for_symbol(self, symbol, exchange, timeframe=None):
+        self.initialized.append({"symbol": symbol, "exchange": exchange, "timeframe": timeframe})
+        self._log.append(symbol)
+
+
+class FakeExchangeManager:
+    def __init__(self, supported):
+        self.supported = supported
+        self.calls = []
+
+    async def find_symbol_exchange(self, symbol):
+        self.calls.append(symbol)
+        if symbol in self.supported:
+            return self.supported[symbol], "binance"
+        return None, None
+
+
+def test_engines_are_initialized_once_per_pair():
+    """(b) Every pair gets exactly one initialized engine with its own exchange."""
+    from src.signal_service.__main__ import _build_initialized_engines
+
+    btc_exchange = object()
+    eth_exchange = object()
+    manager = FakeExchangeManager({"BTC/USDT": btc_exchange, "ETH/USDT": eth_exchange})
+    created = []
+    log = []
+
+    def engine_factory(symbol):
+        engine = RecordingEngine(log)
+        created.append(engine)
+        return engine
+
+    engines = asyncio.run(_build_initialized_engines(
+        ["BTC/USDT", "ETH/USDT"], engine_factory, manager, "1h",
+    ))
+
+    assert set(engines) == {"BTC/USDT", "ETH/USDT"}
+    assert manager.calls == ["BTC/USDT", "ETH/USDT"]
+    assert len(created) == 2
+    assert created[0].initialized == [
+        {"symbol": "BTC/USDT", "exchange": btc_exchange, "timeframe": "1h"}
+    ]
+    assert created[1].initialized == [
+        {"symbol": "ETH/USDT", "exchange": eth_exchange, "timeframe": "1h"}
+    ]
+    assert log == ["BTC/USDT", "ETH/USDT"]
+
+
+def test_unknown_pair_raises_clear_error():
+    """A pair unknown to every exchange must fail loudly, not run uninitialized."""
+    from src.signal_service.__main__ import _build_initialized_engines
+
+    manager = FakeExchangeManager({})
+
+    def engine_factory(_symbol):  # pragma: no cover - must not be called
+        raise AssertionError("engine_factory must not run for an unknown pair")
+
+    with pytest.raises(RuntimeError, match="No exchange supports"):
+        asyncio.run(_build_initialized_engines(["XYZ/USDT"], engine_factory, manager, "1h"))
