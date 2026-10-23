@@ -91,6 +91,21 @@ class ConfigProtocol(Protocol):
     @property
     def BLOCKRUN_MODEL(self) -> str: ...
 
+    @property
+    def JEV_BASE_URL(self) -> str: ...
+
+    @property
+    def JEV_MODEL(self) -> str: ...
+
+    @property
+    def JEV_API_KEY_ENV(self) -> str: ...
+
+    @property
+    def JEV_API_KEY(self) -> str | None: ...
+
+    @property
+    def JEV_TIMEOUT_SECONDS(self) -> float: ...
+
 
 
     @property

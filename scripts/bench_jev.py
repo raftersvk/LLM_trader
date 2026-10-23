@@ -489,6 +489,7 @@ async def run_mode(
     samples: List[Tuple[int, Dict[str, Any], Dict[int, float]]],
     folds: int,
     delay_seconds: float = 0.0,
+    abort_on_jev_error: bool = False,
 ) -> ModeRun:
     """Evaluate one pipeline over all states, walk-forward fold by fold.
 
@@ -521,6 +522,8 @@ async def run_mode(
             run.jev_calls += 1 if pre.consulted else 0
             if pre.error is not None:
                 run.jev_errors += 1
+                if abort_on_jev_error:
+                    raise SystemExit(f"JEV error during real benchmark (pre): {pre.error}")
             if not pre.allowed:
                 action = "HOLD"
             else:
@@ -538,6 +541,8 @@ async def run_mode(
             run.jev_calls += 1 if post.consulted else 0
             if post.error is not None:
                 run.jev_errors += 1
+                if abort_on_jev_error:
+                    raise SystemExit(f"JEV error during real benchmark (post): {post.error}")
             if not post.allowed:
                 action = "HOLD"
             signal = post.signal or pre_signal
@@ -603,7 +608,7 @@ def summarize_run(
         "jev_latency": latency_summary(run.latencies_ms),
         "cost": {
             "usd": None,
-            "note": "jev-1.13-free has no monetary cost; token usage is reported when available",
+            "note": "Decision API free tier has no monetary cost; token usage is reported when available",
             "input_tokens": run.input_tokens,
             "output_tokens": run.output_tokens,
         },
@@ -648,6 +653,25 @@ def _gate_for(mode: str, client: Any, threshold: float, floor: Optional[float]) 
     )
 
 
+def _build_real_client() -> JevClient:
+    """Build a JevClient from the [jev] config section and its key env var."""
+    try:
+        from src.config.loader import Config
+
+        config = Config()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise SystemExit(
+            "JEV config unavailable: set LLM_TRADER_KEYS_ENV / LLM_TRADER_CONFIG_INI "
+            f"or create config/config.ini + keys.env ({exc})"
+        ) from exc
+    return JevClient(
+        base_url=config.JEV_BASE_URL,
+        model=config.JEV_MODEL,
+        api_key=config.JEV_API_KEY,
+        timeout_seconds=config.JEV_TIMEOUT_SECONDS,
+    )
+
+
 async def run_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     """Run every pipeline and return the report payload."""
     horizons = tuple(int(value) for value in args.horizons.split(","))
@@ -664,7 +688,7 @@ async def run_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
             raise SystemExit("--candles is required for a real benchmark (or pass --offline for a dry-run)")
         candles = load_candles_csv(args.candles)
         data_source = args.candles
-        client = JevClient()
+        client = _build_real_client()
         real_benchmark = True
     if len(candles) < 60:
         raise SystemExit(f"not enough candles for a benchmark: {len(candles)}")
@@ -707,10 +731,15 @@ async def run_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
             folds=folds,
             # Pacing applies to real JEV calls only; the offline stand-in is local.
             delay_seconds=args.delay_seconds if real_benchmark else 0.0,
+            abort_on_jev_error=real_benchmark,
         )
         results.append(
             summarize_run(run, samples, horizons, args.move_threshold_pct, folds)
         )
+
+    close = getattr(client, "close", None)
+    if close is not None:
+        await close()
 
     report: Dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

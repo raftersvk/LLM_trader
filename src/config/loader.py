@@ -301,6 +301,32 @@ class Config:
     def BLOCKRUN_MODEL(self):
         return self.get_config('ai_providers', 'blockrun_model', 'openai/gpt-4o')
 
+    # JEV / Decision 3.0 provider
+    @property
+    def JEV_BASE_URL(self):
+        """Base URL of the System One decision provider."""
+        return self.get_config('jev', 'base_url', 'https://decision.vllm-sr.ai')
+
+    @property
+    def JEV_MODEL(self):
+        """Model id sent in every JEV request."""
+        return self.get_config('jev', 'model', 'vllm-sr/d3-flash')
+
+    @property
+    def JEV_API_KEY_ENV(self):
+        """Name of the environment key that holds the JEV API key."""
+        return self.get_config('jev', 'api_key_env', 'DECISION_API_KEY')
+
+    @property
+    def JEV_API_KEY(self):
+        """Resolve the JEV API key from keys.env; may be empty (legacy provider)."""
+        return self.get_env(self.JEV_API_KEY_ENV)
+
+    @property
+    def JEV_TIMEOUT_SECONDS(self):
+        """Per-attempt timeout for JEV requests."""
+        return float(self.get_config('jev', 'timeout_seconds', 8.0))
+
     @property
     def VISION_PROVIDER(self):
         return self.get_config('ai_providers', 'vision_provider', None)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,6 +13,9 @@ import pytest
 from src.signal_service.jev_client import (
     DEFAULT_ENDPOINT,
     DEFAULT_MODEL,
+    OPENCODE_BASE_URL,
+    OPENCODE_MODEL,
+    JevAuthError,
     JevClient,
     JevError,
     JevRateLimitError,
@@ -24,15 +28,39 @@ QUESTIONS: Dict[str, Dict[str, Any]] = {
 STATE: Dict[str, Any] = {"symbol": "BTC/USDT", "last_close": 68000.0}
 
 
-def _body(model: str = "jev-1.13", **answers: Dict[str, Any]) -> bytes:
-    import json
-
+def _body(model: str = "vllm-sr/d3-flash", **answers: Dict[str, Any]) -> bytes:
     payload = {
         "model": model,
         "answers": answers,
-        "usage": {"input_tokens": 42, "output_tokens": 4},
+        "usage": {"input_tokens": 42, "output_tokens": 0},
     }
     return json.dumps(payload).encode("utf-8")
+
+
+def _decision_answers() -> Dict[str, Dict[str, Any]]:
+    """A real Decision 3.0 answer set, including the 3-level score legend."""
+    return {
+        "tradeability": {"type": "noul", "noul": 0.87},
+        "bias": {
+            "type": "choice",
+            "choice": "long",
+            "probabilities": {"long": 0.9, "short": 0.05, "none": 0.05},
+            "confidence": 0.9,
+        },
+        "regime": {
+            "type": "choice",
+            "choice": "trend",
+            "probabilities": {"trend": 0.8, "range": 0.1, "high_vol": 0.05, "low_vol": 0.05},
+            "confidence": 0.8,
+        },
+        "confidence": {
+            "type": "score",
+            "score": 1.69,
+            "probabilities": {"0": 0.05, "1": 0.21, "2": 0.74},
+            "confidence": 0.55,
+            "legend": {"0": "low", "1": "medium", "2": "high"},
+        },
+    }
 
 
 class FakeTransport:
@@ -46,9 +74,12 @@ class FakeTransport:
         self,
         url: str,
         payload: Dict[str, Any],
+        headers: Dict[str, str],
         timeout_seconds: float,
     ) -> Tuple[int, Dict[str, str], bytes]:
-        self.calls.append({"url": url, "payload": payload, "timeout": timeout_seconds})
+        self.calls.append(
+            {"url": url, "payload": payload, "headers": headers, "timeout": timeout_seconds}
+        )
         if not self.responses:
             raise AssertionError("FakeTransport received more calls than expected")
         item = self.responses.pop(0)
@@ -73,56 +104,66 @@ def _client(transport: FakeTransport, delays: Optional[List[float]] = None, **kw
 
 
 @pytest.mark.asyncio
-async def test_payload_and_parsing_noul_choice_score():
-    """The client sends state+questions and exposes every typed answer."""
-    transport = FakeTransport([
-        (
-            200,
-            {},
-            _body(
-                model="jev-1.13.0",
-                tradeability={"type": "noul", "noul": 0.82},
-                bias={"type": "choice", "choice": "long", "confidence": 0.7},
-                confidence={"type": "score", "score": 3, "legend": {"0": "low", "4": "high"}},
-            ),
-        )
-    ])
-    client = _client(transport)
+async def test_decision_payload_sends_state_as_json_text_and_parses_answers():
+    """The client serializes state to JSON text and exposes every answer."""
+    transport = FakeTransport([(200, {}, _body(**_decision_answers()))])
+    client = _client(transport, api_key="sk-vsr-test-key")
 
     response = await client.ask(STATE, QUESTIONS)
 
-    assert transport.calls[0]["url"] == DEFAULT_ENDPOINT
-    assert transport.calls[0]["payload"] == {
-        "model": DEFAULT_MODEL,
-        "state": STATE,
-        "questions": QUESTIONS,
-    }
-    assert response.model == "jev-1.13.0"
-    assert response.requested_model == DEFAULT_MODEL
-    assert response.answer("tradeability")["noul"] == 0.82
+    call = transport.calls[0]
+    assert call["url"] == DEFAULT_ENDPOINT
+    assert call["headers"]["Authorization"] == "Bearer sk-vsr-test-key"
+    # Decision 3.0 requires a string state, not a JSON object.
+    assert isinstance(call["payload"]["state"], str)
+    assert json.loads(call["payload"]["state"]) == STATE
+    assert call["payload"]["model"] == DEFAULT_MODEL
+    assert call["payload"]["questions"] == QUESTIONS
+    assert response.model == DEFAULT_MODEL
+    assert response.answer("tradeability")["noul"] == 0.87
     assert response.answer("bias")["choice"] == "long"
-    assert response.answer("confidence")["score"] == 3
+    assert response.answer("confidence")["score"] == 1.69
+    assert len(response.answer("confidence")["legend"]) == 3
     assert response.input_tokens == 42
-    assert response.output_tokens == 4
+    assert response.output_tokens == 0
 
 
 @pytest.mark.asyncio
-async def test_model_actually_used_is_logged_without_payload(caplog):
-    """Only response.model is logged; state and credentials never are."""
-    transport = FakeTransport([(200, {}, _body(model="jev-1.13.5"))])
-    client = JevClient(transport=transport, jitter_ratio=0.0, rng=random.Random(0))
+async def test_legacy_opencode_provider_needs_no_auth():
+    """Overriding base_url/model still supports the old OpenCode endpoint."""
+    transport = FakeTransport([(200, {}, _body(model=OPENCODE_MODEL))])
+    client = _client(transport, base_url=OPENCODE_BASE_URL, model=OPENCODE_MODEL)
+
+    response = await client.ask(STATE, QUESTIONS)
+
+    assert transport.calls[0]["url"] == OPENCODE_BASE_URL + "/v1/systemone"
+    assert transport.calls[0]["headers"] == {}
+    assert response.model == OPENCODE_MODEL
+
+
+@pytest.mark.asyncio
+async def test_api_key_and_state_are_never_logged(caplog):
+    """Only model, latency and usage are logged; no key, header or state."""
+    transport = FakeTransport([(200, {}, _body(**_decision_answers()))])
+    client = JevClient(
+        transport=transport,
+        api_key="sk-vsr-secret-value",
+        jitter_ratio=0.0,
+        rng=random.Random(0),
+    )
     secret_state = {"symbol": "BTC/USDT", "note": "do-not-log-this-state"}
 
     with caplog.at_level(logging.INFO, logger="src.signal_service.jev_client"):
         response = await client.ask(secret_state, QUESTIONS)
 
-    assert response.model == "jev-1.13.5"
+    assert response.model == DEFAULT_MODEL
     logs = "\n".join(record.getMessage() for record in caplog.records)
-    assert "model=jev-1.13.5" in logs
+    assert "model=vllm-sr/d3-flash" in logs
+    assert "input_tokens=42" in logs
     assert "do-not-log-this-state" not in logs
+    assert "sk-vsr-secret-value" not in logs
     assert "authorization" not in logs.lower()
     assert "api_key" not in logs.lower()
-    # No auth header is ever part of the payload.
     assert "headers" not in transport.calls[0]["payload"]
 
 
@@ -130,28 +171,28 @@ async def test_model_actually_used_is_logged_without_payload(caplog):
 async def test_rate_limit_honors_retry_after_then_succeeds():
     delays: List[float] = []
     transport = FakeTransport([
-        (429, {"retry-after": "1"}, b'{"error":{"type":"RateLimitError"}}'),
+        (429, {"retry-after": "1"}, b'{"error":{"type":"rate_limit_exceeded"}}'),
         (200, {}, _body()),
     ])
     client = _client(transport, delays)
 
     response = await client.ask(STATE, QUESTIONS)
 
-    assert response.model == "jev-1.13"
+    assert response.model == DEFAULT_MODEL
     assert len(transport.calls) == 2
     assert delays == [1.0]
 
 
 @pytest.mark.asyncio
-async def test_free_usage_limit_surfaces_exact_error():
+async def test_quota_exceeded_surfaces_exact_error_and_retry_after():
     transport = FakeTransport([
         (
             429,
-            {},
-            b'{"type":"error","error":{"type":"FreeUsageLimitError",'
-            b'"message":"Free usage limit reached."}}',
+            {"retry-after": "30"},
+            b'{"error":{"type":"quota_exceeded","code":"quota_exceeded",'
+            b'"message":"daily quota reached"}}',
         ),
-        (429, {}, b'{"error":{"type":"FreeUsageLimitError","message":"still limited"}}'),
+        (429, {"retry-after": "30"}, b'{"error":{"type":"quota_exceeded"}}'),
     ])
     client = _client(transport, max_retries=1)
 
@@ -159,8 +200,24 @@ async def test_free_usage_limit_surfaces_exact_error():
         await client.ask(STATE, QUESTIONS)
 
     assert excinfo.value.status == 429
-    assert "FreeUsageLimitError" in str(excinfo.value)
+    assert excinfo.value.retry_after == 30.0
+    assert "quota_exceeded" in str(excinfo.value)
     assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_missing_api_key_is_not_retried():
+    transport = FakeTransport([
+        (401, {}, b'{"error":{"type":"missing_api_key","code":"missing_api_key"}}')
+    ])
+    client = _client(transport, max_retries=3)
+
+    with pytest.raises(JevAuthError) as excinfo:
+        await client.ask(STATE, QUESTIONS)
+
+    assert excinfo.value.status == 401
+    assert excinfo.value.retryable is False
+    assert len(transport.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -177,8 +234,8 @@ async def test_timeout_retries_then_raises_timeout():
 @pytest.mark.asyncio
 async def test_per_attempt_timeout_is_enforced():
     class SlowTransport(FakeTransport):
-        async def post(self, url, payload, timeout_seconds):
-            self.calls.append({"url": url, "payload": payload, "timeout": timeout_seconds})
+        async def post(self, url, payload, headers, timeout_seconds):
+            self.calls.append({"url": url, "payload": payload, "headers": headers})
             await asyncio.sleep(1.0)
             return 200, {}, _body()
 
@@ -199,7 +256,7 @@ async def test_per_attempt_timeout_is_enforced():
 async def test_server_error_is_retried_with_backoff():
     delays: List[float] = []
     transport = FakeTransport([
-        (503, {}, b"upstream unavailable"),
+        (503, {"retry-after": "2"}, b"upstream unavailable"),
         (200, {}, _body()),
     ])
     client = _client(transport, delays, backoff_base=0.25)
@@ -229,6 +286,6 @@ async def test_malformed_json_and_missing_answers_raise():
     with pytest.raises(JevError, match="invalid JSON"):
         await client.ask(STATE, QUESTIONS)
 
-    client = _client(FakeTransport([(200, {}, b'{"model":"jev-1.13"}')]))
+    client = _client(FakeTransport([(200, {}, b'{"model":"vllm-sr/d3-flash"}')]))
     with pytest.raises(JevError, match="answers"):
         await client.ask(STATE, QUESTIONS)

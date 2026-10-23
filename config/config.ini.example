@@ -170,3 +170,15 @@ enable_cors = false
 # Comma-separated list of allowed origins (e.g. http://localhost:3000, http://example.com)
 # Use "*" to allow all origins (NOT recommended for production)
 cors_origins = *
+
+[jev]
+# System One decision provider used by the JEV gate.
+# Decision 3.0 (default): free key in DECISION_API_KEY, state sent as JSON text.
+base_url = https://decision.vllm-sr.ai
+model = vllm-sr/d3-flash
+# Name of the key in keys.env that holds the provider token (empty = no auth).
+api_key_env = DECISION_API_KEY
+timeout_seconds = 8
+# Legacy OpenCode provider (no auth): uncomment both lines instead of the above.
+# base_url = https://opencode.ai/inference/systemone
+# model = jev-1.13-free
