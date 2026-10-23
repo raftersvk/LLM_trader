@@ -41,6 +41,8 @@ from src.signal_service.contract import (
     parse_iso,
     timeframe_seconds,
 )
+from src.signal_service.jev_client import JevClient
+from src.signal_service.jev_gate import JevGate, JevMode, parse_mode
 from src.signal_service.service import SignalService
 from src.signal_service.storage import (
     PROJECT_ROOT,
@@ -87,6 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-cycles", type=int, default=None)
     run.add_argument("--use-news", type=_parse_bool_flag, default="true")
     run.add_argument("--use-chart", type=_parse_bool_flag, default="true")
+    run.add_argument("--jev-mode", default=JevMode.OFF.value, choices=[m.value for m in JevMode])
     run.add_argument(
         "--debug-cycle-seconds", type=float, default=0.0,
         help="Debug: replay the last closed candle every N seconds (e.g. 60) "
@@ -109,6 +112,7 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--no-news", action="store_true")
     replay.add_argument("--use-chart", type=_parse_bool_flag, default="true")
     replay.add_argument("--timeout-seconds", type=float, default=300.0)
+    replay.add_argument("--jev-mode", default=JevMode.OFF.value, choices=[m.value for m in JevMode])
 
     validate = sub.add_parser("validate", help="Validate JSONL signal files")
     validate.add_argument("--input", default=DEFAULT_SIGNALS_DIR)
@@ -118,6 +122,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Shared signal JSON schema (default: the sibling trading-stack checkout)",
     )
     return parser
+
+
+def _build_jev_gate(mode: str):
+    """Build the JEV gate for a CLI mode; `off` makes no network call."""
+    parsed = parse_mode(mode)
+    if parsed is JevMode.OFF:
+        return None
+    return JevGate(client=JevClient(), mode=parsed)
 
 
 def _load_engine_factory():
@@ -181,6 +193,8 @@ async def _run_command(args: argparse.Namespace) -> None:
         args.timeframe,
     )
 
+    jev_gate = _build_jev_gate(args.jev_mode)
+
     def analyzer_factory(symbol: str) -> PairAnalyzer:
         return PairAnalyzer(
             engine=engines[symbol],
@@ -188,6 +202,7 @@ async def _run_command(args: argparse.Namespace) -> None:
             timeframe=args.timeframe,
             use_news=args.use_news,
             use_chart=args.use_chart,
+            jev_gate=jev_gate,
         )
 
     service = SignalService(
@@ -198,6 +213,7 @@ async def _run_command(args: argparse.Namespace) -> None:
         buffer_seconds=args.buffer_seconds,
         timeout_seconds=args.timeout_seconds,
         max_cycles=args.max_cycles,
+        jev_gate=jev_gate,
         debug_cycle_seconds=args.debug_cycle_seconds or None,
         dedupe=not args.no_dedup,
     )
@@ -322,6 +338,7 @@ async def _replay_command(args: argparse.Namespace) -> None:
         timeframe=args.timeframe,
         use_news=not args.no_news,
         use_chart=args.use_chart,
+        jev_gate=_build_jev_gate(args.jev_mode),
     )
     storage = SignalStorage(signal_file_path(args.output, symbol, args.timeframe))
 
