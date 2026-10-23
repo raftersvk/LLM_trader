@@ -148,6 +148,25 @@ async def test_hold_signal():
     analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL)
     signal = await analyzer.analyze()
     assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.reasoning.strip(), "reasoning must stay non-empty"
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_valid_hold_is_never_risk_approved():
+    """A valid HOLD must not look approved: it can never trigger an entry."""
+    raw = '{"signal": "HOLD", "confidence": "HIGH", "reasoning": "no setup"}'
+    engine = FakeEngine(raw_response=raw, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL)
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.reasoning.strip(), "reasoning must stay non-empty"
+    assert signal.model == "deepseek-v4.1-flash"
+    assert signal.provider == "litellm"
     signal.validate()
 
 

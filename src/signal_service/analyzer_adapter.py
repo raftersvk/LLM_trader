@@ -371,7 +371,13 @@ class PairAnalyzer:
         under threshold, the confidence is under threshold or the signal is
         expired. JEV veto and spread/liquidity bounds are the caller's gate in
         v1 (see PLAN.md section 4); they are honoured when provided via jev.
+
+        A HOLD never triggers an entry (Freqtrade requires action BUY/SELL and
+        risk_approved=true), so it is never approved: keeping it false avoids a
+        misleading "approved" state in monitoring.
         """
+        if draft.action == "HOLD":
+            return False, "HOLD does not trigger an entry"
         if draft.action in ("BUY", "SELL"):
             if draft.sl is None or draft.tp is None:
                 return False, "missing SL/TP"
