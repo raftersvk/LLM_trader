@@ -305,9 +305,10 @@ def _normalize_score(answer: Dict[str, Any]) -> tuple[Optional[float], Optional[
     """Normalize a score answer to [0, 1]; returns (normalized, raw).
 
     Decision 3.0 returns the expected level (e.g. ``1.69``) plus a ``legend``
-    of 2 to 10 levels starting at 0. The level is divided by the highest
-    legend index so the result spans [0, 1]; a legacy answer without a legend
-    falls back to the previous heuristics.
+    of 2 to 10 levels starting at 0. The level is offset by the legend's
+    lowest index and divided by its span, so the top level always maps to
+    1.0; a legacy answer without a legend falls back to the previous
+    heuristics.
     """
     raw_value = answer.get("score")
     if raw_value is None:
@@ -318,6 +319,7 @@ def _normalize_score(answer: Dict[str, Any]) -> tuple[Optional[float], Optional[
         return None, None
     legend = answer.get("legend")
     levels = 0
+    lowest_index: Optional[float] = None
     highest_index: Optional[float] = None
     if isinstance(legend, dict):
         levels = len(legend)
@@ -326,11 +328,16 @@ def _normalize_score(answer: Dict[str, Any]) -> tuple[Optional[float], Optional[
         except (TypeError, ValueError):
             numeric_keys = []
         if numeric_keys:
-            highest_index = max(numeric_keys) - min(0.0, min(numeric_keys))
+            lowest_index = min(numeric_keys)
+            highest_index = max(numeric_keys)
     elif isinstance(legend, list):
         levels = len(legend)
-    if highest_index is not None and highest_index >= 1:
-        normalized = raw / highest_index
+    if (
+        lowest_index is not None
+        and highest_index is not None
+        and highest_index > lowest_index
+    ):
+        normalized = (raw - lowest_index) / (highest_index - lowest_index)
     elif levels >= 2:
         normalized = raw / (levels - 1)
     elif 0.0 <= raw <= 1.0:

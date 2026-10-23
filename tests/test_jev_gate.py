@@ -124,6 +124,37 @@ def test_parse_decision_3_score_normalized_by_legend_length():
     assert parse_jev_signal(ten).confidence == pytest.approx(1.0)
 
 
+def test_parse_score_with_negative_legend_indices_uses_offset():
+    """A legend with negative indices still maps its top level to 1.0."""
+    response = JevResponse(
+        model="vllm-sr/d3-flash",
+        answers={
+            "confidence": {
+                "type": "score",
+                "score": 1.0,
+                "legend": {"-1": "bearish", "0": "neutral", "1": "bullish"},
+            }
+        },
+        latency_ms=90,
+    )
+    signal = parse_jev_signal(response)
+    assert signal.confidence == pytest.approx(1.0)
+    assert signal.score_raw == pytest.approx(1.0)
+
+    mid = JevResponse(
+        model="vllm-sr/d3-flash",
+        answers={
+            "confidence": {
+                "type": "score",
+                "score": 0.0,
+                "legend": {"-1": "bearish", "0": "neutral", "1": "bullish"},
+            }
+        },
+        latency_ms=90,
+    )
+    assert parse_jev_signal(mid).confidence == pytest.approx(0.5)
+
+
 def test_parse_tradeability_threshold_and_missing_fields():
     below = parse_jev_signal(_response(tradeable=0.2))
     assert below.tradeability is False
