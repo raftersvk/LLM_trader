@@ -20,7 +20,7 @@ def _client() -> LitellmAIClient:
             "provider": "litellm",
             "base_url": "https://opencode.ai/inference/go/openai/v1",
             "api_key": "test-key",
-            "model": "openai/deepseek-v4.1-flash",
+            "model": "deepseek-v4.1-flash",
             "extra_headers": OPENCODE_HEADERS,
         },
         logger=MagicMock(),
@@ -32,6 +32,31 @@ def test_client_stores_extra_headers():
     client = _client()
 
     assert client.litellm_kwargs["extra_headers"] == OPENCODE_HEADERS
+    assert client.litellm_kwargs["extra_headers"]["x-opencode-session"] == "tradingbot"
+
+
+def test_litellm_provider_forces_openai_routing():
+    """Bare model ids need explicit OpenAI routing (Go rejects prefixed ids)."""
+    client = _client()
+
+    assert client.litellm_kwargs["custom_llm_provider"] == "openai"
+    # The configured model id is forwarded unchanged.
+    assert client._get_full_model_name(client.default_model) == "deepseek-v4.1-flash"
+
+
+def test_non_litellm_provider_keeps_its_own_routing():
+    """Other providers must not inherit the OpenAI routing override."""
+    client = LitellmAIClient(
+        config={
+            "provider": "openrouter",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key": "test-key",
+            "model": "some/model",
+        },
+        logger=MagicMock(),
+    )
+
+    assert "custom_llm_provider" not in client.litellm_kwargs
 
 
 @pytest.mark.asyncio
@@ -48,7 +73,7 @@ async def test_chart_analysis_sends_image_and_headers():
         ],
         usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         id="response-id",
-        model="openai/deepseek-v4.1-flash",
+        model="deepseek-v4.1-flash",
     )
 
     async def fake_acompletion(**kwargs):
@@ -60,7 +85,7 @@ async def test_chart_analysis_sends_image_and_headers():
         new=fake_acompletion,
     ):
         result = await client.chat_completion_with_chart_analysis(
-            "openai/deepseek-v4.1-flash",
+            "deepseek-v4.1-flash",
             [{"role": "user", "content": "Analyze this chart"}],
             b"fake-png-bytes",
             {"temperature": 0.0, "max_tokens": 128},
@@ -88,7 +113,7 @@ def test_response_preserves_finish_reason_and_none_content():
         ],
         usage=None,
         id="response-id",
-        model="openai/deepseek-v4.1-flash",
+        model="deepseek-v4.1-flash",
     )
 
     result = client._create_response_from_litellm(response)
@@ -101,7 +126,7 @@ def test_factory_adds_opencode_headers_without_minimax_fallback():
     """Factory uses only LITELLM_API_KEY and forwards OpenCode headers."""
     config = SimpleNamespace(
         LITELLM_BASE_URL="https://opencode.ai/inference/go/openai/v1",
-        LITELLM_MODEL="openai/deepseek-v4.1-flash",
+        LITELLM_MODEL="deepseek-v4.1-flash",
         LITELLM_API_KEY="test-key",
         LITELLM_USER_AGENT="tradingbot/0.1",
         LITELLM_SESSION_ID="tradingbot",
@@ -119,7 +144,7 @@ def test_factory_does_not_fall_back_to_minimax_key():
     """A missing LITELLM_API_KEY must not silently use the MiniMax key."""
     config = SimpleNamespace(
         LITELLM_BASE_URL="https://opencode.ai/inference/go/openai/v1",
-        LITELLM_MODEL="openai/deepseek-v4.1-flash",
+        LITELLM_MODEL="deepseek-v4.1-flash",
         LITELLM_API_KEY=None,
         LITELLM_USER_AGENT="tradingbot/0.1",
         LITELLM_SESSION_ID="tradingbot",

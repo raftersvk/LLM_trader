@@ -56,6 +56,13 @@ class LitellmAIClient(BaseAIClient):
         if extra_headers:
             self.litellm_kwargs["extra_headers"] = dict(extra_headers)
 
+        # LiteLLM routes by provider prefix, while OpenAI-compatible endpoints
+        # such as OpenCode Go expect the bare model id (provider-prefixed ids
+        # are rejected with HTTP 400 "Model is unavailable"). Force the OpenAI
+        # routing and keep the configured model id unchanged.
+        if self.provider == "litellm":
+            self.litellm_kwargs["custom_llm_provider"] = "openai"
+
         self.logger.debug(
             "LitellmAIClient initialized - provider: %s, model: %s, base_url: %s, api_key_set: %s",
             self.provider,
