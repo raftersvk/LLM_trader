@@ -671,6 +671,7 @@ def _build_real_client() -> JevClient:
         base_url=config.JEV_BASE_URL,
         model=config.JEV_MODEL,
         api_key=config.JEV_API_KEY,
+        api_key_host=config.JEV_API_KEY_HOST,
         timeout_seconds=config.JEV_TIMEOUT_SECONDS,
     )
 

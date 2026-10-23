@@ -142,6 +142,7 @@ def _build_jev_gate(mode: str):
             base_url=config.JEV_BASE_URL,
             model=config.JEV_MODEL,
             api_key=config.JEV_API_KEY,
+            api_key_host=config.JEV_API_KEY_HOST,
             timeout_seconds=config.JEV_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught

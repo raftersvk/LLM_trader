@@ -104,6 +104,9 @@ class ConfigProtocol(Protocol):
     def JEV_API_KEY(self) -> str | None: ...
 
     @property
+    def JEV_API_KEY_HOST(self) -> str: ...
+
+    @property
     def JEV_TIMEOUT_SECONDS(self) -> float: ...
 
 

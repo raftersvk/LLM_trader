@@ -241,6 +241,13 @@ class JevClient:
             else (urlsplit(DEFAULT_BASE_URL).hostname or "")
         ).lower()
         endpoint_host = (urlsplit(self.endpoint).hostname or "").lower()
+        if self.api_key and endpoint_host != self.api_key_host:
+            # Never log the key itself; the host pair explains the 401s.
+            logger.warning(
+                "JEV API key withheld: endpoint host %r does not match "
+                "api_key_host %r",
+                endpoint_host, self.api_key_host,
+            )
         # Only the Authorization header ever carries the key; it is never
         # included in logs, error messages or the request payload.
         self._headers: Dict[str, str] = (

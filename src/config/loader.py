@@ -323,6 +323,11 @@ class Config:
         return self.get_env(self.JEV_API_KEY_ENV)
 
     @property
+    def JEV_API_KEY_HOST(self):
+        """Host allowed to receive the JEV API key (default: Decision host)."""
+        return self.get_config('jev', 'api_key_host', 'decision.vllm-sr.ai')
+
+    @property
     def JEV_TIMEOUT_SECONDS(self):
         """Per-attempt timeout for JEV requests."""
         return float(self.get_config('jev', 'timeout_seconds', 8.0))

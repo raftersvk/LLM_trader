@@ -178,6 +178,9 @@ base_url = https://decision.vllm-sr.ai
 model = vllm-sr/d3-flash
 # Name of the key in keys.env that holds the provider token (empty = no auth).
 api_key_env = DECISION_API_KEY
+# Host allowed to receive that token; set this for a self-hosted/mirrored
+# Decision 3.0 instance. The token is never sent to any other host.
+api_key_host = decision.vllm-sr.ai
 timeout_seconds = 8
 # Legacy OpenCode provider (no auth): uncomment all three lines instead of the above.
 # Blank api_key_env so the Decision 3.0 token is never sent to opencode.ai.

@@ -160,6 +160,43 @@ async def test_decision_key_is_not_forwarded_to_legacy_host():
 
 
 @pytest.mark.asyncio
+async def test_api_key_host_override_allows_self_hosted_endpoint():
+    """A self-hosted Decision deployment can opt its host into the key."""
+    transport = FakeTransport([(200, {}, _body())])
+    client = _client(
+        transport,
+        base_url="https://decision.internal.example",
+        api_key="sk-vsr-test-key",
+        api_key_host="decision.internal.example",
+    )
+
+    await client.ask(STATE, QUESTIONS)
+
+    assert (
+        transport.calls[0]["headers"]["Authorization"]
+        == "Bearer sk-vsr-test-key"
+    )
+
+
+@pytest.mark.asyncio
+async def test_withheld_key_logs_warning_without_the_secret(caplog):
+    """A host mismatch withholds the key and explains it without leaking it."""
+    client = _client(
+        FakeTransport([(200, {}, _body(model=OPENCODE_MODEL))]),
+        base_url=OPENCODE_BASE_URL,
+        model=OPENCODE_MODEL,
+        api_key="sk-vsr-secret-value",
+    )
+    with caplog.at_level(logging.WARNING, logger="src.signal_service.jev_client"):
+        await client.ask(STATE, QUESTIONS)
+
+    assert client._headers == {}  # pylint: disable=protected-access
+    assert "withheld" in caplog.text
+    assert "opencode.ai" in caplog.text
+    assert "sk-vsr-secret-value" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_api_key_and_state_are_never_logged(caplog):
     """Only model, latency and usage are logged; no key, header or state."""
     transport = FakeTransport([(200, {}, _body(**_decision_answers()))])
