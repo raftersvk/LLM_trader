@@ -1025,3 +1025,66 @@ def test_csv_loader_rejects_duplicate_timestamps(tmp_path):
 
     with pytest.raises(ValueError, match="strictly ascending"):
         _load_candles_csv(str(path))
+
+
+class MarkerRagEngine:
+    """RAG stub whose retrieval is observable (the neutralized one returns empty)."""
+
+    class _CB:
+        def get_latest_article_urls(self):
+            return {}
+
+    context_builder = _CB()
+
+    async def retrieve_context(self, *_args, **_kwargs):
+        return ("LIVE NEWS CONTEXT", {})
+
+
+def _replay_analyzer(engine, *, use_news=True, use_chart=True):
+    engine.data_collector = FetchingDataCollector([], [])
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", use_news=use_news, use_chart=use_chart,
+    )
+    injector = ReplayDataInjector(
+        analyzer, [[0.0, 100.0, 110.0, 90.0, 105.0, 1000.0]], [_hour(14)],
+    )
+    injector.install()
+    return analyzer, injector
+
+
+@pytest.mark.asyncio
+async def test_replay_install_binds_chart_ablation_flag():
+    """--use-chart must control replay exactly as it controls run."""
+    engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    analyzer, injector = _replay_analyzer(engine, use_chart=True)
+    try:
+        assert engine.model_manager.supports_image_analysis("any") is True
+    finally:
+        injector.restore()
+
+    engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    analyzer, injector = _replay_analyzer(engine, use_chart=False)
+    try:
+        assert engine.model_manager.supports_image_analysis("any") is False
+    finally:
+        injector.restore()
+
+
+@pytest.mark.asyncio
+async def test_replay_install_binds_news_ablation_flag():
+    """--no-news must control replay exactly as it controls run."""
+    engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine.rag_engine = MarkerRagEngine()
+    analyzer, injector = _replay_analyzer(engine, use_news=True)
+    try:
+        assert await engine.rag_engine.retrieve_context() == ("LIVE NEWS CONTEXT", {})
+    finally:
+        injector.restore()
+
+    engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine.rag_engine = MarkerRagEngine()
+    analyzer, injector = _replay_analyzer(engine, use_news=False)
+    try:
+        assert await engine.rag_engine.retrieve_context() == ("", {})
+    finally:
+        injector.restore()

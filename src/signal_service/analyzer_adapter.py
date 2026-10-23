@@ -598,10 +598,12 @@ class ReplayDataInjector:
         self._original_enrich = getattr(engine, "_enrich_market_context", None)
         engine.data_collector.collect_data = _replay_collect  # type: ignore[assignment]
         engine._enrich_market_context = _replay_enrich  # type: ignore[assignment]
-        self.analyzer._neutralize_news()  # pylint: disable=protected-access
+        # Bind the same use_news/use_chart ablation flags as the run command;
+        # forcing news off and pre-setting _flags_applied made --use-chart and
+        # --no-news no-ops during replay.
+        self.analyzer._apply_flags()  # pylint: disable=protected-access
         context.ohlcv_candles = self.candles.copy()
         context.timestamps = self.timestamps.copy()
-        self.analyzer._flags_applied = True  # pylint: disable=protected-access
 
     def restore(self) -> None:
         """Restore the original live data collection hooks."""
