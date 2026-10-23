@@ -436,9 +436,8 @@ class DashboardServer:
         sys.stdout.flush()
 
         # Wait for server to be ready
-        import time
         for _ in range(50):  # 5 seconds max
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
             if self._server.started:
                 sys.stdout.write(f"DEBUG: server reports started!\n")
                 sys.stdout.flush()
