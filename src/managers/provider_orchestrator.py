@@ -451,7 +451,7 @@ class ProviderOrchestrator:
             elif provider == "googleai":
                 self.logger.error("Google AI client not initialized. Check GOOGLE_STUDIO_API_KEY in keys.env")
             elif provider == "litellm":
-                self.logger.error("LiteLLM client not initialized. Check LITELLM_BASE_URL in config.ini")
+                self.logger.error("LiteLLM client not initialized. Check LITELLM_BASE_URL in config.ini and LITELLM_API_KEY in keys.env")
             elif provider == "blockrun":
                 self.logger.error("BlockRun client not initialized. Check BLOCKRUN_WALLET_KEY in keys.env")
 
