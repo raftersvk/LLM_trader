@@ -490,3 +490,61 @@ def test_unknown_pair_raises_clear_error():
 
     with pytest.raises(RuntimeError, match="No exchange supports"):
         asyncio.run(_build_initialized_engines(["XYZ/USDT"], engine_factory, manager, "1h"))
+
+
+def test_debug_cycle_replays_last_closed_candle(tmp_path):
+    """Debug mode analyses the last closed 1h candle every cycle, not once an hour."""
+    from src.signal_service.service import SignalService
+
+    analyzers = {}
+
+    def analyzer_factory(symbol):
+        analyzers[symbol] = RecordingAnalyzer(symbol)
+        return analyzers[symbol]
+
+    service = SignalService(
+        pairs=["BTC/USDT"],
+        timeframe="1h",
+        analyzer_factory=analyzer_factory,
+        signals_dir=str(tmp_path),
+        debug_cycle_seconds=0.01,
+        max_cycles=3,
+        dedupe=False,
+    )
+    asyncio.run(service.run())
+
+    seen = analyzers["BTC/USDT"].candles_seen
+    assert len(seen) == 3, "three debug cycles must run without waiting an hour"
+    assert len(set(seen)) == 1, "every cycle replays the same closed candle"
+
+    candle_open = datetime.fromisoformat(seen[0].replace("Z", "+00:00"))
+    now = datetime.now(timezone.utc)
+    assert candle_open + timedelta(hours=1) <= now, "the replayed candle must be closed"
+    assert now - (candle_open + timedelta(hours=1)) < timedelta(hours=1)
+
+    stored = service.storages["BTC/USDT"].load_all()
+    assert len(stored) == 3, "with dedupe disabled each debug cycle is written"
+
+
+def test_debug_cycle_dedupes_by_default(tmp_path):
+    """Without --no-dedup, repeated debug analyses of one candle are not duplicated."""
+    from src.signal_service.service import SignalService
+
+    analyzers = {}
+
+    def analyzer_factory(symbol):
+        analyzers[symbol] = RecordingAnalyzer(symbol)
+        return analyzers[symbol]
+
+    service = SignalService(
+        pairs=["BTC/USDT"],
+        timeframe="1h",
+        analyzer_factory=analyzer_factory,
+        signals_dir=str(tmp_path),
+        debug_cycle_seconds=0.01,
+        max_cycles=3,
+    )
+    asyncio.run(service.run())
+
+    assert len(analyzers["BTC/USDT"].candles_seen) == 3
+    assert len(service.storages["BTC/USDT"].load_all()) == 1

@@ -539,13 +539,17 @@ async def analyze_and_store(
     storage: SignalStorage,
     timeout_seconds: float = 300.0,
     candle_open_time: Optional[str] = None,
+    dedupe: bool = True,
 ) -> Signal:
     """Analyze one closed candle for a pair and append the signal to its JSONL file.
 
     Heartbeat is refreshed regardless of the outcome.
+
+    Args:
+        dedupe: Passed to storage. Set False only for debug output directories.
     """
     signal = await analyze_with_timeout(analyzer, timeout_seconds, candle_open_time=candle_open_time)
-    appended = storage.append(signal)
+    appended = storage.append(signal, dedupe=dedupe)
     write_heartbeat(
         signals_dir=storage.path.rsplit("/", 1)[0],
         symbol=analyzer.symbol,

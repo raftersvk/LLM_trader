@@ -71,11 +71,14 @@ class SignalStorage:
         return self._dedup_key_for(signal) in self._dedup_keys
 
     # ------------------------------------------------------------------ write
-    def append(self, signal: Signal) -> bool:
+    def append(self, signal: Signal, dedupe: bool = True) -> bool:
         """Append one signal to the JSONL file, or skip if already stored.
 
         Args:
             signal: Validated signal to persist.
+            dedupe: When False, write even if a signal already exists for the
+                same candle. Only meant for debug output directories, never for
+                the production signal files.
 
         Returns:
             True when the signal was appended, False when it was a duplicate.
@@ -84,7 +87,7 @@ class SignalStorage:
             SignalValidationError: when the signal violates the contract.
         """
         signal.validate()
-        if self.is_duplicate(signal):
+        if dedupe and self.is_duplicate(signal):
             logger.info(
                 "Duplicate signal for (%s, %s, %s): not appended",
                 signal.symbol, signal.timeframe, signal.candle_open_time,

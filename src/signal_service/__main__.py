@@ -12,6 +12,12 @@ Example:
         --candles data/BTC_USDT_1h.csv \
         --output /home/djelinux/TradingBots/trading-stack/runtime/signals_backtest \
         --no-news
+
+Debug (replay the hourly analysis every minute, no need to wait an hour):
+    python -m src.signal_service run \
+        --pairs BTC/USDT,ETH/USDT --timeframe 1h \
+        --debug-cycle-seconds 60 --no-dedup \
+        --output /home/djelinux/TradingBots/trading-stack/runtime/signals_debug
 """
 
 from __future__ import annotations
@@ -53,6 +59,16 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-cycles", type=int, default=None)
     run.add_argument("--use-news", type=_parse_bool_flag, default="true")
     run.add_argument("--use-chart", type=_parse_bool_flag, default="true")
+    run.add_argument(
+        "--debug-cycle-seconds", type=float, default=0.0,
+        help="Debug: replay the last closed candle every N seconds (e.g. 60) "
+             "instead of waiting for the next candle close",
+    )
+    run.add_argument(
+        "--no-dedup", action="store_true",
+        help="Debug: also write repeated analyses of the same candle "
+             "(use with a debug --output directory, never runtime/signals)",
+    )
 
     replay = sub.add_parser("replay", help="Historical replay (no future data)")
     replay.add_argument("--pairs", default="BTC/USDT")
@@ -150,6 +166,8 @@ async def _run_command(args: argparse.Namespace) -> None:
         buffer_seconds=args.buffer_seconds,
         timeout_seconds=args.timeout_seconds,
         max_cycles=args.max_cycles,
+        debug_cycle_seconds=args.debug_cycle_seconds or None,
+        dedupe=not args.no_dedup,
     )
     await service.run()
 

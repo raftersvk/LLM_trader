@@ -41,6 +41,8 @@ class SignalService:
         buffer_seconds: int = 120,
         timeout_seconds: float = 300.0,
         max_cycles: Optional[int] = None,
+        debug_cycle_seconds: Optional[float] = None,
+        dedupe: bool = True,
     ) -> None:
         """Initialize the scheduler.
 
@@ -52,6 +54,11 @@ class SignalService:
             buffer_seconds: Extra wait after candle close before analysis.
             timeout_seconds: Hard timeout per analysis (HOLD fallback after).
             max_cycles: Optional stop after N candle cycles (for testing).
+            debug_cycle_seconds: Debug mode. When set, the service analyses the
+                last closed candle every N seconds instead of waiting for the
+                next candle close (lets you replay the 1h analysis every minute).
+            dedupe: When False, repeated analyses of the same candle are written
+                too. Only for debug output directories.
         """
         self.pairs = pairs
         self.timeframe = timeframe
@@ -60,6 +67,8 @@ class SignalService:
         self.buffer_seconds = buffer_seconds
         self.timeout_seconds = timeout_seconds
         self.max_cycles = max_cycles
+        self.debug_cycle_seconds = debug_cycle_seconds
+        self.dedupe = dedupe
         self._stop_requested = False
         self.heartbeats: Dict[str, str] = {}
         self.storages: Dict[str, SignalStorage] = {}
@@ -124,6 +133,7 @@ class SignalService:
                     storage,
                     self.timeout_seconds,
                     candle_open_time=candle_open_iso,
+                    dedupe=self.dedupe,
                 )
                 results[symbol] = signal.decision_id
                 self.heartbeats[symbol] = utc_now_iso()
@@ -134,13 +144,42 @@ class SignalService:
         logger.info("Cycle done for candle %s: %s", candle_open, results)
         return results
 
+    def last_closed_candle_open(self, now: Optional[datetime] = None) -> datetime:
+        """Return the open time of the most recent *closed* candle.
+
+        Args:
+            now: Reference time; defaults to current UTC time.
+        """
+        period = timeframe_seconds(self.timeframe)
+        ref = (now or datetime.now(timezone.utc)).timestamp()
+        return datetime.fromtimestamp((ref // period - 1) * period, tz=timezone.utc)
+
     async def run(self) -> None:
-        """Run the candle-aligned scheduler loop until stopped."""
+        """Run the scheduler loop until stopped.
+
+        Normal mode waits for each candle close + buffer. Debug mode
+        (`debug_cycle_seconds`) analyses the last closed candle every N
+        seconds, so the hourly analysis can be replayed once a minute.
+        """
         logger.info(
-            "Signal service starting: pairs=%s timeframe=%s buffer=%ss",
-            self.pairs, self.timeframe, self.buffer_seconds,
+            "Signal service starting: pairs=%s timeframe=%s buffer=%ss debug_cycle=%s",
+            self.pairs, self.timeframe, self.buffer_seconds, self.debug_cycle_seconds,
         )
         cycles = 0
+        if self.debug_cycle_seconds:
+            logger.info(
+                "DEBUG mode: replaying the last closed %s candle every %.0fs (dedupe=%s)",
+                self.timeframe, self.debug_cycle_seconds, self.dedupe,
+            )
+            while not self._stop_requested:
+                await self.run_cycle(self.last_closed_candle_open())
+                cycles += 1
+                if self.max_cycles is not None and cycles >= self.max_cycles:
+                    break
+                await asyncio.sleep(self.debug_cycle_seconds)
+            logger.info("Signal service stopped after %d debug cycles", cycles)
+            return
+
         while not self._stop_requested:
             candle_open = self._current_candle_open()
             wait = self.seconds_until_close(candle_open)
