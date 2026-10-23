@@ -270,3 +270,78 @@ def test_replay_fails_when_csv_starts_in_the_future(tmp_path):
 
     with pytest.raises(ValueError, match="no candle closed at or before"):
         asyncio.run(_replay_command(args))
+
+
+class _SkipTestEngine:
+    """Minimal engine for exercising _replay_command end to end."""
+
+    def __init__(self):
+        from types import SimpleNamespace
+
+        self.context = SimpleNamespace(ohlcv_candles=None, timestamps=[], current_price=None)
+        self.model_manager = SimpleNamespace(
+            supports_image_analysis=lambda *_a, **_k: True, last_finish_reason=None,
+        )
+        self.rag_engine = None
+        self.last_llm_response = ""
+        self.initialized = []
+        self.data_collector = SimpleNamespace(collect_data=self._collect)
+
+    async def _collect(self):
+        return {"success": True, "errors": [], "market_context": "", "article_urls": {}}
+
+    def initialize_for_symbol(self, symbol=None, exchange=None, timeframe=None):
+        self.initialized.append((symbol, exchange, timeframe))
+
+    async def analyze_market(self, **_kwargs):
+        return {"recommendation": "HOLD", "confidence": "LOW", "reasoning": "test"}
+
+
+class _SkipTestRoot:
+    def __init__(self, engine):
+        self.engine = engine
+
+    async def build_dependencies(self):
+        return {
+            "exchange_manager": _SkipTestExchangeManager(),
+            "market_analyzer_factory": lambda _symbol: self.engine,
+        }
+
+
+class _SkipTestExchangeManager:
+    async def find_symbol_exchange(self, _symbol):
+        return (object(), "fake")
+
+
+@pytest.mark.asyncio
+async def test_replay_skips_candles_before_the_csv_data(tmp_path, monkeypatch, caplog):
+    """Windows with no closed candle are skipped and only real data is written."""
+    import logging
+
+    from src.signal_service import __main__ as cli
+
+    engine = _SkipTestEngine()
+    monkeypatch.setattr(cli, "_load_engine_factory", lambda: _SkipTestRoot(engine))
+    candles = tmp_path / "BTC_USDT_1h.csv"
+    candles.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-01-01T03:00:00Z,110.0,120.0,100.0,115.0,333333.0\n",
+        encoding="utf-8",
+    )
+    args = cli._build_parser().parse_args([
+        "replay",
+        "--pairs", "BTC/USDT",
+        "--start", "2026-01-01",
+        "--end", "2026-01-01T04:00:00Z",
+        "--candles", str(candles),
+        "--output", str(tmp_path / "signals"),
+        "--no-news",
+    ])
+
+    with caplog.at_level(logging.WARNING):
+        await cli._replay_command(args)
+
+    rows = (tmp_path / "signals" / "BTC_USDT_1h.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 1
+    assert json.loads(rows[0])["candle_open_time"] == "2026-01-01T03:00:00Z"
+    assert "Skipping candle 2026-01-01T00:00:00Z" in caplog.text
