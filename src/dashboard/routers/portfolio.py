@@ -21,11 +21,15 @@ class PortfolioRouter:
         self.router.add_api_route("/summary", self.get_portfolio_summary, methods=["GET"])
 
     def _load_json_file(self, file_path: Path) -> Optional[Dict[str, Any]]:
-        """Load JSON from a file synchronously."""
+        """Load JSON from a file synchronously, returning None if missing or unreadable."""
         if not file_path.exists():
             return None
-        with open(file_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            self.logger.error("Failed to load portfolio JSON file %s", file_path, exc_info=True)
+            return None
 
     def _get_pair_data_dir(self, symbol: str) -> Path:
         """Get the data directory for a specific pair."""
