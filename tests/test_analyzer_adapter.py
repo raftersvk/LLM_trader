@@ -5,11 +5,18 @@ raw response and compute risk_approved per the contract rules.
 """
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector, analyze_with_timeout
+from src.signal_service.analyzer_adapter import (
+    PairAnalyzer,
+    ReplayDataInjector,
+    analyze_and_store,
+    analyze_with_timeout,
+)
+from src.signal_service.storage import SignalStorage, signal_file_path
 from src.signal_service.contract import (
     SignalValidationError,
     build_decision_id,
@@ -736,3 +743,58 @@ async def test_csv_replay_round_trip_uses_close_not_volume(tmp_path):
         assert figure.data[0].close.tolist() == [105.0, 110.0, 115.0]
     finally:
         injector.restore()
+
+
+RAW_BUY_ZERO_SL = (
+    '{"signal": "BUY", "confidence": "HIGH", "stop_loss": 0, '
+    '"take_profit": 70000.0, "position_size": 5, "reasoning": "bad stop"}'
+)
+
+
+@pytest.mark.asyncio
+async def test_contract_invalid_output_falls_back_to_unapproved_hold():
+    """A response that fails Signal.validate() must still yield a HOLD signal."""
+    engine = FakeEngine(
+        raw_response=RAW_BUY_ZERO_SL,
+        result={**RESULT_META, "raw_response": RAW_BUY_ZERO_SL},
+        config=FakeEngineConfig(),
+    )
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert "invalid LLM output" in signal.reasoning
+    assert "sl must be a positive number or null" in signal.reasoning
+    # Real model/provider, never 'unspecified'.
+    assert signal.model == "deepseek-v4.1-flash"
+    assert signal.provider == "litellm"
+    assert signal.raw_response_hash == hash_raw_response(RAW_BUY_ZERO_SL)
+
+
+@pytest.mark.asyncio
+async def test_contract_invalid_output_is_stored_with_heartbeat(tmp_path):
+    """The fallback HOLD must be persisted and refresh the heartbeat."""
+    engine = FakeEngine(
+        raw_response=RAW_BUY_ZERO_SL,
+        result={**RESULT_META, "raw_response": RAW_BUY_ZERO_SL},
+        config=FakeEngineConfig(),
+    )
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    signals_dir = tmp_path / "signals"
+    storage = SignalStorage(signal_file_path(str(signals_dir), SYMBOL, "1h"))
+
+    signal = await analyze_and_store(
+        analyzer, storage, timeout_seconds=5.0, candle_open_time="2026-10-23T14:00:00Z",
+    )
+
+    assert signal.action == "HOLD"
+    rows = storage.path and open(storage.path, encoding="utf-8").read().splitlines()
+    assert len(rows) == 1
+    stored = json.loads(rows[0])
+    assert stored["action"] == "HOLD"
+    assert stored["risk_approved"] is False
+    heartbeat = json.loads((signals_dir / "heartbeat.json").read_text(encoding="utf-8"))
+    assert heartbeat["symbol"] == SYMBOL
+    assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"

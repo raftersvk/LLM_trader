@@ -251,8 +251,22 @@ class PairAnalyzer:
                 raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
             )
 
-        draft = self._extract_draft(result, raw_response)
-        return self._build_signal(draft, raw_response, candle_open_time)
+        try:
+            draft = self._extract_draft(result, raw_response)
+            return self._build_signal(draft, raw_response, candle_open_time)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # Extraction and contract validation failures must still produce a
+            # signal: one explicable-but-invalid LLM answer must not lose the
+            # whole candle (no row and no heartbeat) for the pair.
+            logger.warning("Signal build failed for %s: %s", self.symbol, exc)
+            model, provider = self._resolve_model_provider(result)
+            return self._hold_fallback(
+                reasoning=f"invalid LLM output: {exc}",
+                candle_open_dt=candle_open_dt,
+                model=model,
+                provider=provider,
+                raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+            )
 
     def _resolve_model_provider(self, result: Dict[str, Any]) -> tuple[str, str]:
         """Resolve the real model/provider, never returning 'unspecified'."""
