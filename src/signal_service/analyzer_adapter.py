@@ -372,7 +372,9 @@ class PairAnalyzer:
             if len(candles) < 3:
                 return None
             return build_state(self.symbol, self.timeframe, list(candles)[:-1])
-        except (ValueError, TypeError) as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # A state-building failure must never abort the analysis: the
+            # documented JEV fail-open contract covers every failure mode.
             logger.warning("Cannot build JEV state for %s: %s", self.symbol, exc)
             return None
 

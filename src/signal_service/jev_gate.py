@@ -159,7 +159,12 @@ def build_state(
     def _return(periods: int) -> Optional[float]:
         if len(closes) <= periods:
             return None
-        return last_close / closes[-1 - periods] - 1.0
+        reference = closes[-1 - periods]
+        # A corrupt candle with a zero close must not raise ZeroDivisionError:
+        # the state builder has to return None for that horizon instead.
+        if reference == 0.0:
+            return None
+        return last_close / reference - 1.0
 
     def _sma(periods: int) -> Optional[float]:
         if len(closes) < periods:

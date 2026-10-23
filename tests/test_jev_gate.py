@@ -666,3 +666,48 @@ def test_round_maps_non_finite_to_none():
     assert _round(None) is None
     assert _round("not-a-number") is None
     assert _round(1.23456789, digits=2) == 1.23
+
+
+def test_build_state_zero_close_denominator():
+    """A corrupt candle with close 0.0 must yield None, not ZeroDivisionError."""
+    candles = _candles()
+    candles[4][3] = 0.0  # the reference close for the 1-period return
+    timestamps = _timestamps()
+
+    state = build_state(SYMBOL, "1h", candles, timestamps, as_of=timestamps[-1] + timedelta(hours=1))
+
+    assert state["returns"]["1"] is None
+    assert state["returns"]["4"] is not None
+    json.dumps(state, allow_nan=False)
+
+
+@pytest.mark.asyncio
+async def test_adapter_survives_zero_close_candle():
+    """A zero-close candle must not abort analyze(): the signal is still stored."""
+    candles = _candles()
+    candles[4][3] = 0.0
+    engine = FakeEngine(_engine_result("BUY"), candles, _timestamps())
+    client = FakeJevClient(_response(tradeable=0.9, bias="long"))
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h",
+        jev_gate=JevGate(client=client, mode="post"),
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
+
+    assert analyzer.engine.calls == 1
+    assert signal.action == "BUY"
+    assert client.calls[0]["returns"]["1"] is None
+
+
+def test_jev_state_fails_open_on_unexpected_state_error(monkeypatch):
+    """Any build_state exception is swallowed by _jev_state (fail-open)."""
+    engine = FakeEngine(_engine_result("HOLD"), _candles(), _timestamps())
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+        raise RuntimeError("unexpected state failure")
+
+    monkeypatch.setattr("src.signal_service.analyzer_adapter.build_state", _boom)
+
+    assert analyzer._jev_state(_timestamps()[-1] + timedelta(hours=1)) is None
