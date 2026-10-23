@@ -158,3 +158,14 @@ def test_package_all_names_are_defined():
     missing = [name for name in package.__all__ if not hasattr(package, name)]
     assert missing == []
     assert set(get_args(package.Action)) == ALLOWED_ACTIONS
+
+
+def test_star_import_exposes_every_name():
+    """`from src.signal_service import *` must not raise AttributeError."""
+    import src.signal_service as package
+
+    namespace: dict = {}
+    exec("from src.signal_service import *", namespace)  # pylint: disable=exec-used
+
+    exported = {name for name in namespace if not name.startswith("__")}
+    assert exported == set(package.__all__)
