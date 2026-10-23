@@ -52,6 +52,10 @@ class LitellmAIClient(BaseAIClient):
             # We use a dummy value
             self.litellm_kwargs["api_key"] = "ollama"
 
+        extra_headers = config.get("extra_headers")
+        if extra_headers:
+            self.litellm_kwargs["extra_headers"] = dict(extra_headers)
+
         self.logger.debug(
             "LitellmAIClient initialized - provider: %s, model: %s, base_url: %s, api_key_set: %s",
             self.provider,
@@ -59,8 +63,6 @@ class LitellmAIClient(BaseAIClient):
             self.base_url,
             bool(self.api_key),
         )
-        if self.api_key:
-            self.logger.debug("API key prefix: %s", self.api_key[:8])
 
     async def _initialize_client(self) -> None:
         """LiteLLM does not need specific async initialization."""
@@ -177,7 +179,7 @@ class LitellmAIClient(BaseAIClient):
             )
             response = await acompletion(
                 model=full_model,
-                messages=messages,
+                messages=messages_with_image,
                 **params,
                 **self.litellm_kwargs,
             )
@@ -274,8 +276,10 @@ class LitellmAIClient(BaseAIClient):
 
     def _create_response_from_litellm(self, response) -> ChatResponseModel:
         """Convert LiteLLM response to standard ChatResponseModel."""
+        finish_reason = None
         if hasattr(response, "choices") and response.choices:
             choice = response.choices[0]
+            finish_reason = getattr(choice, "finish_reason", None)
             if hasattr(choice, "message"):
                 content = choice.message.content if choice.message else ""
             elif hasattr(choice, "text"):
@@ -289,6 +293,11 @@ class LitellmAIClient(BaseAIClient):
         else:
             content = str(response)
 
+        if content is None:
+            content = ""
+        elif not isinstance(content, str):
+            content = str(content)
+
         usage = UsageModel(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         if hasattr(response, "usage") and response.usage:
             usage = UsageModel(
@@ -299,7 +308,7 @@ class LitellmAIClient(BaseAIClient):
 
         choice_model = ChoiceModel(
             message=MessageModel(role="assistant", content=content),
-            finish_reason="stop",
+            finish_reason=finish_reason,
             index=0,
         )
         return ChatResponseModel(

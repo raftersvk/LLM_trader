@@ -267,6 +267,14 @@ class Config:
         return self.get_config('ai_providers', 'litellm_streaming', True)
 
     @property
+    def LITELLM_USER_AGENT(self):
+        return self.get_config('ai_providers', 'litellm_user_agent', 'tradingbot/0.1')
+
+    @property
+    def LITELLM_SESSION_ID(self):
+        return self.get_config('ai_providers', 'litellm_session_id', 'tradingbot')
+
+    @property
     def OPENROUTER_BASE_URL(self):
         return self.get_config('ai_providers', 'openrouter_base_url', 'https://openrouter.ai/api/v1')
 

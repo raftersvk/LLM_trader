@@ -116,19 +116,25 @@ class LiteLLMFactory:
 
         api_key = getattr(self.config, "LITELLM_API_KEY", None)
         if not api_key:
-            api_key = getattr(self.config, "MINIMAX_API_KEY", None)
-        if not api_key:
             self.logger.debug("No API key configured for litellm provider")
             return None
 
-        self.logger.debug("LiteLLM config - base_url: %s, model: %s, api_key_prefix: %s",
-                         base_url, model, api_key[:8] if api_key else None)
+        extra_headers = {}
+        user_agent = getattr(self.config, "LITELLM_USER_AGENT", None)
+        session_id = getattr(self.config, "LITELLM_SESSION_ID", None)
+        if user_agent:
+            extra_headers["User-Agent"] = user_agent
+        if session_id:
+            extra_headers["x-opencode-session"] = session_id
+
+        self.logger.debug("LiteLLM config - base_url: %s, model: %s", base_url, model)
 
         return {
             "provider": "litellm",
             "base_url": base_url,
             "model": model,
             "api_key": api_key,
+            "extra_headers": extra_headers,
         }
 
     def _get_google_config(self) -> Optional[Dict[str, Any]]:
