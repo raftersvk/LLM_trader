@@ -210,3 +210,63 @@ def test_replay_fails_clearly_when_window_precedes_csv(tmp_path):
     message = str(excinfo.value)
     assert "no candle closed at or before" in message
     assert "check --start/--end/--as-of or the csv range" in message
+
+
+def test_replay_windows_never_exceed_now():
+    """A future --end must not fabricate windows for candles that never closed."""
+    from datetime import datetime, timedelta, timezone
+
+    from src.signal_service.__main__ import _replay_candles
+
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = start + timedelta(hours=5)
+    now = start + timedelta(hours=3, minutes=30)
+
+    windows = _replay_candles(start, end, "1h", None, now)
+
+    assert [candle.hour for candle, _as_of in windows] == [0, 1, 2]
+    assert all(as_of <= now for _candle, as_of in windows)
+    # Candle 03:00 would close at 04:00, in the future: it must be skipped.
+    assert max(candle for candle, _as_of in windows).hour == 2
+
+
+def test_replay_windows_respect_as_of_cap():
+    from datetime import datetime, timedelta, timezone
+
+    from src.signal_service.__main__ import _replay_candles
+
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = start + timedelta(hours=5)
+    cap = start + timedelta(hours=2, minutes=30)
+
+    windows = _replay_candles(start, end, "1h", cap, start + timedelta(hours=10))
+
+    assert [candle.hour for candle, _as_of in windows] == [0, 1]
+
+
+def test_replay_fails_when_csv_starts_in_the_future(tmp_path):
+    """A csv whose first candle has not closed yet must fail, not fabricate."""
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    from src.signal_service.__main__ import _build_parser, _replay_command
+
+    now = datetime.now(timezone.utc)
+    future = now + timedelta(days=1)
+    candles = tmp_path / "future.csv"
+    candles.write_text(
+        "time,open,high,low,close,volume\n"
+        f"{future.isoformat().replace('+00:00', 'Z')},110.0,120.0,100.0,115.0,333333.0\n",
+        encoding="utf-8",
+    )
+    args = _build_parser().parse_args([
+        "replay",
+        "--pairs", "BTC/USDT",
+        "--start", now.date().isoformat(),
+        "--end", (now + timedelta(days=2)).date().isoformat(),
+        "--candles", str(candles),
+        "--output", str(tmp_path / "signals"),
+    ])
+
+    with pytest.raises(ValueError, match="no candle closed at or before"):
+        asyncio.run(_replay_command(args))

@@ -285,6 +285,36 @@ def _load_candles_csv(path: str) -> Tuple[np.ndarray, List[datetime]]:
 
 
 
+def _effective_replay_end(
+    end: datetime,
+    as_of_cap: Optional[datetime],
+    now: Optional[datetime] = None,
+) -> datetime:
+    """Latest candle close a replay may analyse: never in the future."""
+    effective_end = min(end, now or datetime.now(timezone.utc))
+    if as_of_cap is not None:
+        effective_end = min(effective_end, as_of_cap)
+    return effective_end
+
+
+def _replay_candles(
+    start: datetime,
+    end: datetime,
+    timeframe: str,
+    as_of_cap: Optional[datetime] = None,
+    now: Optional[datetime] = None,
+) -> List[Tuple[datetime, datetime]]:
+    """Return (candle open, as_of) pairs whose close is not in the future."""
+    period = timedelta(seconds=timeframe_seconds(timeframe))
+    effective_end = _effective_replay_end(end, as_of_cap, now)
+    candles: List[Tuple[datetime, datetime]] = []
+    candle = start
+    while candle + period <= effective_end:
+        candles.append((candle, candle + period))
+        candle = candle + period
+    return candles
+
+
 def _has_closed_candle(
     timestamps: List[datetime],
     timeframe: str,
@@ -307,18 +337,18 @@ async def _replay_command(args: argparse.Namespace) -> None:
     symbol = pairs[0]
     start = parse_iso(args.start if "T" in args.start else args.start + "T00:00:00Z")
     end = parse_iso(args.end if "T" in args.end else args.end + "T00:00:00Z")
-    period = timedelta(seconds=timeframe_seconds(args.timeframe))
     as_of_cap = parse_iso(args.as_of) if args.as_of else None
+    now = datetime.now(timezone.utc)
 
     # Load and validate the series before touching exchanges or engines, and
     # fail clearly when the requested window has no usable data at all.
     candles, timestamps = _load_candles_csv(args.candles)
     if not timestamps:
         raise ValueError(f"no candles found in {args.candles}: nothing to replay")
-    last_as_of = min(end, as_of_cap) if as_of_cap is not None else end
-    if not _has_closed_candle(timestamps, args.timeframe, last_as_of):
+    effective_end = _effective_replay_end(end, as_of_cap, now)
+    if not _has_closed_candle(timestamps, args.timeframe, effective_end):
         raise ValueError(
-            f"no candle closed at or before {iso_z(last_as_of)} in {args.candles} "
+            f"no candle closed at or before {iso_z(effective_end)} in {args.candles} "
             f"(earliest candle opens {iso_z(timestamps[0])}); "
             "check --start/--end/--as-of or the csv range"
         )
@@ -345,26 +375,23 @@ async def _replay_command(args: argparse.Namespace) -> None:
     injector = ReplayDataInjector(analyzer, candles, timestamps)
     injector.install()
 
-    candle = start
     produced = 0
-    while candle < end:
-        if as_of_cap is not None and candle + period > as_of_cap:
-            break
-        # No future data: only candles closed at or before `candle + period`.
-        as_of = min(candle + period, datetime.now(timezone.utc))
+    # Only windows that closed at or before now: a future --end must never
+    # fabricate signals for candles that have not happened yet.
+    for candle, as_of in _replay_candles(
+        start, end, args.timeframe, as_of_cap, now,
+    ):
         if not _has_closed_candle(timestamps, args.timeframe, as_of):
             logger.warning(
                 "Skipping candle %s: no candle closed at or before %s "
                 "(replay range starts before the csv data)",
                 iso_z(candle), iso_z(as_of),
             )
-            candle = candle + period
             continue
         try:
             injector.set_as_of(as_of)
         except SignalValidationError as exc:
             logger.warning("Skipping candle %s: %s", iso_z(candle), exc)
-            candle = candle + period
             continue
         try:
             signal = await asyncio.wait_for(
@@ -375,7 +402,6 @@ async def _replay_command(args: argparse.Namespace) -> None:
                 produced += 1
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Replay analysis failed for candle %s: %s", candle, exc)
-        candle = candle + period
     injector.restore()
     print(f"Replay complete for {symbol}: {produced} signals written to {storage.path}")
 
