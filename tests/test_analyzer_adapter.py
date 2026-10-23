@@ -6,6 +6,7 @@ raw response and compute risk_approved per the contract rules.
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -858,3 +859,70 @@ def test_run_cycle_refreshes_heartbeat_on_failure(tmp_path):
     heartbeat = json.loads((tmp_path / "heartbeat.json").read_text(encoding="utf-8"))
     assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"
     assert SYMBOL in service.heartbeats
+
+
+def _attach_unified_parser(engine):
+    """Give the fake engine the AnalysisResultProcessor surface the bot has."""
+    from types import SimpleNamespace
+    from src.parsing.unified_parser import UnifiedParser
+
+    engine.result_processor = SimpleNamespace(
+        unified_parser=UnifiedParser(logger=logging.getLogger("tests")),
+    )
+    return engine
+
+
+FENCED_NUMERIC_CONFIDENCE = (
+    "```json\n"
+    '{"signal": "BUY", "confidence": 45, "stop_loss": 67000.0, '
+    '"take_profit": 70000.0, "position_size": 5, "reasoning": "weak setup"}\n'
+    "```"
+)
+
+
+@pytest.mark.asyncio
+async def test_numeric_confidence_uses_json_path_and_is_vetted():
+    """Numeric confidence must normalize like the live bot (45 -> LOW -> 0.35).
+
+    Without the engine's UnifiedParser the extractor falls back to regex,
+    misses the numeric value and silently defaults to MEDIUM (0.65), letting a
+    low-confidence signal pass the 0.6 min_confidence gate.
+    """
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=FENCED_NUMERIC_CONFIDENCE,
+        result={**RESULT_META, "raw_response": FENCED_NUMERIC_CONFIDENCE},
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.action == "BUY"
+    assert signal.confidence == 0.35
+    assert signal.risk_approved is False
+
+
+FENCED_ACTION_KEY = (
+    "```json\n"
+    '{"action": "SELL", "confidence": "HIGH", "stop_loss": 70000.0, '
+    '"take_profit": 64000.0, "position_size": 5, "reasoning": "breakdown"}\n'
+    "```"
+)
+
+
+@pytest.mark.asyncio
+async def test_action_key_is_honoured_like_the_live_bot():
+    """A response keyed on `action` must not silently degrade to HOLD."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=FENCED_ACTION_KEY,
+        result={**RESULT_META, "raw_response": FENCED_ACTION_KEY},
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.action == "SELL"
+    assert signal.risk_approved is True
+    assert signal.sl == 70000.0
+    assert signal.tp == 64000.0
