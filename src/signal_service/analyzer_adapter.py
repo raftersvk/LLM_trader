@@ -439,6 +439,17 @@ class PairAnalyzer:
 
 
     # ----------------------------------------------------------------- extraction
+    def _unified_parser(self) -> Any:
+        """Return the engine's UnifiedParser, matching the live bot's extraction.
+
+        The live bot builds `PositionExtractor(logger, parser)` from the
+        AnalysisResultProcessor's parser; without it the extractor never sees
+        JSON decisions (numeric confidence, `action` keys) and silently degrades
+        to the weaker regex fallback.
+        """
+        result_processor = getattr(self.engine, "result_processor", None)
+        return getattr(result_processor, "unified_parser", None)
+
     def _extract_draft(self, result: Dict[str, Any], raw_response: str) -> SignalDraft:
         """Extract the decision from the raw LLM response via PositionExtractor."""
         from src.trading.position_extractor import PositionExtractor  # local import: optional dep
@@ -447,7 +458,13 @@ class PairAnalyzer:
         raw_hash = hash_raw_response(raw_response) if raw_response else None
 
         if raw_response:
-            extractor = PositionExtractor(logger=None)
+            parser = self._unified_parser()
+            if parser is None:
+                logger.warning(
+                    "Engine for %s exposes no UnifiedParser: falling back to regex extraction",
+                    self.symbol,
+                )
+            extractor = PositionExtractor(logger=None, unified_parser=parser)
             signal, confidence, stop_loss, take_profit, position_size, reasoning, _symbol = \
                 extractor.extract_trading_info(raw_response)
         else:

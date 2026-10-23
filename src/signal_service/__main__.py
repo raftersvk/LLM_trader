@@ -30,7 +30,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -44,6 +44,8 @@ from src.signal_service.storage import SignalStorage, signal_file_path
 logger = logging.getLogger(__name__)
 
 DEFAULT_SIGNALS_DIR = "/home/djelinux/TradingBots/trading-stack/runtime/signals"
+#: Shared contract from the sibling trading-stack checkout; override with --schema.
+DEFAULT_SCHEMA_PATH = "/home/djelinux/TradingBots/trading-stack/contracts/signal.schema.json"
 
 
 def _parse_bool_flag(value: str) -> bool:
@@ -92,6 +94,10 @@ def _build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate", help="Validate JSONL signal files")
     validate.add_argument("--input", default=DEFAULT_SIGNALS_DIR)
     validate.add_argument("--file", default=None, help="Validate a single JSONL file")
+    validate.add_argument(
+        "--schema", default=DEFAULT_SCHEMA_PATH,
+        help="Shared signal JSON schema (default: the sibling trading-stack checkout)",
+    )
     return parser
 
 
@@ -194,32 +200,63 @@ async def _run_command(args: argparse.Namespace) -> None:
 def _load_candles_csv(path: str) -> Tuple[np.ndarray, List[datetime]]:
     """Load an OHLCV csv into the CCXT candle layout used by the live collector.
 
+    Rows must carry the 6 documented columns (time,open,high,low,close,volume)
+    and open times strictly ascending: replay slices candles and timestamps by
+    position, so a newest-first file would silently turn the no-look-ahead
+    window into a look-ahead one.
+
     Returns:
         A float64 array of shape (n, 6) with rows
         ``[timestamp_ms, open, high, low, close, volume]`` (the layout every
         consumer expects: chart generation slices ``[:, 1:6]`` and
         ``truncate_context_to_as_of`` reads column 4 as the close), plus the
         parallel list of candle open times.
+
+    Raises:
+        ValueError: on an unsupported header, a row without 6 columns, an
+            unparsable timestamp or non-ascending open times.
     """
     rows: List[List[float]] = []
     timestamps: List[datetime] = []
+    previous_open_at: Optional[datetime] = None
     with open(path, "r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
         header = next(reader, None)
         first = header[0].strip().lower() if header else ""
-        for row in reader:
-            if not row or len(row) < 5:
+        if first not in ("time", "date", "timestamp"):
+            raise ValueError(f"Unsupported csv header: {header}")
+        for line_number, row in enumerate(reader, start=2):
+            if not row or not any(cell.strip() for cell in row):
                 continue
-            if first in ("time", "date", "timestamp"):
-                tokens = row[0].replace("Z", "+00:00")
+            if len(row) < 6:
+                raise ValueError(
+                    f"{path}:{line_number}: expected 6 columns "
+                    f"(time,open,high,low,close,volume), got {len(row)}"
+                )
+            tokens = row[0].strip().replace("Z", "+00:00")
+            try:
                 open_at = datetime.fromisoformat(tokens)
-                if open_at.tzinfo is None:
-                    open_at = open_at.replace(tzinfo=timezone.utc)
-                values = row[1:6]
-            else:
-                raise ValueError(f"Unsupported csv header: {header}")
+            except ValueError as exc:
+                raise ValueError(
+                    f"{path}:{line_number}: invalid timestamp {row[0]!r}: {exc}"
+                ) from exc
+            if open_at.tzinfo is None:
+                open_at = open_at.replace(tzinfo=timezone.utc)
+            if previous_open_at is not None and open_at <= previous_open_at:
+                raise ValueError(
+                    f"{path}:{line_number}: candle times must be strictly ascending; "
+                    f"{row[0].strip()} follows {previous_open_at.isoformat()}. "
+                    "Sort the csv oldest-first."
+                )
+            previous_open_at = open_at
+            try:
+                values = [float(v) for v in row[1:6]]
+            except ValueError as exc:
+                raise ValueError(
+                    f"{path}:{line_number}: non-numeric OHLCV value: {exc}"
+                ) from exc
             timestamp_ms = open_at.timestamp() * 1000.0
-            rows.append([timestamp_ms] + [float(v) for v in values])
+            rows.append([timestamp_ms] + values)
             timestamps.append(open_at)
     return np.array(rows, dtype=np.float64).reshape(len(rows), 6), timestamps
 
@@ -281,19 +318,33 @@ async def _replay_command(args: argparse.Namespace) -> None:
     print(f"Replay complete for {symbol}: {produced} signals written to {storage.path}")
 
 
-def _validate_file(path: str, schema_path: str) -> Tuple[int, int]:
-    """Validate one JSONL file; returns (valid_signals, failures)."""
-    from src.signal_service.contract import Signal
+def _load_schema_validator(schema_path: str) -> Any:
+    """Load the shared signal schema as a jsonschema validator.
 
-    schema = None
+    Args:
+        schema_path: Path to the shared contract JSON schema.
+
+    Returns:
+        A Draft 2020-12 validator, or None when jsonschema is not installed
+        (structural contract validation still runs).
+
+    Raises:
+        OSError: when the schema file cannot be read.
+        ValueError: when the schema is not valid JSON.
+    """
     with open(schema_path, "r", encoding="utf-8") as handle:
         schema = json.load(handle)
-    validator = None
     try:
         import jsonschema
-        validator = jsonschema.Draft202012Validator(schema)
     except ImportError:
-        validator = None
+        print("jsonschema not installed: structural (contract) validation only")
+        return None
+    return jsonschema.Draft202012Validator(schema)
+
+
+def _validate_file(path: str, validator: Any) -> Tuple[int, int]:
+    """Validate one JSONL file; returns (valid_signals, failures)."""
+    from src.signal_service.contract import Signal
 
     valid = 0
     failures = 0
@@ -317,27 +368,40 @@ def _validate_file(path: str, schema_path: str) -> Tuple[int, int]:
 def _validate_command(args: argparse.Namespace) -> int:
     import os
 
-    schema_path = "/home/djelinux/TradingBots/trading-stack/contracts/signal.schema.json"
+    schema_path = args.schema
+    if not os.path.isfile(schema_path):
+        print(
+            f"schema file not found: {schema_path}\n"
+            f"Pass --schema PATH to point at the shared contract "
+            f"(default: {DEFAULT_SCHEMA_PATH})"
+        )
+        return 2
+    try:
+        validator = _load_schema_validator(schema_path)
+    except (OSError, ValueError) as exc:
+        print(f"cannot load schema {schema_path}: {exc}")
+        return 2
+
     files = [args.file] if args.file else []
     if not files:
+        if not os.path.isdir(args.input):
+            print(f"input directory not found: {args.input}")
+            return 2
         files = sorted(
             os.path.join(args.input, name)
             for name in os.listdir(args.input)
             if name.endswith(".jsonl")
         )
-    checked = 0
-    failures = 0
-    for path in files:
-        valid, errors = _validate_file(path, schema_path)
-        checked += valid
-        failures += errors
-        print(f"{path}: ok={valid} errors={errors}")
-    if args.file is None and not os.path.isdir(args.input):
-        print(f"input directory not found: {args.input}")
-        return 2
     if not files:
         print(f"no .jsonl files found in {args.input}")
         return 2
+    checked = 0
+    failures = 0
+    for path in files:
+        valid, errors = _validate_file(path, validator)
+        checked += valid
+        failures += errors
+        print(f"{path}: ok={valid} errors={errors}")
     print(f"checked={checked} failures={failures}")
     return 0 if failures == 0 else 1
 

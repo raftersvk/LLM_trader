@@ -6,6 +6,7 @@ raw response and compute risk_approved per the contract rules.
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -795,7 +796,7 @@ async def test_contract_invalid_output_is_stored_with_heartbeat(tmp_path):
     stored = json.loads(rows[0])
     assert stored["action"] == "HOLD"
     assert stored["risk_approved"] is False
-    heartbeat = json.loads((signals_dir / "heartbeat.json").read_text(encoding="utf-8"))
+    heartbeat = json.loads((signals_dir / "heartbeat_BTC_USDT_1h.json").read_text(encoding="utf-8"))
     assert heartbeat["symbol"] == SYMBOL
     assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"
 
@@ -826,7 +827,7 @@ async def test_heartbeat_refreshed_when_append_fails(tmp_path):
             analyzer, storage, 5.0, candle_open_time="2026-10-23T14:00:00Z",
         )
 
-    heartbeat = json.loads((signals_dir / "heartbeat.json").read_text(encoding="utf-8"))
+    heartbeat = json.loads((signals_dir / "heartbeat_BTC_USDT_1h.json").read_text(encoding="utf-8"))
     assert heartbeat["symbol"] == SYMBOL
     assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"
 
@@ -855,6 +856,163 @@ def test_run_cycle_refreshes_heartbeat_on_failure(tmp_path):
     results = asyncio.run(service.run_cycle(_hour(14)))
 
     assert results[SYMBOL] == "error"
-    heartbeat = json.loads((tmp_path / "heartbeat.json").read_text(encoding="utf-8"))
+    heartbeat = json.loads((tmp_path / "heartbeat_BTC_USDT_1h.json").read_text(encoding="utf-8"))
     assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"
     assert SYMBOL in service.heartbeats
+
+
+def _attach_unified_parser(engine):
+    """Give the fake engine the AnalysisResultProcessor surface the bot has."""
+    from types import SimpleNamespace
+    from src.parsing.unified_parser import UnifiedParser
+
+    engine.result_processor = SimpleNamespace(
+        unified_parser=UnifiedParser(logger=logging.getLogger("tests")),
+    )
+    return engine
+
+
+FENCED_NUMERIC_CONFIDENCE = (
+    "```json\n"
+    '{"signal": "BUY", "confidence": 45, "stop_loss": 67000.0, '
+    '"take_profit": 70000.0, "position_size": 5, "reasoning": "weak setup"}\n'
+    "```"
+)
+
+
+@pytest.mark.asyncio
+async def test_numeric_confidence_uses_json_path_and_is_vetted():
+    """Numeric confidence must normalize like the live bot (45 -> LOW -> 0.35).
+
+    Without the engine's UnifiedParser the extractor falls back to regex,
+    misses the numeric value and silently defaults to MEDIUM (0.65), letting a
+    low-confidence signal pass the 0.6 min_confidence gate.
+    """
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=FENCED_NUMERIC_CONFIDENCE,
+        result={**RESULT_META, "raw_response": FENCED_NUMERIC_CONFIDENCE},
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.action == "BUY"
+    assert signal.confidence == 0.35
+    assert signal.risk_approved is False
+
+
+FENCED_ACTION_KEY = (
+    "```json\n"
+    '{"action": "SELL", "confidence": "HIGH", "stop_loss": 70000.0, '
+    '"take_profit": 64000.0, "position_size": 5, "reasoning": "breakdown"}\n'
+    "```"
+)
+
+
+@pytest.mark.asyncio
+async def test_action_key_is_honoured_like_the_live_bot():
+    """A response keyed on `action` must not silently degrade to HOLD."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=FENCED_ACTION_KEY,
+        result={**RESULT_META, "raw_response": FENCED_ACTION_KEY},
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.action == "SELL"
+    assert signal.risk_approved is True
+    assert signal.sl == 70000.0
+    assert signal.tp == 64000.0
+
+
+def test_each_pair_has_its_own_heartbeat_file(tmp_path):
+    """Writing one pair's heartbeat must never overwrite another pair's file."""
+    from src.signal_service.storage import write_heartbeat
+
+    signals_dir = tmp_path / "signals"
+    write_heartbeat(str(signals_dir), "BTC/USDT", "1h", "2026-10-23T14:00:00Z")
+    write_heartbeat(str(signals_dir), "ETH/USDT", "1h", "2026-10-23T13:00:00Z")
+
+    btc = json.loads((signals_dir / "heartbeat_BTC_USDT_1h.json").read_text(encoding="utf-8"))
+    eth = json.loads((signals_dir / "heartbeat_ETH_USDT_1h.json").read_text(encoding="utf-8"))
+    assert btc["symbol"] == "BTC/USDT"
+    assert btc["candle_open_time"] == "2026-10-23T14:00:00Z"
+    assert eth["symbol"] == "ETH/USDT"
+    assert eth["candle_open_time"] == "2026-10-23T13:00:00Z"
+
+
+def test_run_cycle_keeps_per_pair_heartbeats_and_summary(tmp_path):
+    """A healthy pair must not mask a stuck pair in the persisted liveness files."""
+    from src.signal_service.service import SignalService
+
+    def analyzer_factory(symbol):
+        if symbol == SYMBOL:
+            return RaisingAnalyzer()
+        return RecordingAnalyzer(symbol)
+
+    service = SignalService(
+        pairs=[SYMBOL, "ETH/USDT"],
+        timeframe="1h",
+        analyzer_factory=analyzer_factory,
+        signals_dir=str(tmp_path),
+    )
+
+    results = asyncio.run(service.run_cycle(_hour(14)))
+
+    assert results[SYMBOL] == "error"
+    btc = json.loads((tmp_path / "heartbeat_BTC_USDT_1h.json").read_text(encoding="utf-8"))
+    eth = json.loads((tmp_path / "heartbeat_ETH_USDT_1h.json").read_text(encoding="utf-8"))
+    assert btc["candle_open_time"] == "2026-10-23T14:00:00Z"
+    assert eth["candle_open_time"] == "2026-10-23T14:00:00Z"
+    summary = json.loads((tmp_path / "heartbeat_summary.json").read_text(encoding="utf-8"))
+    assert set(summary["pairs"]) == {SYMBOL, "ETH/USDT"}
+
+
+def test_csv_loader_rejects_short_rows(tmp_path):
+    """A row missing volume must fail cleanly, not crash np.reshape later."""
+    from src.signal_service.__main__ import _load_candles_csv
+
+    path = tmp_path / "short.csv"
+    path.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-10-23T10:00:00Z,100.0,110.0,90.0,105.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="expected 6 columns"):
+        _load_candles_csv(str(path))
+
+
+def test_csv_loader_rejects_newest_first_files(tmp_path):
+    """A descending csv would misalign candles/timestamps and look ahead."""
+    from src.signal_service.__main__ import _load_candles_csv
+
+    path = tmp_path / "descending.csv"
+    path.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-10-23T12:00:00Z,110.0,120.0,100.0,115.0,333333.0\n"
+        "2026-10-23T11:00:00Z,105.0,115.0,95.0,110.0,222222.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="strictly ascending"):
+        _load_candles_csv(str(path))
+
+
+def test_csv_loader_rejects_duplicate_timestamps(tmp_path):
+    """Duplicate open times make position-based slicing ambiguous."""
+    from src.signal_service.__main__ import _load_candles_csv
+
+    path = tmp_path / "duplicate.csv"
+    path.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-10-23T11:00:00Z,105.0,115.0,95.0,110.0,222222.0\n"
+        "2026-10-23T11:00:00Z,106.0,116.0,96.0,111.0,222223.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="strictly ascending"):
+        _load_candles_csv(str(path))

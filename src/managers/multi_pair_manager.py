@@ -58,18 +58,30 @@ class MultiPairManager:
                 await self.initialize_pair(symbol)
 
             context = self.pair_contexts[symbol]
-            if context.is_running and context.bot_task and not context.bot_task.done():
+            if context.is_running:
                 self.logger.warning("Pair %s already running", symbol)
                 return False
             context.is_running = True
 
         self.logger.info("start_pair %s: creating bot (outside lock)", symbol)
         self.logger.info("start_pair %s: calling create_bot_for_pair...", symbol)
-        bot = await self.dependencies_factory.create_bot_for_pair(symbol)
+        try:
+            bot = await self.dependencies_factory.create_bot_for_pair(symbol)
+        except Exception as e:
+            self.logger.error("Failed to create bot for %s: %s", symbol, e, exc_info=True)
+            async with self._lock:
+                if symbol in self.pair_contexts:
+                    self.pair_contexts[symbol].is_running = False
+                    self.pair_contexts[symbol].last_error = str(e)
+            return False
         self.logger.info("start_pair %s: create_bot_for_pair returned", symbol)
 
         async with self._lock:
             context = self.pair_contexts[symbol]
+            # Re-verify under the lock: never replace a live trading loop.
+            if context.bot_task and not context.bot_task.done():
+                self.logger.warning("Pair %s already running", symbol)
+                return False
             context.bot_task = asyncio.create_task(
                 self._run_pair_loop(bot, symbol),
                 name=f"TradingBot-{symbol.replace('/', '_')}"

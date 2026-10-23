@@ -256,11 +256,29 @@ class LitellmAIClient(BaseAIClient):
             )
 
     def _get_full_model_name(self, model: str) -> str:
-        """Return the model name as-is from config.
+        """Build the LiteLLM model identifier for this client's provider.
 
-        LiteLLM expects the model identifier as configured by the user.
+        The ``litellm`` provider targets an OpenAI-compatible endpoint (OpenCode
+        Go) that only accepts the bare model id; its OpenAI routing comes from
+        the ``custom_llm_provider`` override set in ``__init__``. Every other
+        provider keeps the ``<provider>/<model>`` prefix, which is what makes
+        LiteLLM resolve that provider's transport (e.g. ``openrouter/``) rather
+        than inferring one from the model name and ignoring the base_url.
         """
-        return model if model else self.default_model
+        if not model:
+            model = self.default_model
+
+        if self.provider == "litellm":
+            return model
+        if self.provider == "openrouter":
+            return f"openrouter/{model}"
+        # OpenAI-compatible endpoints (BlockRun, LM Studio, Ollama) use the
+        # openai/ prefix together with their configured base_url.
+        if self.base_url:
+            return f"openai/{model}"
+        if self.provider == "ollama":
+            return f"ollama/{model}"
+        return f"{self.provider}/{model}"
 
     def _build_litellm_params(self, model_config: Dict[str, Any]) -> Dict[str, Any]:
         """Build LiteLLM params from model config."""
