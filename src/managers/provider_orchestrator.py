@@ -123,7 +123,7 @@ class ProviderOrchestrator:
         Invoke a single provider and return structured result.
 
         Args:
-            provider: Provider key (googleai, openrouter, local)
+            provider: Provider key (googleai, litellm, openrouter, blockrun)
             messages: Chat messages
             chart: Whether this is a chart analysis request
             chart_image: Optional chart image for analysis
@@ -215,7 +215,7 @@ class ProviderOrchestrator:
         """
         if effective_provider == "all":
             result = await self.invoke_with_fallback(
-                ["googleai", "local", "openrouter", "blockrun"], messages, model=model
+                ["googleai", "litellm", "openrouter", "blockrun"], messages, model=model
             )
             return result
         if self.is_available(effective_provider):
@@ -262,13 +262,6 @@ class ProviderOrchestrator:
                 )
             return await self.invoke_with_fallback(
                 ["googleai", "openrouter", "blockrun"], messages, chart=True, chart_image=chart_image, model=model
-            )
-        if effective_provider == "local":
-            return InvocationResult(
-                success=False,
-                response=ChatResponseModel.from_error("Chart analysis unavailable - local models don't support images"),
-                provider="local",
-                model=self.resolve_model("local", model)
             )
         if self.is_available(effective_provider):
             effective_model = self.resolve_model(effective_provider, model)
@@ -438,8 +431,8 @@ class ProviderOrchestrator:
         """Log provider failure with appropriate message."""
         if provider == "googleai":
             self.logger.warning("Google AI Studio model failed. Trying alternatives...")
-        elif provider == "local":
-            self.logger.warning("LM Studio failed. Falling back to next provider.")
+        elif provider == "litellm":
+            self.logger.warning("LiteLLM failed. Falling back to next provider.")
         elif provider == "openrouter":
             self.logger.warning("OpenRouter failed or rate limited.")
 
@@ -451,12 +444,10 @@ class ProviderOrchestrator:
                 self.logger.error("OpenRouter client not initialized. Check OPENROUTER_API_KEY in keys.env")
             elif provider == "googleai":
                 self.logger.error("Google AI client not initialized. Check GOOGLE_STUDIO_API_KEY in keys.env")
-            elif provider == "local":
+            elif provider == "litellm":
                 self.logger.error("LiteLLM client not initialized. Check LITELLM_BASE_URL in config.ini")
             elif provider == "blockrun":
                 self.logger.error("BlockRun client not initialized. Check BLOCKRUN_WALLET_KEY in keys.env")
-        elif provider == "local":
-            self.logger.error("Local models don't support image analysis")
 
     async def _invoke_blockrun(
         self,

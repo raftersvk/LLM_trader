@@ -85,7 +85,8 @@ class ProviderFactory:
         Create all available AI provider clients based on configuration.
 
         Returns:
-            Dictionary with keys: 'google', 'google_paid', 'openrouter', 'litellm', 'blockrun'.
+            Dictionary with keys: 'google', 'google_paid', 'openrouter', 'litellm',
+            'blockrun', 'vision_litellm'.
         """
         google_client, google_paid_client = self.create_google_clients()
 
@@ -97,5 +98,6 @@ class ProviderFactory:
             'google_paid': google_paid_client,
             'openrouter': litellm_clients.get('openrouter'),
             'litellm': litellm_clients.get('litellm'),
-            'blockrun': litellm_clients.get('blockrun')
+            'blockrun': litellm_clients.get('blockrun'),
+            'vision_litellm': litellm_clients.get('vision_litellm')
         }
