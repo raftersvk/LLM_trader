@@ -969,3 +969,50 @@ def test_run_cycle_keeps_per_pair_heartbeats_and_summary(tmp_path):
     assert eth["candle_open_time"] == "2026-10-23T14:00:00Z"
     summary = json.loads((tmp_path / "heartbeat_summary.json").read_text(encoding="utf-8"))
     assert set(summary["pairs"]) == {SYMBOL, "ETH/USDT"}
+
+
+def test_csv_loader_rejects_short_rows(tmp_path):
+    """A row missing volume must fail cleanly, not crash np.reshape later."""
+    from src.signal_service.__main__ import _load_candles_csv
+
+    path = tmp_path / "short.csv"
+    path.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-10-23T10:00:00Z,100.0,110.0,90.0,105.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="expected 6 columns"):
+        _load_candles_csv(str(path))
+
+
+def test_csv_loader_rejects_newest_first_files(tmp_path):
+    """A descending csv would misalign candles/timestamps and look ahead."""
+    from src.signal_service.__main__ import _load_candles_csv
+
+    path = tmp_path / "descending.csv"
+    path.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-10-23T12:00:00Z,110.0,120.0,100.0,115.0,333333.0\n"
+        "2026-10-23T11:00:00Z,105.0,115.0,95.0,110.0,222222.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="strictly ascending"):
+        _load_candles_csv(str(path))
+
+
+def test_csv_loader_rejects_duplicate_timestamps(tmp_path):
+    """Duplicate open times make position-based slicing ambiguous."""
+    from src.signal_service.__main__ import _load_candles_csv
+
+    path = tmp_path / "duplicate.csv"
+    path.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-10-23T11:00:00Z,105.0,115.0,95.0,110.0,222222.0\n"
+        "2026-10-23T11:00:00Z,106.0,116.0,96.0,111.0,222223.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="strictly ascending"):
+        _load_candles_csv(str(path))

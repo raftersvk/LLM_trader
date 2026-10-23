@@ -30,7 +30,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -178,32 +178,63 @@ async def _run_command(args: argparse.Namespace) -> None:
 def _load_candles_csv(path: str) -> Tuple[np.ndarray, List[datetime]]:
     """Load an OHLCV csv into the CCXT candle layout used by the live collector.
 
+    Rows must carry the 6 documented columns (time,open,high,low,close,volume)
+    and open times strictly ascending: replay slices candles and timestamps by
+    position, so a newest-first file would silently turn the no-look-ahead
+    window into a look-ahead one.
+
     Returns:
         A float64 array of shape (n, 6) with rows
         ``[timestamp_ms, open, high, low, close, volume]`` (the layout every
         consumer expects: chart generation slices ``[:, 1:6]`` and
         ``truncate_context_to_as_of`` reads column 4 as the close), plus the
         parallel list of candle open times.
+
+    Raises:
+        ValueError: on an unsupported header, a row without 6 columns, an
+            unparsable timestamp or non-ascending open times.
     """
     rows: List[List[float]] = []
     timestamps: List[datetime] = []
+    previous_open_at: Optional[datetime] = None
     with open(path, "r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
         header = next(reader, None)
         first = header[0].strip().lower() if header else ""
-        for row in reader:
-            if not row or len(row) < 5:
+        if first not in ("time", "date", "timestamp"):
+            raise ValueError(f"Unsupported csv header: {header}")
+        for line_number, row in enumerate(reader, start=2):
+            if not row or not any(cell.strip() for cell in row):
                 continue
-            if first in ("time", "date", "timestamp"):
-                tokens = row[0].replace("Z", "+00:00")
+            if len(row) < 6:
+                raise ValueError(
+                    f"{path}:{line_number}: expected 6 columns "
+                    f"(time,open,high,low,close,volume), got {len(row)}"
+                )
+            tokens = row[0].strip().replace("Z", "+00:00")
+            try:
                 open_at = datetime.fromisoformat(tokens)
-                if open_at.tzinfo is None:
-                    open_at = open_at.replace(tzinfo=timezone.utc)
-                values = row[1:6]
-            else:
-                raise ValueError(f"Unsupported csv header: {header}")
+            except ValueError as exc:
+                raise ValueError(
+                    f"{path}:{line_number}: invalid timestamp {row[0]!r}: {exc}"
+                ) from exc
+            if open_at.tzinfo is None:
+                open_at = open_at.replace(tzinfo=timezone.utc)
+            if previous_open_at is not None and open_at <= previous_open_at:
+                raise ValueError(
+                    f"{path}:{line_number}: candle times must be strictly ascending; "
+                    f"{row[0].strip()} follows {previous_open_at.isoformat()}. "
+                    "Sort the csv oldest-first."
+                )
+            previous_open_at = open_at
+            try:
+                values = [float(v) for v in row[1:6]]
+            except ValueError as exc:
+                raise ValueError(
+                    f"{path}:{line_number}: non-numeric OHLCV value: {exc}"
+                ) from exc
             timestamp_ms = open_at.timestamp() * 1000.0
-            rows.append([timestamp_ms] + [float(v) for v in values])
+            rows.append([timestamp_ms] + values)
             timestamps.append(open_at)
     return np.array(rows, dtype=np.float64).reshape(len(rows), 6), timestamps
 
