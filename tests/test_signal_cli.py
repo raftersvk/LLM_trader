@@ -285,6 +285,7 @@ class _SkipTestEngine:
         self.rag_engine = None
         self.last_llm_response = ""
         self.initialized = []
+        self.analyze_candles = []
         self.data_collector = SimpleNamespace(collect_data=self._collect)
 
     async def _collect(self):
@@ -294,6 +295,10 @@ class _SkipTestEngine:
         self.initialized.append((symbol, exchange, timeframe))
 
     async def analyze_market(self, **_kwargs):
+        # Record the newest candle visible at call time, so the test can prove
+        # no analysis runs against data that had not closed yet.
+        visible = getattr(self.context, "timestamps", None) or []
+        self.analyze_candles.append(visible[-1].isoformat() if visible else None)
         return {"recommendation": "HOLD", "confidence": "LOW", "reasoning": "test"}
 
 
@@ -345,3 +350,51 @@ async def test_replay_skips_candles_before_the_csv_data(tmp_path, monkeypatch, c
     assert len(rows) == 1
     assert json.loads(rows[0])["candle_open_time"] == "2026-01-01T03:00:00Z"
     assert "Skipping candle 2026-01-01T00:00:00Z" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_future_end_produces_no_future_rows_or_calls(tmp_path, monkeypatch):
+    """A --end beyond now must not analyse or persist any unclosed candle."""
+    from datetime import datetime, timedelta, timezone
+
+    from src.signal_service import __main__ as cli
+    from src.signal_service.contract import parse_iso
+
+    engine = _SkipTestEngine()
+    monkeypatch.setattr(cli, "_load_engine_factory", lambda: _SkipTestRoot(engine))
+    newest = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    first = newest - timedelta(hours=3)
+    second = newest - timedelta(hours=2)
+    candles = tmp_path / "BTC_USDT_1h.csv"
+    candles.write_text(
+        "time,open,high,low,close,volume\n"
+        f"{first.isoformat().replace('+00:00', 'Z')},100.0,110.0,90.0,105.0,1000.0\n"
+        f"{second.isoformat().replace('+00:00', 'Z')},105.0,115.0,95.0,110.0,2000.0\n",
+        encoding="utf-8",
+    )
+    args = cli._build_parser().parse_args([
+        "replay",
+        "--pairs", "BTC/USDT",
+        "--start", first.isoformat(),
+        "--end", (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+        "--candles", str(candles),
+        "--output", str(tmp_path / "signals"),
+        "--no-news",
+    ])
+
+    await cli._replay_command(args)
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "signals" / "BTC_USDT_1h.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows, "the closed part of the range must still be analysed"
+    now = datetime.now(timezone.utc)
+    # Signals must describe closed candles only (expires_at is legitimately
+    # one timeframe later by contract, so it is the close that matters).
+    assert all(parse_iso(row["candle_open_time"]) < now for row in rows)
+    assert all(parse_iso(row["candle_close_time"]) <= now for row in rows)
+    # No LLM call may be made for a candle that has not closed yet.
+    assert engine.analyze_candles, "expected analyses for the closed range"
+    assert all(parse_iso(stamp) < now for stamp in engine.analyze_candles)
+    assert len(engine.analyze_candles) == len(rows)
