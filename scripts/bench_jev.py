@@ -30,6 +30,7 @@ inventing them.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import math
@@ -453,6 +454,12 @@ def latency_summary(latencies: Sequence[int]) -> Dict[str, Optional[float]]:
 
 
 # ----------------------------------------------------------------- pipeline
+async def _pace(delay_seconds: float) -> None:
+    """Pause between real JEV calls; a no-op when pacing is disabled."""
+    if delay_seconds > 0:
+        await asyncio.sleep(delay_seconds)
+
+
 async def run_mode(
     mode: str,
     gate: JevGate,
@@ -461,8 +468,16 @@ async def run_mode(
     samples: List[Tuple[int, Dict[str, Any], Dict[int, float]]],
     folds: int,
     is_llm: bool,
+    delay_seconds: float = 0.0,
 ) -> ModeRun:
-    """Evaluate one pipeline over all states, walk-forward fold by fold."""
+    """Evaluate one pipeline over all states, walk-forward fold by fold.
+
+    Args:
+        delay_seconds: Pause before each real JEV call. Without it a real run
+            issues every call at full speed and trips the free-usage cap,
+            after which the gate fails open and every JEV mode silently
+            degrades to llm_alone.
+    """
     run = ModeRun(mode=mode)
     bounds = split_folds(len(samples), folds)
     fold_of: List[int] = [0] * len(samples)
@@ -482,6 +497,7 @@ async def run_mode(
         error = decision.error
         pre_signal = None
         if mode in ("jev_pre", "jev_pre_post"):
+            await _pace(delay_seconds)
             pre = await gate.check_pre(state)
             run.jev_calls += 1 if pre.consulted else 0
             if pre.error is not None:
@@ -498,6 +514,7 @@ async def run_mode(
                 ):
                     action = "HOLD"
         if action in ("BUY", "SELL") and mode in ("jev_post", "jev_pre_post"):
+            await _pace(delay_seconds)
             post = await gate.check_post(state, action)
             run.jev_calls += 1 if post.consulted else 0
             if post.error is not None:
@@ -592,7 +609,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--offline", action="store_true", help="Synthetic candles + local JEV stand-in (NOT a benchmark)")
     parser.add_argument("--synthetic-candles", type=int, default=400)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--delay-seconds", type=float, default=1.0, help="Pause between real JEV calls")
+    parser.add_argument(
+        "--delay-seconds", type=float, default=1.0,
+        help="Pause before each real JEV call (ignored with --offline)",
+    )
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     return parser
 
@@ -654,10 +674,6 @@ async def run_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     modes = ["llm_alone", "jev_pre", "jev_post", "jev_pre_post"]
     results: List[Dict[str, Any]] = []
     for mode in modes:
-        if mode != "llm_alone" and real_benchmark and args.delay_seconds > 0:
-            import asyncio
-
-            await asyncio.sleep(args.delay_seconds)
         gate_mode = "off" if mode == "llm_alone" else mode.replace("jev_", "")
         gate = _gate_for(gate_mode, client, args.tradeability_threshold, args.fold_confidence_floor)
         run = await run_mode(
@@ -668,6 +684,8 @@ async def run_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
             samples=samples,
             folds=folds,
             is_llm=is_llm,
+            # Pacing applies to real JEV calls only; the offline stand-in is local.
+            delay_seconds=args.delay_seconds if real_benchmark else 0.0,
         )
         results.append(
             summarize_run(run, samples, horizons, args.move_threshold_pct, folds)
@@ -733,7 +751,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     """CLI entry point: run the benchmark and write the JSON report."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     args = _build_parser().parse_args(argv)
-    import asyncio
 
     started = time.monotonic()
     report = asyncio.run(run_benchmark(args))
