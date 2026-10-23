@@ -120,6 +120,46 @@ def test_supports_chart_all_with_vision_litellm_only():
     assert orchestrator.supports_chart("all") is True
 
 
+@pytest.mark.asyncio
+async def test_get_chart_response_all_routes_to_litellm_fallback():
+    """get_chart_response('all') must route to litellm when it is the only client."""
+    client = LitellmAIClient(config=LITELLM_CONFIG, logger=MagicMock())
+    orchestrator = _orchestrator(ProviderClients(litellm=client))
+    captured = {}
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="chart analyzed"),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        id="response-id",
+        model="deepseek-v4.1-flash",
+    )
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return response
+
+    with patch(
+        "src.platforms.ai_providers.litellm_client.acompletion",
+        new=fake_acompletion,
+    ):
+        result = await orchestrator.get_chart_response(
+            "all",
+            [{"role": "user", "content": "Analyze this chart"}],
+            io.BytesIO(b"fake-png-bytes"),
+        )
+
+    assert result.success is True
+    assert result.provider == "litellm"
+    assert captured["messages"][0]["content"][1]["type"] == "image_url"
+    assert captured["messages"][0]["content"][1]["image_url"]["url"].startswith(
+        "data:image/png;base64,"
+    )
+
+
 def test_supports_chart_all_without_providers():
     """With no vision-capable provider available, supports_chart('all') is False."""
     orchestrator = _orchestrator(ProviderClients())

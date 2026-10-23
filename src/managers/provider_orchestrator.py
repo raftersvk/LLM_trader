@@ -267,7 +267,7 @@ class ProviderOrchestrator:
                     chart_image=chart_image
                 )
             return await self.invoke_with_fallback(
-                ["googleai", "openrouter", "blockrun"], messages, chart=True, chart_image=chart_image, model=model
+                ["googleai", "openrouter", "blockrun", "litellm"], messages, chart=True, chart_image=chart_image, model=model
             )
         if self.is_available(effective_provider):
             effective_model = self.resolve_model(effective_provider, model)
