@@ -48,6 +48,18 @@ def test_load_json_file_returns_none_on_truncated_json(tmp_path):
     assert "statistics.json" in logger.errors[0]
 
 
+def test_load_json_file_returns_none_on_non_utf8_bytes(tmp_path):
+    """A byte-corrupted file raises UnicodeDecodeError and must be skipped."""
+    logger = _StubLogger()
+    router = _build_router(logger)
+    corrupted = tmp_path / "previous_response.json"
+    corrupted.write_bytes(b"\xff\xfe\x00\x01not-utf8")
+
+    assert router._load_json_file(corrupted) is None
+    assert len(logger.errors) == 1
+    assert "previous_response.json" in logger.errors[0]
+
+
 def test_load_json_file_returns_data_for_valid_json(tmp_path):
     """Valid JSON is returned unchanged."""
     logger = _StubLogger()

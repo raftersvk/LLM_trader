@@ -27,7 +27,9 @@ class PortfolioRouter:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
+            # ValueError covers json.JSONDecodeError and UnicodeDecodeError from
+            # a byte-corrupted file; skip that pair instead of failing the API.
             self.logger.error("Failed to load portfolio JSON file %s", file_path, exc_info=True)
             return None
 
