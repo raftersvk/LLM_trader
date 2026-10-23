@@ -796,7 +796,7 @@ async def test_contract_invalid_output_is_stored_with_heartbeat(tmp_path):
     stored = json.loads(rows[0])
     assert stored["action"] == "HOLD"
     assert stored["risk_approved"] is False
-    heartbeat = json.loads((signals_dir / "heartbeat.json").read_text(encoding="utf-8"))
+    heartbeat = json.loads((signals_dir / "heartbeat_BTC_USDT_1h.json").read_text(encoding="utf-8"))
     assert heartbeat["symbol"] == SYMBOL
     assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"
 
@@ -827,7 +827,7 @@ async def test_heartbeat_refreshed_when_append_fails(tmp_path):
             analyzer, storage, 5.0, candle_open_time="2026-10-23T14:00:00Z",
         )
 
-    heartbeat = json.loads((signals_dir / "heartbeat.json").read_text(encoding="utf-8"))
+    heartbeat = json.loads((signals_dir / "heartbeat_BTC_USDT_1h.json").read_text(encoding="utf-8"))
     assert heartbeat["symbol"] == SYMBOL
     assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"
 
@@ -856,7 +856,7 @@ def test_run_cycle_refreshes_heartbeat_on_failure(tmp_path):
     results = asyncio.run(service.run_cycle(_hour(14)))
 
     assert results[SYMBOL] == "error"
-    heartbeat = json.loads((tmp_path / "heartbeat.json").read_text(encoding="utf-8"))
+    heartbeat = json.loads((tmp_path / "heartbeat_BTC_USDT_1h.json").read_text(encoding="utf-8"))
     assert heartbeat["candle_open_time"] == "2026-10-23T14:00:00Z"
     assert SYMBOL in service.heartbeats
 
@@ -926,3 +926,46 @@ async def test_action_key_is_honoured_like_the_live_bot():
     assert signal.risk_approved is True
     assert signal.sl == 70000.0
     assert signal.tp == 64000.0
+
+
+def test_each_pair_has_its_own_heartbeat_file(tmp_path):
+    """Writing one pair's heartbeat must never overwrite another pair's file."""
+    from src.signal_service.storage import write_heartbeat
+
+    signals_dir = tmp_path / "signals"
+    write_heartbeat(str(signals_dir), "BTC/USDT", "1h", "2026-10-23T14:00:00Z")
+    write_heartbeat(str(signals_dir), "ETH/USDT", "1h", "2026-10-23T13:00:00Z")
+
+    btc = json.loads((signals_dir / "heartbeat_BTC_USDT_1h.json").read_text(encoding="utf-8"))
+    eth = json.loads((signals_dir / "heartbeat_ETH_USDT_1h.json").read_text(encoding="utf-8"))
+    assert btc["symbol"] == "BTC/USDT"
+    assert btc["candle_open_time"] == "2026-10-23T14:00:00Z"
+    assert eth["symbol"] == "ETH/USDT"
+    assert eth["candle_open_time"] == "2026-10-23T13:00:00Z"
+
+
+def test_run_cycle_keeps_per_pair_heartbeats_and_summary(tmp_path):
+    """A healthy pair must not mask a stuck pair in the persisted liveness files."""
+    from src.signal_service.service import SignalService
+
+    def analyzer_factory(symbol):
+        if symbol == SYMBOL:
+            return RaisingAnalyzer()
+        return RecordingAnalyzer(symbol)
+
+    service = SignalService(
+        pairs=[SYMBOL, "ETH/USDT"],
+        timeframe="1h",
+        analyzer_factory=analyzer_factory,
+        signals_dir=str(tmp_path),
+    )
+
+    results = asyncio.run(service.run_cycle(_hour(14)))
+
+    assert results[SYMBOL] == "error"
+    btc = json.loads((tmp_path / "heartbeat_BTC_USDT_1h.json").read_text(encoding="utf-8"))
+    eth = json.loads((tmp_path / "heartbeat_ETH_USDT_1h.json").read_text(encoding="utf-8"))
+    assert btc["candle_open_time"] == "2026-10-23T14:00:00Z"
+    assert eth["candle_open_time"] == "2026-10-23T14:00:00Z"
+    summary = json.loads((tmp_path / "heartbeat_summary.json").read_text(encoding="utf-8"))
+    assert set(summary["pairs"]) == {SYMBOL, "ETH/USDT"}

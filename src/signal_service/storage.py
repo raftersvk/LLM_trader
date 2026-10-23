@@ -155,13 +155,26 @@ def signal_file_path(signals_dir: str, symbol: str, timeframe: str) -> str:
     return os.path.join(signals_dir, token)
 
 
-def heartbeat_path(signals_dir: str) -> str:
-    """Build the heartbeat file path."""
-    return os.path.join(signals_dir, "heartbeat.json")
+def heartbeat_path(
+    signals_dir: str,
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+) -> str:
+    """Build the heartbeat file path.
+
+    With a symbol and timeframe this is that pair's own file
+    (``heartbeat_BTC_USDT_1h.json``) so one pair can never overwrite another.
+    Without them it is the legacy shared ``heartbeat.json`` name, kept only to
+    derive the summary path.
+    """
+    if symbol is None or timeframe is None:
+        return os.path.join(signals_dir, "heartbeat.json")
+    token = f"{symbol.replace('/', '_')}_{timeframe}"
+    return os.path.join(signals_dir, f"heartbeat_{token}.json")
 
 
 def write_heartbeat(signals_dir: str, symbol: str, timeframe: str, candle_open_time: str) -> None:
-    """Write the per-pair heartbeat with a flush+fsync guarantee."""
+    """Write this pair's heartbeat with a flush+fsync guarantee."""
     os.makedirs(signals_dir, exist_ok=True)
     payload = {
         "symbol": symbol,
@@ -169,7 +182,7 @@ def write_heartbeat(signals_dir: str, symbol: str, timeframe: str, candle_open_t
         "candle_open_time": candle_open_time,
         "heartbeat_at": utc_now_iso(),
     }
-    with open(heartbeat_path(signals_dir), "w", encoding="utf-8") as handle:
+    with open(heartbeat_path(signals_dir, symbol, timeframe), "w", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             handle.write(json.dumps(payload, separators=(",", ":")) + "\n")

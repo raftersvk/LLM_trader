@@ -148,6 +148,10 @@ class SignalService:
                     self.heartbeats[symbol] = utc_now_iso()
                 except Exception as heartbeat_exc:  # pylint: disable=broad-exception-caught
                     logger.warning("Heartbeat refresh failed for %s: %s", symbol, heartbeat_exc)
+        try:
+            write_heartbeat_summary(self.signals_dir, self.heartbeats)
+        except Exception as summary_exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Heartbeat summary write failed: %s", summary_exc)
         logger.info("Cycle done for candle %s: %s", candle_open, results)
         return results
 
