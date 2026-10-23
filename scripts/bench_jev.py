@@ -51,11 +51,19 @@ from src.signal_service.jev_gate import JevGate, build_state
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OUTPUT = "/home/djelinux/TradingBots/trading-stack/runtime/jev_bench/bench_jev.json"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_HORIZONS = (1, 2, 3, 4)
 DEFAULT_MOVE_THRESHOLD_PCT = 1.0
 MIN_STATES = 200
 MAX_STATES = 500
+
+
+def default_output_path() -> str:
+    """Return the default report path (repo-local, env-overridable)."""
+    return os.environ.get(
+        "JEV_BENCH_OUTPUT",
+        os.path.join(PROJECT_ROOT, "data", "jev_bench", "bench_jev.json"),
+    )
 
 
 # ------------------------------------------------------------------ dataset
@@ -624,7 +632,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--delay-seconds", type=float, default=1.0,
         help="Pause before each real JEV call (ignored with --offline)",
     )
-    parser.add_argument("--output", default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--output", default=default_output_path(),
+        help="Report path (default: <repo>/data/jev_bench/bench_jev.json)",
+    )
     return parser
 
 
@@ -765,7 +776,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     started = time.monotonic()
     report = asyncio.run(run_benchmark(args))
     report["duration_seconds"] = round(time.monotonic() - started, 2)
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
         handle.write("\n")

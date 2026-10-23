@@ -181,3 +181,21 @@ async def test_unavailable_llm_backend_does_not_crash_the_run():
 
     assert [prediction.action for prediction in run.predictions] == ["HOLD", "HOLD"]
     assert all("unavailable" in (prediction.error or "") for prediction in run.predictions)
+
+
+def test_default_output_is_repo_relative(monkeypatch):
+    """The report default must not point into a personal home directory."""
+    import os
+
+    monkeypatch.delenv("JEV_BENCH_OUTPUT", raising=False)
+
+    assert bench_jev.default_output_path() == os.path.join(
+        bench_jev.PROJECT_ROOT, "data", "jev_bench", "bench_jev.json",
+    )
+
+
+def test_default_output_respects_env_override(monkeypatch, tmp_path):
+    target = str(tmp_path / "custom_report.json")
+    monkeypatch.setenv("JEV_BENCH_OUTPUT", target)
+
+    assert bench_jev.default_output_path() == target
