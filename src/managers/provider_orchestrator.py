@@ -48,7 +48,7 @@ class ProviderOrchestrator:
 
     def _build_provider_metadata(self) -> dict[str, ProviderMetadata]:
         """Build provider metadata registry from clients and config."""
-        return {
+        providers = {
             "googleai": ProviderMetadata(
                 name="Google AI Studio",
                 client=self.clients.google,
@@ -98,6 +98,23 @@ class ProviderOrchestrator:
             ),
         }
 
+        # Fork: dedicated vision endpoint (VISION_PROVIDER/VISION_BASE_URL/VISION_MODEL).
+        vision_client = getattr(self.clients, "vision_litellm", None)
+        if vision_client is not None:
+            vision_model = (
+                getattr(self.config, "VISION_MODEL", None)
+                or getattr(self.config, "LITELLM_MODEL", "deepseek-v4.1-flash")
+            )
+            providers["vision_litellm"] = ProviderMetadata(
+                name="Vision LiteLLM",
+                client=vision_client,
+                default_model=vision_model,
+                config=self.config.get_model_config(vision_model),
+                supports_chart=True,
+            )
+
+        return providers
+
     def prepare_request_messages(
         self, provider: str, messages: list[dict[str, str]], model: str, *, chart: bool = False,
     ) -> list[dict[str, str]]:
@@ -139,9 +156,11 @@ class ProviderOrchestrator:
         return chain
 
     def _all_chart_chain(self) -> list[str]:
-        """Fallback chain for charts; LiteLLM is appended when configured."""
+        """Fallback chain for charts; the dedicated vision client is preferred."""
         chain = ["googleai", "deepseek", "openrouter", "blockrun"]
-        if self.is_available("litellm"):
+        if self.is_available("vision_litellm"):
+            chain.append("vision_litellm")
+        elif self.is_available("litellm"):
             chain.append("litellm")
         return chain
 
@@ -209,7 +228,7 @@ class ProviderOrchestrator:
             return await self._invoke_blockrun(metadata, messages, effective_model, chart, chart_image)
         if provider == "deepseek":
             return await self._invoke_deepseek(metadata, messages, effective_model, chart, chart_image)
-        if provider == "litellm":
+        if provider in ("litellm", "vision_litellm"):
             return await self._invoke_litellm(metadata, messages, effective_model, chart, chart_image)
         return InvocationResult(
             success=False,
@@ -300,6 +319,13 @@ class ProviderOrchestrator:
             InvocationResult with response
         """
         if effective_provider == "all":
+            vision = self._providers.get("vision_litellm")
+            if vision is not None and vision.is_available():
+                vision_model = model or vision.default_model
+                self.logger.info("Using dedicated vision LiteLLM (model: %s)", vision_model)
+                return await self._invoke_litellm(
+                    vision, messages, vision_model, chart=True, chart_image=chart_image
+                )
             return await self.invoke_with_fallback(
                 self._all_chart_chain(), messages, chart=True, chart_image=chart_image, model=model
             )
@@ -578,12 +604,14 @@ class ProviderOrchestrator:
         chart_image: io.BytesIO | bytes | str | None,
     ) -> InvocationResult:
         """Invoke the fork's LiteLLM/OpenCode Go client."""
+        is_vision = metadata is self._providers.get("vision_litellm")
+        provider_name = "vision_litellm" if is_vision else "litellm"
         client = metadata.client
         if client is None:
             return InvocationResult(
                 success=False,
                 response=ChatResponseModel.from_error("LiteLLM client is not configured"),
-                provider="litellm",
+                provider=provider_name,
                 model=effective_model,
             )
         try:
@@ -602,7 +630,7 @@ class ProviderOrchestrator:
         return InvocationResult(
             success=success,
             response=response,
-            provider="litellm",
+            provider=provider_name,
             model=effective_model,
             error_message=None if success else (response.error if response else "Empty response from LiteLLM"),
         )

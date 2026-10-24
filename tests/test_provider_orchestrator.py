@@ -165,3 +165,51 @@ def test_supports_chart_all_without_providers():
     orchestrator = _orchestrator(ProviderClients())
 
     assert orchestrator.supports_chart("all") is False
+
+@pytest.mark.asyncio
+async def test_get_chart_response_all_prefers_the_vision_endpoint():
+    """A configured vision client must serve chart calls instead of the text client."""
+    text_client = LitellmAIClient(config=LITELLM_CONFIG, logger=MagicMock())
+    vision_config = {
+        "provider": "litellm",
+        "base_url": "https://vision.example/v1",
+        "api_key": "vision-key",
+        "model": "vision-test",
+    }
+    vision_client = LitellmAIClient(config=vision_config, logger=MagicMock())
+    orchestrator = _orchestrator(
+        ProviderClients(litellm=text_client, vision_litellm=vision_client)
+    )
+    captured = {}
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="vision chart analyzed"),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        id="vision-response-id",
+        model="vision-test",
+    )
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return response
+
+    with patch(
+        "src.platforms.ai_providers.litellm_client.acompletion",
+        new=fake_acompletion,
+    ):
+        result = await orchestrator.get_chart_response(
+            "all",
+            [{"role": "user", "content": "Analyze this chart"}],
+            io.BytesIO(b"fake-png-bytes"),
+        )
+
+    assert result.success is True
+    assert result.provider == "vision_litellm"
+    assert captured["base_url"] == "https://vision.example/v1"
+    assert captured["api_key"] == "vision-key"
+    assert captured["model"] == "vision-test"
+    assert captured["messages"][0]["content"][1]["type"] == "image_url"
