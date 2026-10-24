@@ -66,19 +66,24 @@ metrics report both `label_states_used` and `label_states_excluded`.
 
 ## Weekly rules
 
-1. Keep the last 60 days of observations (`--window-days`).
-2. Require at least 200 trade-labeled states (`--min-states`). Otherwise
-   preserve the previous policy, or fall back to 0.5 when there is none.
-3. Fit isotonic regression `noul -> P(trade is profitable net of cost)` with
+1. Keep observations inside `[now - 60 days, now]`. Anything after `now` is
+   excluded, not just anything before the cutoff.
+2. Hold out the last 7 days as out-of-sample (OOS). The earlier part of the
+   window is the training set. ATR percentiles, the isotonic model and the
+   candidate threshold are fitted **only** on training data.
+3. Require at least 200 trade-labeled training states (`--min-states`).
+   Otherwise preserve the previous policy, or fall back to 0.5 when there is
+   none.
+4. Fit isotonic regression `noul -> P(trade is profitable net of cost)` with
    pool-adjacent-violators on the selected horizon.
-4. Evaluate thresholds 0.30-0.70 by 0.05 with the volatility offset applied
-   per state. A candidate must have coverage >= 40 %, >= 20 trades and a
-   positive net benefit.
-5. Smooth: `clamp(0.7 * current + 0.3 * candidate, 0.35, 0.65)`.
-6. Cap the weekly move at 0.05.
-7. Promote only if the proposed threshold improves out-of-sample net benefit
+5. Evaluate training thresholds 0.30-0.70 by 0.05 with the volatility offset
+   applied per state. A candidate must have coverage >= 40 %, >= 20 trades and
+   a positive net benefit.
+6. Smooth: `clamp(0.7 * current + 0.3 * candidate, 0.35, 0.65)`.
+7. Cap the weekly move at 0.05.
+8. Promote only if the proposed threshold improves held-out OOS net benefit
    (last 7 days) by at least 2 % relative.
-8. A policy older than 14 days resolves to 0.5.
+9. A policy older than 14 days resolves to 0.5.
 
 Volatility offsets:
 
@@ -86,9 +91,10 @@ Volatility offsets:
 - `-0.05` when `regime == range` **and** `atr_pct <= pair 20th percentile`.
 
 Per-pair ATR cutoffs are stored in the policy so the runtime does not need to
-recompute percentiles.
+recompute percentiles. They are computed from the training slice only, so the
+held-out week cannot leak into the rules.
 
-## Initial policy (2026-10-24, 400 observations)
+## Initial policy (2026-10-24)
 
 Command:
 
@@ -100,10 +106,12 @@ python scripts/jev_calibrate.py \
   --cost-pct 0.1 --trade-horizon 1
 ```
 
-**Status: fallback, threshold 0.5.** The 400 observations contain only **78
-trade-labeled states** (28 BTC + 50 ETH) with a directional base action; the
-other **322 are HOLD** and are excluded. 78 < 200, so the data cannot support a
-trade-P&L threshold yet and the policy correctly keeps 0.5.
+**Status: fallback, threshold 0.5.** The 60-day window holds **400
+observations**, split into **118 training** states (older than 7 days) and
+**282 held-out OOS** states (last 7 days). The training slice contains only
+**21 trade-labeled states** (directional base action); the other 97 are HOLD.
+21 < 200, so the data cannot support a trade-P&L threshold yet and the policy
+correctly keeps 0.5. The OOS slice is not used for any fit.
 
 ```json
 {
@@ -122,37 +130,43 @@ trade-P&L threshold yet and the policy correctly keeps 0.5.
   },
   "offset_rules": {
     "high_vol": {"offset": 0.05, "regimes": ["high_vol"],
-                 "atr_cutoff": {"BTC/USDT": 0.005621, "ETH/USDT": 0.008409}},
+                 "atr_cutoff": {"BTC/USDT": 0.007417, "ETH/USDT": 0.010305}},
     "low_vol":  {"offset": -0.05, "regimes": ["range"],
-                 "atr_cutoff": {"BTC/USDT": 0.003594, "ETH/USDT": 0.005914}}
+                 "atr_cutoff": {"BTC/USDT": 0.002768, "ETH/USDT": 0.004118}}
   },
   "metrics": {
-    "brier": 0.2396,
-    "raw_brier": 0.3030,
-    "coverage": 0.33,
-    "net_benefit": -1.8728,
-    "trades": 41,
-    "sample": 400,
-    "label_states_used": 78,
-    "label_states_excluded": 322,
-    "reason": "insufficient trade-labeled states: 78 < 200"
+    "brier": 0.3019,
+    "raw_brier": 0.2818,
+    "coverage": 0.2627,
+    "net_benefit": -0.7721,
+    "trades": 10,
+    "sample": 118,
+    "window_sample": 400,
+    "oos_sample": 282,
+    "oos_net_benefit": -1.2106,
+    "label_states_used": 21,
+    "label_states_excluded": 97,
+    "reason": "insufficient trade-labeled states: 21 < 200"
   },
   "status": "fallback"
 }
 ```
 
-Diagnostic per-horizon trade P&L on the same window (41 surviving trades):
+Diagnostic per-horizon trade P&L on the **training slice** (10 surviving
+trades):
 
 | Horizon | States used | Brier | Net benefit | Mean net % | Win rate |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| h1 | 78 | 0.2396 | -1.87 | -0.046 | 0.415 |
-| h2 | 78 | 0.3081 | -3.39 | -0.083 | 0.488 |
-| h3 | 78 | 0.2992 | -1.24 | -0.030 | 0.537 |
-| h4 | 78 | 0.3168 | -1.42 | -0.035 | 0.585 |
+| h1 | 21 | 0.3019 | -0.77 | -0.077 | 0.400 |
+| h2 | 21 | 0.2103 | -0.55 | -0.055 | 0.600 |
+| h3 | 21 | 0.2103 | +1.06 | +0.106 | 0.600 |
+| h4 | 21 | 0.1946 | +0.99 | +0.099 | 0.600 |
 
-Even if the 200-state minimum were waived, no threshold with coverage >= 40 %
-has a positive trade-P&L net benefit: at 0.30-0.40 the net benefit is -6.06 to
--2.88. The only positive points (0.65/0.70: +0.36) sit at ~20 % coverage.
+Even if the 200-state minimum were waived, no training threshold with coverage
+>= 40 % has a positive trade-P&L net benefit: at 0.30-0.40 the net benefit is
+-3.87 to -0.97. The positive points (0.60-0.70: +1.42/+1.46) sit at 12-19 %
+coverage. At the retained 0.5 threshold the held-out OOS net benefit is -1.21
+over 282 states.
 
 ## Planned signal-service integration (not in this PR)
 

@@ -24,6 +24,11 @@ Observation = jev_calibrate.Observation
 NOW = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
 
 
+def _train_opened(index: int) -> datetime:
+    """A candle that sits inside the 60-day window but before the 7-day OOS."""
+    return NOW - timedelta(days=10) - timedelta(hours=index)
+
+
 def _obs(
     noul: float,
     base_action: str = "BUY",
@@ -153,7 +158,7 @@ def test_build_offset_rules_uses_pair_percentiles():
 def test_fallback_below_min_states():
     """Fewer than 200 trade-labeled states keeps 0.5 and marks the fallback."""
     policy = jev_calibrate.calibrate_policy(
-        [_obs(0.5) for _ in range(199)], None, NOW,
+        [_obs(0.5, opened=_train_opened(index)) for index in range(199)], None, NOW,
     )
     assert policy["status"] == "fallback"
     assert policy["threshold"] == 0.5
@@ -167,7 +172,8 @@ def test_fallback_below_min_states():
 
 def test_hold_states_are_excluded_from_the_trade_label():
     """HOLD states carry no trade direction and must not count toward min_states."""
-    observations = [_obs(0.5, base_action="HOLD", forward=0.05) for _ in range(250)]
+    observations = [_obs(0.5, base_action="HOLD", forward=0.05, opened=_train_opened(index))
+                    for index in range(250)]
     policy = jev_calibrate.calibrate_policy(observations, None, NOW)
 
     assert policy["status"] == "fallback"
@@ -207,7 +213,9 @@ def test_cost_pct_override_changes_the_label_enabled_by_cli():
 def test_fallback_below_min_states_preserves_previous_threshold():
     """A fresh previous policy keeps its threshold when data is insufficient."""
     previous = _policy(NOW - timedelta(days=1), threshold=0.6)
-    policy = jev_calibrate.calibrate_policy([_obs(0.5) for _ in range(50)], previous, NOW)
+    policy = jev_calibrate.calibrate_policy(
+        [_obs(0.5, opened=_train_opened(index)) for index in range(50)], previous, NOW
+    )
 
     assert policy["status"] == "fallback"
     assert policy["threshold"] == pytest.approx(0.6)
@@ -230,7 +238,8 @@ def test_stale_policy_resolves_to_fallback():
 def test_stale_previous_forces_fallback_threshold_during_calibration():
     """A stale previous policy is ignored, so calibration starts from 0.5."""
     previous = _policy(NOW - timedelta(days=30), threshold=0.65)
-    observations = [_obs(0.2 + (index % 5) * 0.1) for index in range(200)]
+    observations = [_obs(0.2 + (index % 5) * 0.1, opened=_train_opened(index))
+                    for index in range(200)]
     policy = jev_calibrate.calibrate_policy(observations, previous, NOW)
 
     assert 0.35 <= policy["threshold"] <= 0.65
@@ -244,7 +253,7 @@ def test_calibrate_policy_schema_and_weekly_cap():
             0.2 + (index % 7) * 0.1,
             base_action="BUY" if index % 2 == 0 else "SELL",
             forward=0.02 if index % 3 else -0.005,
-            opened=NOW - timedelta(hours=index),
+            opened=_train_opened(index),
         )
         for index in range(240)
     ]
@@ -265,7 +274,7 @@ def test_policy_reports_trade_pnl_by_horizon_and_horizon_choice():
     """The policy records the selected horizon and all four horizon metrics."""
     observations = [
         Observation(
-            candle_open_time=NOW - timedelta(hours=index),
+            candle_open_time=_train_opened(index),
             pair="BTC/USDT",
             noul=0.2 + (index % 6) * 0.1,
             base_action="BUY",
@@ -296,13 +305,88 @@ def test_validate_policy_reports_missing_fields_and_bad_label():
     assert "missing threshold" in problems
     assert "missing label" in problems
 
-    policy = jev_calibrate.calibrate_policy([_obs(0.5) for _ in range(250)], None, NOW)
+    policy = jev_calibrate.calibrate_policy(
+        [_obs(0.5, opened=_train_opened(index)) for index in range(250)], None, NOW
+    )
     policy = dict(policy)
     policy["label"] = {"type": "absolute_move", "horizon": 0, "cost_pct": -1}
     problems = jev_calibrate.validate_policy(policy)
     assert "label.type must be trade_pnl_directional" in problems
     assert "label.horizon must be a positive int" in problems
     assert "label.cost_pct must be >= 0" in problems
+
+
+def test_filter_window_is_bounded_at_now():
+    """Observations after ``now`` must never enter the rolling window."""
+    inside = _obs(0.5, opened=NOW - timedelta(hours=1))
+    future = _obs(0.5, opened=NOW + timedelta(hours=1))
+    too_old = _obs(0.5, opened=NOW - timedelta(days=61))
+
+    assert jev_calibrate.filter_window([inside, future, too_old], NOW) == [inside]
+    assert jev_calibrate.last_days([inside, future], NOW, 7) == [inside]
+
+
+def test_split_train_oos_is_disjoint_and_held_out():
+    """The last 7 days go only to OOS; earlier window states go to training."""
+    train_a = _obs(0.5, opened=NOW - timedelta(days=10))
+    train_b = _obs(0.5, opened=NOW - timedelta(days=8))
+    oos_a = _obs(0.5, opened=NOW - timedelta(days=3))
+    oos_b = _obs(0.5, opened=NOW - timedelta(hours=1))
+    future = _obs(0.5, opened=NOW + timedelta(hours=1))
+
+    train, oos = jev_calibrate.split_train_oos([train_a, oos_a, future, train_b, oos_b], NOW)
+
+    assert train == [train_a, train_b]
+    assert oos == [oos_a, oos_b]
+    assert not set(id(item) for item in train) & set(id(item) for item in oos)
+
+
+def test_rules_and_candidate_fit_on_training_only():
+    """ATR cutoffs and the candidate ignore the held-out last 7 days."""
+    train = [
+        Observation(
+            candle_open_time=_train_opened(index),
+            pair="BTC/USDT",
+            noul=0.2 + (index % 6) * 0.1,
+            base_action="BUY",
+            forward={1: 0.02, 2: 0.02, 3: 0.02, 4: 0.02},
+            bias="long",
+            regime="trend",
+            atr_pct=0.001 * (index % 10 + 1),
+            cost_pct=0.1,
+        )
+        for index in range(240)
+    ]
+    oos = [
+        Observation(
+            candle_open_time=NOW - timedelta(hours=index),
+            pair="BTC/USDT",
+            noul=0.9,
+            base_action="BUY",
+            forward={1: 0.02, 2: 0.02, 3: 0.02, 4: 0.02},
+            bias="long",
+            regime="high_vol",
+            atr_pct=5.0,
+            cost_pct=0.1,
+        )
+        for index in range(50)
+    ]
+
+    policy = jev_calibrate.calibrate_policy(train + oos, None, NOW)
+    train_rules = jev_calibrate.build_offset_rules(train)
+    train_curve = jev_calibrate.threshold_curve(train, jev_calibrate.THRESHOLD_GRID, train_rules)
+    train_candidate = jev_calibrate.select_candidate(train_curve)
+
+    assert policy["offset_rules"]["high_vol"]["atr_cutoff"]["BTC/USDT"] < 0.02
+    assert policy["offset_rules"]["high_vol"]["atr_cutoff"]["BTC/USDT"] == pytest.approx(
+        train_rules["high_vol"]["atr_cutoff"]["BTC/USDT"]
+    )
+    assert policy["metrics"]["candidate_threshold"] == (
+        train_candidate["threshold"] if train_candidate else None
+    )
+    assert policy["metrics"]["sample"] == 240
+    assert policy["metrics"]["oos_sample"] == 50
+    assert policy["metrics"]["window_sample"] == 290
 
 
 def test_load_observations_skips_malformed_lines(tmp_path):

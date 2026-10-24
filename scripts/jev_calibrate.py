@@ -146,17 +146,45 @@ def load_observations(path: str) -> List[Observation]:
 def filter_window(
     observations: Sequence[Observation], now: datetime, window_days: int = WINDOW_DAYS
 ) -> List[Observation]:
-    """Keep observations whose candle opened inside the rolling window."""
+    """Keep observations inside ``[now - window_days, now]``.
+
+    Both bounds matter: a candle after ``now`` has not happened yet and must
+    never enter the fit.
+    """
     cutoff = now - timedelta(days=window_days)
-    return [observation for observation in observations if observation.candle_open_time >= cutoff]
+    return [
+        observation for observation in observations
+        if cutoff <= observation.candle_open_time <= now
+    ]
 
 
 def last_days(
     observations: Sequence[Observation], reference: datetime, days: int = OOS_DAYS
 ) -> List[Observation]:
-    """Keep observations from the last ``days`` before ``reference``."""
+    """Keep observations in ``[reference - days, reference]``."""
     cutoff = reference - timedelta(days=days)
-    return [observation for observation in observations if observation.candle_open_time >= cutoff]
+    return [
+        observation for observation in observations
+        if cutoff <= observation.candle_open_time <= reference
+    ]
+
+
+def split_train_oos(
+    observations: Sequence[Observation],
+    now: datetime,
+    window_days: int = WINDOW_DAYS,
+    oos_days: int = OOS_DAYS,
+) -> Tuple[List[Observation], List[Observation]]:
+    """Split the bounded window into pre-OOS training and held-out slices.
+
+    The last ``oos_days`` are never used to fit the ATR rules or to choose the
+    candidate threshold; they only validate promotion.
+    """
+    window = filter_window(observations, now, window_days)
+    cutoff = now - timedelta(days=oos_days)
+    train = [observation for observation in window if observation.candle_open_time < cutoff]
+    oos = [observation for observation in window if observation.candle_open_time >= cutoff]
+    return train, oos
 
 
 # -------------------------------------------------------------------- isotonic
@@ -623,7 +651,8 @@ def _round_optional(value: Optional[float]) -> Optional[float]:
 def _fallback_policy(
     previous: Optional[Dict[str, Any]],
     now: datetime,
-    window: Sequence[Observation],
+    train: Sequence[Observation],
+    oos: Sequence[Observation],
     reason: str,
     min_states: int,
     window_days: int,
@@ -633,7 +662,7 @@ def _fallback_policy(
     cost_pct: float,
     horizons: Sequence[int],
 ) -> Dict[str, Any]:
-    """Policy used when there are not enough trade-labeled states."""
+    """Policy used when there are not enough trade-labeled training states."""
     threshold = FALLBACK_THRESHOLD
     offset_rules = rules
     version = 1
@@ -641,9 +670,10 @@ def _fallback_policy(
         threshold = resolve_threshold(previous, now)
         offset_rules = previous.get("offset_rules") or rules
         version = int(previous.get("version") or 1) + 1
-    sample = _trade_sample(window, trade_horizon, cost_pct)
-    evaluated = evaluate_threshold(window, threshold, offset_rules, trade_horizon, cost_pct)
-    curve = threshold_curve(window, THRESHOLD_GRID, offset_rules, trade_horizon, cost_pct)
+    sample = _trade_sample(train, trade_horizon, cost_pct)
+    evaluated = evaluate_threshold(train, threshold, offset_rules, trade_horizon, cost_pct)
+    oos_evaluated = evaluate_threshold(oos, threshold, offset_rules, trade_horizon, cost_pct)
+    curve = threshold_curve(train, THRESHOLD_GRID, offset_rules, trade_horizon, cost_pct)
     return {
         "version": version,
         "generated_at": _iso(now),
@@ -662,13 +692,17 @@ def _fallback_policy(
             "mean_net_pct": evaluated["mean_net_pct"],
             "win_rate": evaluated["win_rate"],
             "trades": evaluated["trades"],
-            "sample": len(window),
+            "sample": len(train),
+            "window_sample": len(train) + len(oos),
+            "oos_sample": oos_evaluated["sample"],
+            "oos_coverage": oos_evaluated["coverage"],
+            "oos_net_benefit": oos_evaluated["net_benefit"],
             "label_states_used": sample["states_used"],
             "label_states_excluded": sample["states_excluded"],
             "reason": reason,
             "threshold_curve": curve,
             "trade_pnl_by_horizon": _by_horizon_metrics(
-                window, threshold, offset_rules, horizons, cost_pct
+                train, threshold, offset_rules, horizons, cost_pct
             ),
         },
         "status": "fallback",
@@ -695,13 +729,13 @@ def calibrate_policy(
     not to the raw observation count: HOLD states carry no trade P&L and are
     excluded.
     """
-    window = filter_window(observations, now, window_days)
-    rules = build_offset_rules(window)
+    train, oos = split_train_oos(observations, now, window_days, OOS_DAYS)
+    rules = build_offset_rules(train)
     label = _label_block(trade_horizon, cost_pct, horizons)
-    sample = _trade_sample(window, trade_horizon, cost_pct)
+    sample = _trade_sample(train, trade_horizon, cost_pct)
     if sample["states_used"] < min_states:
         return _fallback_policy(
-            previous, now, window,
+            previous, now, train, oos,
             f"insufficient trade-labeled states: {sample['states_used']} < {min_states}",
             min_states, window_days, rules, label, trade_horizon, cost_pct, horizons,
         )
@@ -709,11 +743,12 @@ def calibrate_policy(
         logger.info("previous policy is stale; current threshold falls back to %.2f", FALLBACK_THRESHOLD)
         previous = None
 
-    curve = threshold_curve(window, THRESHOLD_GRID, rules, trade_horizon, cost_pct)
+    # Every fit below uses the training slice only; ``oos`` stays untouched
+    # until the promotion check.
+    curve = threshold_curve(train, THRESHOLD_GRID, rules, trade_horizon, cost_pct)
     candidate = select_candidate(curve, min_coverage, min_trades)
     current = resolve_threshold(previous, now) if previous else FALLBACK_THRESHOLD
 
-    oos = last_days(window, now, OOS_DAYS)
     oos_current = evaluate_threshold(oos, current, rules, trade_horizon, cost_pct)
     promoted = False
     final = current
@@ -732,7 +767,7 @@ def calibrate_policy(
     else:
         logger.info("no feasible candidate; keeping current threshold %.2f", current)
 
-    metrics = evaluate_threshold(window, final, rules, trade_horizon, cost_pct)
+    metrics = evaluate_threshold(train, final, rules, trade_horizon, cost_pct)
     oos_final = evaluate_threshold(oos, final, rules, trade_horizon, cost_pct)
     version = int((previous or {}).get("version") or 0) + 1
     policy = {
@@ -754,6 +789,7 @@ def calibrate_policy(
             "win_rate": metrics["win_rate"],
             "trades": metrics["trades"],
             "sample": metrics["sample"],
+            "window_sample": metrics["sample"] + oos_current["sample"],
             "label_states_used": sample["states_used"],
             "label_states_excluded": sample["states_excluded"],
             "candidate_threshold": candidate["threshold"] if candidate else None,
@@ -761,9 +797,10 @@ def calibrate_policy(
             "oos_net_benefit": oos_final["net_benefit"],
             "oos_net_benefit_current": oos_current["net_benefit"],
             "oos_sample": oos_current["sample"],
+            "oos_coverage": oos_final["coverage"],
             "threshold_curve": curve,
             "trade_pnl_by_horizon": _by_horizon_metrics(
-                window, final, rules, horizons, cost_pct
+                train, final, rules, horizons, cost_pct
             ),
         },
         "status": "active",
