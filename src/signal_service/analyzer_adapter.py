@@ -245,6 +245,10 @@ class PairAnalyzer:
         # non-HOLD decision. The phase-1 risk layer keeps flagging an explicit
         # JEV bias conflict whenever a JEV payload is attached.
         as_of = self._analysis_as_of(candle_open_time)
+        # The prompt for a closed candle must describe that candle's close, not
+        # the wall-clock time when the analysis happens to run. This holds for
+        # live (candle_open_time from the scheduler) and replay alike.
+        self._set_engine_analysis_as_of(as_of)
         pre_result: Optional[GateResult] = None
         state: Optional[Dict[str, Any]] = None
         if self.jev_gate is not None and self.jev_gate.uses_pre():
@@ -370,6 +374,21 @@ class PairAnalyzer:
         if candle_open_time is not None:
             return parse_iso(candle_open_time) + timedelta(seconds=timeframe_seconds(self.timeframe))
         return datetime.now(timezone.utc)
+
+    def _set_engine_analysis_as_of(self, as_of: datetime) -> None:
+        """Push the prompt clock to the engine (or its prompt builder).
+
+        Real engines expose `set_analysis_as_of`; lightweight test doubles may
+        only accept the attribute, so both shapes are supported.
+        """
+        setter = getattr(self.engine, "set_analysis_as_of", None)
+        if callable(setter):
+            setter(as_of)
+            return
+        try:
+            self.engine.analysis_as_of = as_of
+        except AttributeError:
+            logger.warning("Engine for %s cannot accept an analysis clock", self.symbol)
 
     def _jev_state(self, as_of: datetime) -> Optional[Dict[str, Any]]:
         """Build the no-look-ahead JEV state from the engine's closed candles."""
@@ -768,6 +787,8 @@ class ReplayDataInjector:
         self.timestamps = list(timestamps)
         self._original_collect = None
         self._original_enrich = None
+        self._original_article_snapshot = None
+        self._original_collector_article_urls = None
 
     def install(self) -> None:
         """Bypass live collection and live enrichment for this engine."""
@@ -784,6 +805,23 @@ class ReplayDataInjector:
         self._original_enrich = getattr(engine, "_enrich_market_context", None)
         engine.data_collector.collect_data = _replay_collect  # type: ignore[assignment]
         engine._enrich_market_context = _replay_enrich  # type: ignore[assignment]
+
+        # Replay must never attach current news metadata: the engine's cached
+        # article URLs describe today, not the replayed candle. Neutralize both
+        # the snapshot source and the collector's cached URLs, then restore on
+        # exit so live behaviour is unchanged.
+        self._original_collector_article_urls = getattr(engine.data_collector, "article_urls", None)
+        try:
+            engine.data_collector.article_urls = {}
+        except AttributeError:
+            self._original_collector_article_urls = None
+        rag_engine = getattr(engine, "rag_engine", None)
+        snapshot = getattr(rag_engine, "get_latest_article_urls_snapshot", None)
+        if callable(snapshot):
+            self._original_article_snapshot = snapshot
+            rag_engine.get_latest_article_urls_snapshot = lambda: {}  # type: ignore[assignment]
+        engine.article_urls = {}
+
         # Bind the same use_news/use_chart ablation flags as the run command;
         # forcing news off and pre-setting _flags_applied made --use-chart and
         # --no-news no-ops during replay.
@@ -798,6 +836,10 @@ class ReplayDataInjector:
             engine.data_collector.collect_data = self._original_collect
         if self._original_enrich is not None:
             engine._enrich_market_context = self._original_enrich
+        if self._original_collector_article_urls is not None:
+            engine.data_collector.article_urls = self._original_collector_article_urls
+        if self._original_article_snapshot is not None:
+            engine.rag_engine.get_latest_article_urls_snapshot = self._original_article_snapshot
 
     def set_as_of(self, as_of: datetime) -> None:
         """Slice the stored series strictly to candles closed at or before `as_of`."""

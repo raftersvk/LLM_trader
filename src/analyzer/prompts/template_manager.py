@@ -28,7 +28,8 @@ class TemplateManager:
     def build_system_prompt(self, symbol: str, timeframe: str = "1h", previous_response: Optional[str] = None,
                             performance_context: Optional[str] = None, brain_context: Optional[str] = None,
                             last_analysis_time: Optional[str] = None,
-                            indicator_delta_alert: str = "") -> str:
+                            indicator_delta_alert: str = "",
+                            analysis_as_of: Optional[datetime] = None) -> str:
         # pylint: disable=too-many-arguments
         """Build the system prompt for trading decision AI.
 
@@ -40,6 +41,9 @@ class TemplateManager:
             brain_context: Distilled trading insights from closed trades
             last_analysis_time: Formatted timestamp of last analysis (e.g., "2025-12-26 14:30:00")
             indicator_delta_alert: Alert string when many indicators changed significantly
+            analysis_as_of: Explicit prompt clock. None uses the current UTC time;
+                replay passes the analysed candle close so the deterministic
+                time check never reports a later date.
 
         Returns:
             str: Formatted system prompt
@@ -128,7 +132,7 @@ class TemplateManager:
                     text_reasoning,
                     "",
                     "### DETERMINISTIC TIME CHECK",
-                    f"- **Current Time**: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
+                    f"- **Current Time**: {(analysis_as_of or datetime.now(timezone.utc)).strftime('%Y-%m-%d %H:%M:%S')} UTC",
                     "- **Relevance**: PREVIOUS reasoning MUST be verified against CURRENT data. If previous claims (e.g., 'approaching' events) contradict the current clock or were based on now-outdated milestones, you MUST ignore or correct them.",
                     f"- **Relevance Window**: Only consider an event 'imminent' if it occurs within the next 2 full candles (Window: {window_minutes} minutes).",
                     "",

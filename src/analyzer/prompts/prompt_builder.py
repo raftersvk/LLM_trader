@@ -2,6 +2,7 @@ from typing import Optional, Any, Dict, TYPE_CHECKING
 from collections.abc import Sequence
 
 import math
+from datetime import datetime
 import numpy as np
 
 from src.logger.logger import Logger
@@ -56,6 +57,9 @@ class PromptBuilder:
         self.logger = logger
         self.custom_instructions: list[str] = []
         self.context: Optional[AnalysisContext] = None
+        # Prompt clock. None means the current UTC wall clock; replay sets the
+        # analysed candle close so the prompt never leaks a later date.
+        self.analysis_as_of: Optional[datetime] = None
         if technical_calculator is None:
             raise ValueError("technical_calculator is required for PromptBuilder")
         self.technical_calculator = technical_calculator
@@ -109,7 +113,7 @@ class PromptBuilder:
         self.context = context
 
         sections = [
-            self.context_builder.build_trading_context(context),
+            self.context_builder.build_trading_context(context, now=self.analysis_as_of),
         ]
 
         # Add position context early in user query (adjacent to current price for context)
@@ -273,7 +277,8 @@ class PromptBuilder:
             performance_context,
             brain_context,
             last_analysis_time,
-            indicator_delta_alert=indicator_delta_alert
+            indicator_delta_alert=indicator_delta_alert,
+            analysis_as_of=self.analysis_as_of
         )
 
         # Check if we have advanced support/resistance detected

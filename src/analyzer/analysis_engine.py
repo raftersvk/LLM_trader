@@ -73,7 +73,8 @@ class AnalysisEngine:
         metrics_calculator=None,
         result_processor=None,
         chart_generator=None,
-        data_fetcher_factory=None
+        data_fetcher_factory=None,
+        analysis_as_of: Optional[datetime] = None
     ) -> None:
         """
         Initialize AnalysisEngine with injected dependencies (DI pattern).
@@ -96,6 +97,10 @@ class AnalysisEngine:
             result_processor: AnalysisResultProcessor instance (injected from app.py)
             chart_generator: ChartGenerator instance (injected from app.py)
             data_fetcher_factory: DataFetcherFactory instance (injected from app.py)
+            analysis_as_of: Explicit prompt clock for the analysis. When None,
+                prompt builders fall back to the current UTC time. Replay and
+                the signal service set this to the analysed candle close so the
+                prompt never describes wall-clock time from a later date.
         """
         # pylint: disable=too-many-arguments, too-many-locals
         self.logger = logger
@@ -109,6 +114,10 @@ class AnalysisEngine:
         self.article_urls = {}
         self.last_analysis_result = None
         self.previous_microstructure_snapshots: Dict[str, Dict[str, Any]] = {}
+
+        # Explicit prompt clock. None means "use the current wall clock" and is
+        # the live default; replay sets the analysed candle close.
+        self.analysis_as_of: Optional[datetime] = analysis_as_of
 
         # Load configuration
         try:
@@ -212,6 +221,16 @@ class AnalysisEngine:
                 await self.rag_engine.close()
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error during MarketAnalyzer cleanup: %s", e)
+
+    def set_analysis_as_of(self, analysis_as_of: Optional[datetime]) -> None:
+        """Freeze the prompt clock to an explicit time (None restores wall clock).
+
+        Args:
+            analysis_as_of: Time the prompt must describe, normally the close of
+                the analysed candle. None means the prompt uses the current UTC
+                time when it is built.
+        """
+        self.analysis_as_of = analysis_as_of
 
     @profile_performance
     async def analyze_market(
@@ -508,6 +527,12 @@ class AnalysisEngine:
         precomputed_chart: Optional[Tuple[Optional[io.BytesIO], bool]] = None
     ) -> Dict[str, Any]:
         """Generate AI analysis using prompt builder and result processor"""
+
+        # Freeze the prompt clock to the analysed candle close (replay) or to
+        # the current wall clock (live default). Without this the prompt tells
+        # the model today's date while replay shows a historical candle.
+        if self.prompt_builder is not None:
+            self.prompt_builder.analysis_as_of = self.analysis_as_of
 
         # Use precomputed chart if available, otherwise generate (fallback)
         if precomputed_chart:

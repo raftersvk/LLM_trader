@@ -56,17 +56,20 @@ class ContextBuilder:
         self.long_term_formatter = long_term_formatter
         self.timeframe_validator = timeframe_validator
 
-    def build_trading_context(self, context) -> str:
+    def build_trading_context(self, context, now: Optional[datetime] = None) -> str:
         """Build trading context section with current market information.
 
         Args:
             context: Analysis context containing symbol and current price
+            now: Explicit prompt clock. None uses the current UTC time; replay
+                passes the analysed candle close so no wall-clock leak occurs.
 
         Returns:
             str: Formatted trading context section
         """
-        # Get the current time to understand candle formation
-        current_time = datetime.now(timezone.utc)  # Use UTC to match exchange candle boundaries
+        # Get the analysis time to understand candle formation. Replay injects
+        # the analysed candle close here instead of the wall clock.
+        current_time = now or datetime.now(timezone.utc)  # UTC to match exchange candle boundaries
 
         # Create candle status message dynamically based on timeframe
         candle_status = ""
