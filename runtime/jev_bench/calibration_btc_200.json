@@ -1,0 +1,7060 @@
+{
+  "generated_at": "2026-10-24T18:37:09+00:00",
+  "kind": "jev-tradeability-calibration",
+  "real_benchmark": true,
+  "aborted": false,
+  "abort_reason": null,
+  "dataset": {
+    "source": "/home/djelinux/TradingBots/trading-stack/runtime/jev_bench/BTC_USDT_1h.csv",
+    "symbol": "BTC/USDT",
+    "timeframe": "1h",
+    "candles": 600,
+    "states": 200,
+    "horizons": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "horizon": 1,
+    "move_threshold_pct": 1.0,
+    "base": "momentum-proxy (rule-based, NOT an LLM)",
+    "delay_seconds": 0.5,
+    "model": "vllm-sr/d3-flash"
+  },
+  "scoring": {
+    "calls": 200,
+    "scored": 200,
+    "errors": 0,
+    "rate_limit_errors": 0,
+    "auth_errors": 0,
+    "other_errors": 0,
+    "latency": {
+      "p50_ms": 159.0,
+      "p95_ms": 476,
+      "max_ms": 697
+    },
+    "duration_seconds": 139.58,
+    "base_duration_seconds": 139.36
+  },
+  "noul": {
+    "count": 200,
+    "min": 0.0639,
+    "median": 0.3538,
+    "mean": 0.4337,
+    "max": 0.9672,
+    "histogram": [
+      {
+        "bin": "0.0-0.1",
+        "low": 0.0,
+        "high": 0.1,
+        "count": 5
+      },
+      {
+        "bin": "0.1-0.2",
+        "low": 0.1,
+        "high": 0.2,
+        "count": 44
+      },
+      {
+        "bin": "0.2-0.3",
+        "low": 0.2,
+        "high": 0.3,
+        "count": 32
+      },
+      {
+        "bin": "0.3-0.4",
+        "low": 0.3,
+        "high": 0.4,
+        "count": 28
+      },
+      {
+        "bin": "0.4-0.5",
+        "low": 0.4,
+        "high": 0.5,
+        "count": 21
+      },
+      {
+        "bin": "0.5-0.6",
+        "low": 0.5,
+        "high": 0.6,
+        "count": 16
+      },
+      {
+        "bin": "0.6-0.7",
+        "low": 0.6,
+        "high": 0.7,
+        "count": 11
+      },
+      {
+        "bin": "0.7-0.8",
+        "low": 0.7,
+        "high": 0.8,
+        "count": 18
+      },
+      {
+        "bin": "0.8-0.9",
+        "low": 0.8,
+        "high": 0.9,
+        "count": 9
+      },
+      {
+        "bin": "0.9-1.0",
+        "low": 0.9,
+        "high": 1.0,
+        "count": 16
+      }
+    ]
+  },
+  "brier": 0.2505,
+  "reliability": [
+    {
+      "bin": "0.0-0.2",
+      "count": 49,
+      "mean_predicted": 0.1549,
+      "observed_worth_rate": 0.0
+    },
+    {
+      "bin": "0.2-0.4",
+      "count": 60,
+      "mean_predicted": 0.2917,
+      "observed_worth_rate": 0.0
+    },
+    {
+      "bin": "0.4-0.6",
+      "count": 37,
+      "mean_predicted": 0.4944,
+      "observed_worth_rate": 0.0
+    },
+    {
+      "bin": "0.6-0.8",
+      "count": 29,
+      "mean_predicted": 0.7117,
+      "observed_worth_rate": 0.0345
+    },
+    {
+      "bin": "0.8-1.0",
+      "count": 25,
+      "mean_predicted": 0.9086,
+      "observed_worth_rate": 0.04
+    }
+  ],
+  "worth_rate": {
+    "h1": 0.01,
+    "h2": 0.035,
+    "h3": 0.08,
+    "h4": 0.135
+  },
+  "base": {
+    "trade_count": 28,
+    "trade_precision": 0.5
+  },
+  "threshold_curve": [
+    {
+      "threshold": 0.2,
+      "coverage": 0.755,
+      "trade_count": 21,
+      "base_trade_precision": 0.4286,
+      "hold_count": 7,
+      "false_hold_count": 0,
+      "false_hold_rate": 0.0,
+      "directional_auc": 0.4615
+    },
+    {
+      "threshold": 0.25,
+      "coverage": 0.655,
+      "trade_count": 21,
+      "base_trade_precision": 0.4286,
+      "hold_count": 7,
+      "false_hold_count": 0,
+      "false_hold_rate": 0.0,
+      "directional_auc": 0.4689
+    },
+    {
+      "threshold": 0.3,
+      "coverage": 0.595,
+      "trade_count": 21,
+      "base_trade_precision": 0.4286,
+      "hold_count": 7,
+      "false_hold_count": 0,
+      "false_hold_rate": 0.0,
+      "directional_auc": 0.4561
+    },
+    {
+      "threshold": 0.35,
+      "coverage": 0.51,
+      "trade_count": 20,
+      "base_trade_precision": 0.45,
+      "hold_count": 8,
+      "false_hold_count": 0,
+      "false_hold_rate": 0.0,
+      "directional_auc": 0.4577
+    },
+    {
+      "threshold": 0.4,
+      "coverage": 0.455,
+      "trade_count": 17,
+      "base_trade_precision": 0.4706,
+      "hold_count": 11,
+      "false_hold_count": 0,
+      "false_hold_rate": 0.0,
+      "directional_auc": 0.4762
+    },
+    {
+      "threshold": 0.45,
+      "coverage": 0.4,
+      "trade_count": 17,
+      "base_trade_precision": 0.4706,
+      "hold_count": 11,
+      "false_hold_count": 0,
+      "false_hold_rate": 0.0,
+      "directional_auc": 0.4685
+    },
+    {
+      "threshold": 0.5,
+      "coverage": 0.35,
+      "trade_count": 16,
+      "base_trade_precision": 0.5,
+      "hold_count": 12,
+      "false_hold_count": 0,
+      "false_hold_rate": 0.0,
+      "directional_auc": 0.4733
+    },
+    {
+      "threshold": 0.55,
+      "coverage": 0.32,
+      "trade_count": 15,
+      "base_trade_precision": 0.5333,
+      "hold_count": 13,
+      "false_hold_count": 0,
+      "false_hold_rate": 0.0,
+      "directional_auc": 0.5127
+    },
+    {
+      "threshold": 0.6,
+      "coverage": 0.27,
+      "trade_count": 14,
+      "base_trade_precision": 0.5,
+      "hold_count": 14,
+      "false_hold_count": 0,
+      "false_hold_rate": 0.0,
+      "directional_auc": 0.4783
+    },
+    {
+      "threshold": 0.65,
+      "coverage": 0.24,
+      "trade_count": 13,
+      "base_trade_precision": 0.5385,
+      "hold_count": 15,
+      "false_hold_count": 1,
+      "false_hold_rate": 0.0667,
+      "directional_auc": 0.5
+    },
+    {
+      "threshold": 0.7,
+      "coverage": 0.215,
+      "trade_count": 13,
+      "base_trade_precision": 0.5385,
+      "hold_count": 15,
+      "false_hold_count": 1,
+      "false_hold_rate": 0.0667,
+      "directional_auc": 0.5
+    }
+  ],
+  "by_horizon": {
+    "h1": {
+      "worth_rate": 0.01,
+      "brier": 0.2505,
+      "reliability": [
+        {
+          "bin": "0.0-0.2",
+          "count": 49,
+          "mean_predicted": 0.1549,
+          "observed_worth_rate": 0.0
+        },
+        {
+          "bin": "0.2-0.4",
+          "count": 60,
+          "mean_predicted": 0.2917,
+          "observed_worth_rate": 0.0
+        },
+        {
+          "bin": "0.4-0.6",
+          "count": 37,
+          "mean_predicted": 0.4944,
+          "observed_worth_rate": 0.0
+        },
+        {
+          "bin": "0.6-0.8",
+          "count": 29,
+          "mean_predicted": 0.7117,
+          "observed_worth_rate": 0.0345
+        },
+        {
+          "bin": "0.8-1.0",
+          "count": 25,
+          "mean_predicted": 0.9086,
+          "observed_worth_rate": 0.04
+        }
+      ],
+      "threshold_curve": [
+        {
+          "threshold": 0.2,
+          "coverage": 0.755,
+          "trade_count": 21,
+          "base_trade_precision": 0.4286,
+          "hold_count": 7,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4615
+        },
+        {
+          "threshold": 0.25,
+          "coverage": 0.655,
+          "trade_count": 21,
+          "base_trade_precision": 0.4286,
+          "hold_count": 7,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4689
+        },
+        {
+          "threshold": 0.3,
+          "coverage": 0.595,
+          "trade_count": 21,
+          "base_trade_precision": 0.4286,
+          "hold_count": 7,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4561
+        },
+        {
+          "threshold": 0.35,
+          "coverage": 0.51,
+          "trade_count": 20,
+          "base_trade_precision": 0.45,
+          "hold_count": 8,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4577
+        },
+        {
+          "threshold": 0.4,
+          "coverage": 0.455,
+          "trade_count": 17,
+          "base_trade_precision": 0.4706,
+          "hold_count": 11,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4762
+        },
+        {
+          "threshold": 0.45,
+          "coverage": 0.4,
+          "trade_count": 17,
+          "base_trade_precision": 0.4706,
+          "hold_count": 11,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4685
+        },
+        {
+          "threshold": 0.5,
+          "coverage": 0.35,
+          "trade_count": 16,
+          "base_trade_precision": 0.5,
+          "hold_count": 12,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4733
+        },
+        {
+          "threshold": 0.55,
+          "coverage": 0.32,
+          "trade_count": 15,
+          "base_trade_precision": 0.5333,
+          "hold_count": 13,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.5127
+        },
+        {
+          "threshold": 0.6,
+          "coverage": 0.27,
+          "trade_count": 14,
+          "base_trade_precision": 0.5,
+          "hold_count": 14,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4783
+        },
+        {
+          "threshold": 0.65,
+          "coverage": 0.24,
+          "trade_count": 13,
+          "base_trade_precision": 0.5385,
+          "hold_count": 15,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0667,
+          "directional_auc": 0.5
+        },
+        {
+          "threshold": 0.7,
+          "coverage": 0.215,
+          "trade_count": 13,
+          "base_trade_precision": 0.5385,
+          "hold_count": 15,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0667,
+          "directional_auc": 0.5
+        }
+      ]
+    },
+    "h2": {
+      "worth_rate": 0.035,
+      "brier": 0.2573,
+      "reliability": [
+        {
+          "bin": "0.0-0.2",
+          "count": 49,
+          "mean_predicted": 0.1549,
+          "observed_worth_rate": 0.0
+        },
+        {
+          "bin": "0.2-0.4",
+          "count": 60,
+          "mean_predicted": 0.2917,
+          "observed_worth_rate": 0.05
+        },
+        {
+          "bin": "0.4-0.6",
+          "count": 37,
+          "mean_predicted": 0.4944,
+          "observed_worth_rate": 0.027
+        },
+        {
+          "bin": "0.6-0.8",
+          "count": 29,
+          "mean_predicted": 0.7117,
+          "observed_worth_rate": 0.1034
+        },
+        {
+          "bin": "0.8-1.0",
+          "count": 25,
+          "mean_predicted": 0.9086,
+          "observed_worth_rate": 0.0
+        }
+      ],
+      "threshold_curve": [
+        {
+          "threshold": 0.2,
+          "coverage": 0.755,
+          "trade_count": 21,
+          "base_trade_precision": 0.5238,
+          "hold_count": 7,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4418
+        },
+        {
+          "threshold": 0.25,
+          "coverage": 0.655,
+          "trade_count": 21,
+          "base_trade_precision": 0.5238,
+          "hold_count": 7,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4364
+        },
+        {
+          "threshold": 0.3,
+          "coverage": 0.595,
+          "trade_count": 21,
+          "base_trade_precision": 0.5238,
+          "hold_count": 7,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4224
+        },
+        {
+          "threshold": 0.35,
+          "coverage": 0.51,
+          "trade_count": 20,
+          "base_trade_precision": 0.5,
+          "hold_count": 8,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4039
+        },
+        {
+          "threshold": 0.4,
+          "coverage": 0.455,
+          "trade_count": 17,
+          "base_trade_precision": 0.5882,
+          "hold_count": 11,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0909,
+          "directional_auc": 0.4379
+        },
+        {
+          "threshold": 0.45,
+          "coverage": 0.4,
+          "trade_count": 17,
+          "base_trade_precision": 0.5882,
+          "hold_count": 11,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0909,
+          "directional_auc": 0.4595
+        },
+        {
+          "threshold": 0.5,
+          "coverage": 0.35,
+          "trade_count": 16,
+          "base_trade_precision": 0.5625,
+          "hold_count": 12,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0833,
+          "directional_auc": 0.466
+        },
+        {
+          "threshold": 0.55,
+          "coverage": 0.32,
+          "trade_count": 15,
+          "base_trade_precision": 0.5333,
+          "hold_count": 13,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0769,
+          "directional_auc": 0.4712
+        },
+        {
+          "threshold": 0.6,
+          "coverage": 0.27,
+          "trade_count": 14,
+          "base_trade_precision": 0.5,
+          "hold_count": 14,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0714,
+          "directional_auc": 0.4762
+        },
+        {
+          "threshold": 0.65,
+          "coverage": 0.24,
+          "trade_count": 13,
+          "base_trade_precision": 0.5385,
+          "hold_count": 15,
+          "false_hold_count": 2,
+          "false_hold_rate": 0.1333,
+          "directional_auc": 0.5
+        },
+        {
+          "threshold": 0.7,
+          "coverage": 0.215,
+          "trade_count": 13,
+          "base_trade_precision": 0.5385,
+          "hold_count": 15,
+          "false_hold_count": 2,
+          "false_hold_rate": 0.1333,
+          "directional_auc": 0.5
+        }
+      ]
+    },
+    "h3": {
+      "worth_rate": 0.08,
+      "brier": 0.2742,
+      "reliability": [
+        {
+          "bin": "0.0-0.2",
+          "count": 49,
+          "mean_predicted": 0.1549,
+          "observed_worth_rate": 0.0612
+        },
+        {
+          "bin": "0.2-0.4",
+          "count": 60,
+          "mean_predicted": 0.2917,
+          "observed_worth_rate": 0.1167
+        },
+        {
+          "bin": "0.4-0.6",
+          "count": 37,
+          "mean_predicted": 0.4944,
+          "observed_worth_rate": 0.0541
+        },
+        {
+          "bin": "0.6-0.8",
+          "count": 29,
+          "mean_predicted": 0.7117,
+          "observed_worth_rate": 0.1379
+        },
+        {
+          "bin": "0.8-1.0",
+          "count": 25,
+          "mean_predicted": 0.9086,
+          "observed_worth_rate": 0.0
+        }
+      ],
+      "threshold_curve": [
+        {
+          "threshold": 0.2,
+          "coverage": 0.755,
+          "trade_count": 21,
+          "base_trade_precision": 0.5238,
+          "hold_count": 7,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4418
+        },
+        {
+          "threshold": 0.25,
+          "coverage": 0.655,
+          "trade_count": 21,
+          "base_trade_precision": 0.5238,
+          "hold_count": 7,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4364
+        },
+        {
+          "threshold": 0.3,
+          "coverage": 0.595,
+          "trade_count": 21,
+          "base_trade_precision": 0.5238,
+          "hold_count": 7,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4374
+        },
+        {
+          "threshold": 0.35,
+          "coverage": 0.51,
+          "trade_count": 20,
+          "base_trade_precision": 0.55,
+          "hold_count": 8,
+          "false_hold_count": 0,
+          "false_hold_rate": 0.0,
+          "directional_auc": 0.4221
+        },
+        {
+          "threshold": 0.4,
+          "coverage": 0.455,
+          "trade_count": 17,
+          "base_trade_precision": 0.5882,
+          "hold_count": 11,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0909,
+          "directional_auc": 0.4636
+        },
+        {
+          "threshold": 0.45,
+          "coverage": 0.4,
+          "trade_count": 17,
+          "base_trade_precision": 0.5882,
+          "hold_count": 11,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0909,
+          "directional_auc": 0.4595
+        },
+        {
+          "threshold": 0.5,
+          "coverage": 0.35,
+          "trade_count": 16,
+          "base_trade_precision": 0.5625,
+          "hold_count": 12,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0833,
+          "directional_auc": 0.466
+        },
+        {
+          "threshold": 0.55,
+          "coverage": 0.32,
+          "trade_count": 15,
+          "base_trade_precision": 0.5333,
+          "hold_count": 13,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0769,
+          "directional_auc": 0.4712
+        },
+        {
+          "threshold": 0.6,
+          "coverage": 0.27,
+          "trade_count": 14,
+          "base_trade_precision": 0.5,
+          "hold_count": 14,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.0714,
+          "directional_auc": 0.475
+        },
+        {
+          "threshold": 0.65,
+          "coverage": 0.24,
+          "trade_count": 13,
+          "base_trade_precision": 0.5385,
+          "hold_count": 15,
+          "false_hold_count": 2,
+          "false_hold_rate": 0.1333,
+          "directional_auc": 0.5
+        },
+        {
+          "threshold": 0.7,
+          "coverage": 0.215,
+          "trade_count": 13,
+          "base_trade_precision": 0.5385,
+          "hold_count": 15,
+          "false_hold_count": 2,
+          "false_hold_rate": 0.1333,
+          "directional_auc": 0.5
+        }
+      ]
+    },
+    "h4": {
+      "worth_rate": 0.135,
+      "brier": 0.2693,
+      "reliability": [
+        {
+          "bin": "0.0-0.2",
+          "count": 49,
+          "mean_predicted": 0.1549,
+          "observed_worth_rate": 0.1224
+        },
+        {
+          "bin": "0.2-0.4",
+          "count": 60,
+          "mean_predicted": 0.2917,
+          "observed_worth_rate": 0.1333
+        },
+        {
+          "bin": "0.4-0.6",
+          "count": 37,
+          "mean_predicted": 0.4944,
+          "observed_worth_rate": 0.1081
+        },
+        {
+          "bin": "0.6-0.8",
+          "count": 29,
+          "mean_predicted": 0.7117,
+          "observed_worth_rate": 0.2069
+        },
+        {
+          "bin": "0.8-1.0",
+          "count": 25,
+          "mean_predicted": 0.9086,
+          "observed_worth_rate": 0.12
+        }
+      ],
+      "threshold_curve": [
+        {
+          "threshold": 0.2,
+          "coverage": 0.755,
+          "trade_count": 21,
+          "base_trade_precision": 0.5238,
+          "hold_count": 7,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.1429,
+          "directional_auc": 0.4825
+        },
+        {
+          "threshold": 0.25,
+          "coverage": 0.655,
+          "trade_count": 21,
+          "base_trade_precision": 0.5238,
+          "hold_count": 7,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.1429,
+          "directional_auc": 0.4784
+        },
+        {
+          "threshold": 0.3,
+          "coverage": 0.595,
+          "trade_count": 21,
+          "base_trade_precision": 0.5238,
+          "hold_count": 7,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.1429,
+          "directional_auc": 0.4804
+        },
+        {
+          "threshold": 0.35,
+          "coverage": 0.51,
+          "trade_count": 20,
+          "base_trade_precision": 0.55,
+          "hold_count": 8,
+          "false_hold_count": 1,
+          "false_hold_rate": 0.125,
+          "directional_auc": 0.4661
+        },
+        {
+          "threshold": 0.4,
+          "coverage": 0.455,
+          "trade_count": 17,
+          "base_trade_precision": 0.5882,
+          "hold_count": 11,
+          "false_hold_count": 2,
+          "false_hold_rate": 0.1818,
+          "directional_auc": 0.4823
+        },
+        {
+          "threshold": 0.45,
+          "coverage": 0.4,
+          "trade_count": 17,
+          "base_trade_precision": 0.5882,
+          "hold_count": 11,
+          "false_hold_count": 2,
+          "false_hold_rate": 0.1818,
+          "directional_auc": 0.4728
+        },
+        {
+          "threshold": 0.5,
+          "coverage": 0.35,
+          "trade_count": 16,
+          "base_trade_precision": 0.625,
+          "hold_count": 12,
+          "false_hold_count": 2,
+          "false_hold_rate": 0.1667,
+          "directional_auc": 0.4768
+        },
+        {
+          "threshold": 0.55,
+          "coverage": 0.32,
+          "trade_count": 15,
+          "base_trade_precision": 0.6,
+          "hold_count": 13,
+          "false_hold_count": 2,
+          "false_hold_rate": 0.1538,
+          "directional_auc": 0.4785
+        },
+        {
+          "threshold": 0.6,
+          "coverage": 0.27,
+          "trade_count": 14,
+          "base_trade_precision": 0.5714,
+          "hold_count": 14,
+          "false_hold_count": 2,
+          "false_hold_rate": 0.1429,
+          "directional_auc": 0.4773
+        },
+        {
+          "threshold": 0.65,
+          "coverage": 0.24,
+          "trade_count": 13,
+          "base_trade_precision": 0.6154,
+          "hold_count": 15,
+          "false_hold_count": 3,
+          "false_hold_rate": 0.2,
+          "directional_auc": 0.5
+        },
+        {
+          "threshold": 0.7,
+          "coverage": 0.215,
+          "trade_count": 13,
+          "base_trade_precision": 0.6154,
+          "hold_count": 15,
+          "false_hold_count": 3,
+          "false_hold_rate": 0.2,
+          "directional_auc": 0.5
+        }
+      ]
+    }
+  },
+  "states": [
+    {
+      "index": 396,
+      "as_of": "2026-10-15T10:00:00Z",
+      "noul": 0.1702,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.4953,
+      "score_raw": 1.9813,
+      "latency_ms": 366,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0027,
+        "2": -0.0035,
+        "3": -0.0088,
+        "4": -0.013
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 397,
+      "as_of": "2026-10-15T11:00:00Z",
+      "noul": 0.1952,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5203,
+      "score_raw": 2.081,
+      "latency_ms": 174,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0008,
+        "2": -0.0061,
+        "3": -0.0103,
+        "4": 0.0102
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 398,
+      "as_of": "2026-10-15T12:00:00Z",
+      "noul": 0.1402,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.599,
+      "score_raw": 2.3959,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0053,
+        "2": -0.0095,
+        "3": 0.011,
+        "4": 0.0178
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 399,
+      "as_of": "2026-10-15T13:00:00Z",
+      "noul": 0.3575,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6658,
+      "score_raw": 2.6631,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0043,
+        "2": 0.0164,
+        "3": 0.0232,
+        "4": 0.0193
+      },
+      "worth_trading": {
+        "1": false,
+        "2": true,
+        "3": true,
+        "4": true
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": true,
+        "2": false,
+        "3": false,
+        "4": false
+      }
+    },
+    {
+      "index": 400,
+      "as_of": "2026-10-15T14:00:00Z",
+      "noul": 0.601,
+      "bias": "short",
+      "regime": "trend",
+      "confidence": 0.6907,
+      "score_raw": 2.7627,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0207,
+        "2": 0.0275,
+        "3": 0.0237,
+        "4": 0.0278
+      },
+      "worth_trading": {
+        "1": true,
+        "2": true,
+        "3": true,
+        "4": true
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      }
+    },
+    {
+      "index": 401,
+      "as_of": "2026-10-15T15:00:00Z",
+      "noul": 0.9509,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6898,
+      "score_raw": 2.7592,
+      "latency_ms": 168,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0067,
+        "2": 0.0029,
+        "3": 0.0069,
+        "4": 0.0066
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": true,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 402,
+      "as_of": "2026-10-15T16:00:00Z",
+      "noul": 0.9422,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7157,
+      "score_raw": 2.8627,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0038,
+        "2": 0.0003,
+        "3": -0.0001,
+        "4": -0.0004
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": false,
+        "2": true,
+        "3": false,
+        "4": false
+      }
+    },
+    {
+      "index": 403,
+      "as_of": "2026-10-15T17:00:00Z",
+      "noul": 0.7352,
+      "bias": "none",
+      "regime": "trend",
+      "confidence": 0.6205,
+      "score_raw": 2.482,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.004,
+        "2": 0.0037,
+        "3": 0.0034,
+        "4": 0.0001
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": true,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 404,
+      "as_of": "2026-10-15T18:00:00Z",
+      "noul": 0.7935,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.671,
+      "score_raw": 2.684,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0004,
+        "2": -0.0007,
+        "3": -0.004,
+        "4": -0.0002
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      }
+    },
+    {
+      "index": 405,
+      "as_of": "2026-10-15T19:00:00Z",
+      "noul": 0.5478,
+      "bias": "none",
+      "regime": "trend",
+      "confidence": 0.6434,
+      "score_raw": 2.5736,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0003,
+        "2": -0.0036,
+        "3": 0.0002,
+        "4": 0.0006
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 406,
+      "as_of": "2026-10-15T20:00:00Z",
+      "noul": 0.3149,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5902,
+      "score_raw": 2.3607,
+      "latency_ms": 171,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0033,
+        "2": 0.0005,
+        "3": 0.0009,
+        "4": -0.0017
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 407,
+      "as_of": "2026-10-15T21:00:00Z",
+      "noul": 0.5117,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5537,
+      "score_raw": 2.2149,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0038,
+        "2": 0.0042,
+        "3": 0.0016,
+        "4": 0.0028
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 408,
+      "as_of": "2026-10-15T22:00:00Z",
+      "noul": 0.6494,
+      "bias": "long",
+      "regime": "range",
+      "confidence": 0.6155,
+      "score_raw": 2.4621,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0004,
+        "2": -0.0022,
+        "3": -0.001,
+        "4": -0.004
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 409,
+      "as_of": "2026-10-15T23:00:00Z",
+      "noul": 0.4729,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.6348,
+      "score_raw": 2.5391,
+      "latency_ms": 162,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0026,
+        "2": -0.0014,
+        "3": -0.0045,
+        "4": -0.0051
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 410,
+      "as_of": "2026-10-16T00:00:00Z",
+      "noul": 0.2661,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5002,
+      "score_raw": 2.0009,
+      "latency_ms": 156,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0012,
+        "2": -0.0019,
+        "3": -0.0025,
+        "4": -0.0015
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 411,
+      "as_of": "2026-10-16T01:00:00Z",
+      "noul": 0.6355,
+      "bias": "long",
+      "regime": "range",
+      "confidence": 0.6274,
+      "score_raw": 2.5095,
+      "latency_ms": 627,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0031,
+        "2": -0.0037,
+        "3": -0.0026,
+        "4": -0.0022
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 412,
+      "as_of": "2026-10-16T02:00:00Z",
+      "noul": 0.3519,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5178,
+      "score_raw": 2.071,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0006,
+        "2": 0.0004,
+        "3": 0.0008,
+        "4": 0.0009
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 413,
+      "as_of": "2026-10-16T03:00:00Z",
+      "noul": 0.1798,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.4971,
+      "score_raw": 1.9884,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.001,
+        "2": 0.0014,
+        "3": 0.0015,
+        "4": 0.0017
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 414,
+      "as_of": "2026-10-16T04:00:00Z",
+      "noul": 0.3431,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.4922,
+      "score_raw": 1.9687,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0004,
+        "2": 0.0004,
+        "3": 0.0007,
+        "4": 0.002
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 415,
+      "as_of": "2026-10-16T05:00:00Z",
+      "noul": 0.1744,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.4955,
+      "score_raw": 1.9822,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0,
+        "2": 0.0003,
+        "3": 0.0016,
+        "4": 0.0011
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 416,
+      "as_of": "2026-10-16T06:00:00Z",
+      "noul": 0.167,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5134,
+      "score_raw": 2.0535,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0002,
+        "2": 0.0015,
+        "3": 0.001,
+        "4": -0.0018
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 417,
+      "as_of": "2026-10-16T07:00:00Z",
+      "noul": 0.2467,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5395,
+      "score_raw": 2.1579,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0013,
+        "2": 0.0008,
+        "3": -0.002,
+        "4": 0.0005
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 418,
+      "as_of": "2026-10-16T08:00:00Z",
+      "noul": 0.5751,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.6106,
+      "score_raw": 2.4423,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0005,
+        "2": -0.0033,
+        "3": -0.0009,
+        "4": 0.0043
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 419,
+      "as_of": "2026-10-16T09:00:00Z",
+      "noul": 0.414,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5935,
+      "score_raw": 2.3741,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0028,
+        "2": -0.0004,
+        "3": 0.0048,
+        "4": -0.0024
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 420,
+      "as_of": "2026-10-16T10:00:00Z",
+      "noul": 0.2439,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5813,
+      "score_raw": 2.3251,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0024,
+        "2": 0.0076,
+        "3": 0.0004,
+        "4": 0.0002
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 421,
+      "as_of": "2026-10-16T11:00:00Z",
+      "noul": 0.5539,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5373,
+      "score_raw": 2.1493,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0051,
+        "2": -0.002,
+        "3": -0.0023,
+        "4": -0.003
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 422,
+      "as_of": "2026-10-16T12:00:00Z",
+      "noul": 0.9409,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7247,
+      "score_raw": 2.899,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0071,
+        "2": -0.0074,
+        "3": -0.0081,
+        "4": -0.0156
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 423,
+      "as_of": "2026-10-16T13:00:00Z",
+      "noul": 0.3578,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5459,
+      "score_raw": 2.1837,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0002,
+        "2": -0.001,
+        "3": -0.0085,
+        "4": -0.0075
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 424,
+      "as_of": "2026-10-16T14:00:00Z",
+      "noul": 0.2904,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5251,
+      "score_raw": 2.1006,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0007,
+        "2": -0.0083,
+        "3": -0.0073,
+        "4": -0.0099
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 425,
+      "as_of": "2026-10-16T15:00:00Z",
+      "noul": 0.2227,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5698,
+      "score_raw": 2.2793,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0076,
+        "2": -0.0066,
+        "3": -0.0092,
+        "4": -0.0101
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 426,
+      "as_of": "2026-10-16T16:00:00Z",
+      "noul": 0.4675,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6871,
+      "score_raw": 2.7484,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.001,
+        "2": -0.0017,
+        "3": -0.0025,
+        "4": 0.0029
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": false,
+        "2": true,
+        "3": true,
+        "4": false
+      }
+    },
+    {
+      "index": 427,
+      "as_of": "2026-10-16T17:00:00Z",
+      "noul": 0.2679,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6021,
+      "score_raw": 2.4085,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0027,
+        "2": -0.0036,
+        "3": 0.0019,
+        "4": 0.0036
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 428,
+      "as_of": "2026-10-16T18:00:00Z",
+      "noul": 0.561,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6671,
+      "score_raw": 2.6685,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0009,
+        "2": 0.0046,
+        "3": 0.0063,
+        "4": 0.0057
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 429,
+      "as_of": "2026-10-16T19:00:00Z",
+      "noul": 0.3721,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.672,
+      "score_raw": 2.6878,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0055,
+        "2": 0.0072,
+        "3": 0.0066,
+        "4": 0.0078
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      }
+    },
+    {
+      "index": 430,
+      "as_of": "2026-10-16T20:00:00Z",
+      "noul": 0.4533,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.513,
+      "score_raw": 2.052,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0017,
+        "2": 0.0012,
+        "3": 0.0023,
+        "4": 0.0003
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 431,
+      "as_of": "2026-10-16T21:00:00Z",
+      "noul": 0.4771,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5083,
+      "score_raw": 2.0331,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0005,
+        "2": 0.0007,
+        "3": -0.0014,
+        "4": -0.0019
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 432,
+      "as_of": "2026-10-16T22:00:00Z",
+      "noul": 0.2338,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5047,
+      "score_raw": 2.0187,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0012,
+        "2": -0.0008,
+        "3": -0.0014,
+        "4": -0.0018
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 433,
+      "as_of": "2026-10-16T23:00:00Z",
+      "noul": 0.3467,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5238,
+      "score_raw": 2.0953,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.002,
+        "2": -0.0026,
+        "3": -0.003,
+        "4": -0.0037
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 434,
+      "as_of": "2026-10-17T00:00:00Z",
+      "noul": 0.2827,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5146,
+      "score_raw": 2.0584,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0005,
+        "2": -0.001,
+        "3": -0.0017,
+        "4": -0.0005
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 435,
+      "as_of": "2026-10-17T01:00:00Z",
+      "noul": 0.2403,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.538,
+      "score_raw": 2.1519,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0004,
+        "2": -0.0011,
+        "3": 0.0,
+        "4": -0.0004
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 436,
+      "as_of": "2026-10-17T02:00:00Z",
+      "noul": 0.083,
+      "bias": "short",
+      "regime": "low_vol",
+      "confidence": 0.562,
+      "score_raw": 2.248,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0007,
+        "2": 0.0004,
+        "3": -0.0,
+        "4": 0.0005
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 437,
+      "as_of": "2026-10-17T03:00:00Z",
+      "noul": 0.1548,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6279,
+      "score_raw": 2.5116,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0012,
+        "2": 0.0007,
+        "3": 0.0012,
+        "4": 0.002
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 438,
+      "as_of": "2026-10-17T04:00:00Z",
+      "noul": 0.1655,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5172,
+      "score_raw": 2.0689,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0005,
+        "2": 0.0,
+        "3": 0.0008,
+        "4": 0.002
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 439,
+      "as_of": "2026-10-17T05:00:00Z",
+      "noul": 0.0639,
+      "bias": "short",
+      "regime": "low_vol",
+      "confidence": 0.5768,
+      "score_raw": 2.3072,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0005,
+        "2": 0.0013,
+        "3": 0.0025,
+        "4": 0.0023
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 440,
+      "as_of": "2026-10-17T06:00:00Z",
+      "noul": 0.0646,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.503,
+      "score_raw": 2.012,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0008,
+        "2": 0.002,
+        "3": 0.0018,
+        "4": 0.0004
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 441,
+      "as_of": "2026-10-17T07:00:00Z",
+      "noul": 0.1848,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.512,
+      "score_raw": 2.0479,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0012,
+        "2": 0.001,
+        "3": -0.0004,
+        "4": 0.0
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 442,
+      "as_of": "2026-10-17T08:00:00Z",
+      "noul": 0.7563,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.6121,
+      "score_raw": 2.4484,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0002,
+        "2": -0.0016,
+        "3": -0.0012,
+        "4": -0.002
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 443,
+      "as_of": "2026-10-17T09:00:00Z",
+      "noul": 0.2362,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5513,
+      "score_raw": 2.2053,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0014,
+        "2": -0.001,
+        "3": -0.0018,
+        "4": -0.0025
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 444,
+      "as_of": "2026-10-17T10:00:00Z",
+      "noul": 0.1146,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.4961,
+      "score_raw": 1.9844,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0004,
+        "2": -0.0004,
+        "3": -0.0011,
+        "4": -0.0014
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 445,
+      "as_of": "2026-10-17T11:00:00Z",
+      "noul": 0.1174,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.4887,
+      "score_raw": 1.9548,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0008,
+        "2": -0.0015,
+        "3": -0.0017,
+        "4": -0.0007
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 446,
+      "as_of": "2026-10-17T12:00:00Z",
+      "noul": 0.0885,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.4637,
+      "score_raw": 1.8548,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0007,
+        "2": -0.0009,
+        "3": 0.0001,
+        "4": -0.0027
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 447,
+      "as_of": "2026-10-17T13:00:00Z",
+      "noul": 0.1055,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5449,
+      "score_raw": 2.1796,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0002,
+        "2": 0.0008,
+        "3": -0.002,
+        "4": -0.0032
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 448,
+      "as_of": "2026-10-17T14:00:00Z",
+      "noul": 0.0731,
+      "bias": "short",
+      "regime": "low_vol",
+      "confidence": 0.5651,
+      "score_raw": 2.2603,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.001,
+        "2": -0.0018,
+        "3": -0.003,
+        "4": -0.0014
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 449,
+      "as_of": "2026-10-17T15:00:00Z",
+      "noul": 0.1306,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.4731,
+      "score_raw": 1.8925,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0028,
+        "2": -0.004,
+        "3": -0.0025,
+        "4": -0.0009
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 450,
+      "as_of": "2026-10-17T16:00:00Z",
+      "noul": 0.3513,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6338,
+      "score_raw": 2.5352,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0012,
+        "2": 0.0003,
+        "3": 0.0019,
+        "4": 0.003
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 451,
+      "as_of": "2026-10-17T17:00:00Z",
+      "noul": 0.3656,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6332,
+      "score_raw": 2.5329,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0015,
+        "2": 0.0031,
+        "3": 0.0042,
+        "4": 0.0049
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 452,
+      "as_of": "2026-10-17T18:00:00Z",
+      "noul": 0.283,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.4964,
+      "score_raw": 1.9856,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0016,
+        "2": 0.0027,
+        "3": 0.0034,
+        "4": -0.003
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 453,
+      "as_of": "2026-10-17T19:00:00Z",
+      "noul": 0.4441,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5025,
+      "score_raw": 2.0102,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0011,
+        "2": 0.0018,
+        "3": -0.0045,
+        "4": -0.0019
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 454,
+      "as_of": "2026-10-17T20:00:00Z",
+      "noul": 0.7689,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.6369,
+      "score_raw": 2.5478,
+      "latency_ms": 163,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0007,
+        "2": -0.0056,
+        "3": -0.003,
+        "4": -0.0013
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 455,
+      "as_of": "2026-10-17T21:00:00Z",
+      "noul": 0.5495,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.6396,
+      "score_raw": 2.5585,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0063,
+        "2": -0.0037,
+        "3": -0.002,
+        "4": -0.0014
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 456,
+      "as_of": "2026-10-17T22:00:00Z",
+      "noul": 0.5456,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6575,
+      "score_raw": 2.6299,
+      "latency_ms": 161,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0027,
+        "2": 0.0043,
+        "3": 0.005,
+        "4": 0.0064
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 457,
+      "as_of": "2026-10-17T23:00:00Z",
+      "noul": 0.2121,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5018,
+      "score_raw": 2.0072,
+      "latency_ms": 176,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0017,
+        "2": 0.0023,
+        "3": 0.0037,
+        "4": 0.0058
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 458,
+      "as_of": "2026-10-18T00:00:00Z",
+      "noul": 0.2967,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.458,
+      "score_raw": 1.8322,
+      "latency_ms": 156,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0006,
+        "2": 0.002,
+        "3": 0.0042,
+        "4": 0.0058
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 459,
+      "as_of": "2026-10-18T01:00:00Z",
+      "noul": 0.4538,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5042,
+      "score_raw": 2.0167,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0014,
+        "2": 0.0035,
+        "3": 0.0051,
+        "4": 0.0032
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 460,
+      "as_of": "2026-10-18T02:00:00Z",
+      "noul": 0.8064,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.65,
+      "score_raw": 2.6,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0021,
+        "2": 0.0037,
+        "3": 0.0018,
+        "4": 0.0009
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 461,
+      "as_of": "2026-10-18T03:00:00Z",
+      "noul": 0.9202,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.7074,
+      "score_raw": 2.8297,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0016,
+        "2": -0.0004,
+        "3": -0.0012,
+        "4": -0.0013
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 462,
+      "as_of": "2026-10-18T04:00:00Z",
+      "noul": 0.8835,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7196,
+      "score_raw": 2.8784,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0019,
+        "2": -0.0028,
+        "3": -0.0029,
+        "4": -0.0034
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 463,
+      "as_of": "2026-10-18T05:00:00Z",
+      "noul": 0.6005,
+      "bias": "none",
+      "regime": "trend",
+      "confidence": 0.6234,
+      "score_raw": 2.4934,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0008,
+        "2": -0.0009,
+        "3": -0.0015,
+        "4": -0.0008
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 464,
+      "as_of": "2026-10-18T06:00:00Z",
+      "noul": 0.4013,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5851,
+      "score_raw": 2.3406,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0001,
+        "2": -0.0007,
+        "3": -0.0,
+        "4": 0.0051
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 465,
+      "as_of": "2026-10-18T07:00:00Z",
+      "noul": 0.1824,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5295,
+      "score_raw": 2.118,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0005,
+        "2": 0.0001,
+        "3": 0.0052,
+        "4": 0.0045
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 466,
+      "as_of": "2026-10-18T08:00:00Z",
+      "noul": 0.1956,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5007,
+      "score_raw": 2.0027,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0006,
+        "2": 0.0058,
+        "3": 0.0051,
+        "4": 0.0048
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 467,
+      "as_of": "2026-10-18T09:00:00Z",
+      "noul": 0.1158,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.4793,
+      "score_raw": 1.9171,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0051,
+        "2": 0.0044,
+        "3": 0.0041,
+        "4": 0.0031
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 468,
+      "as_of": "2026-10-18T10:00:00Z",
+      "noul": 0.948,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7105,
+      "score_raw": 2.8421,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0007,
+        "2": -0.001,
+        "3": -0.0021,
+        "4": -0.0075
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 469,
+      "as_of": "2026-10-18T11:00:00Z",
+      "noul": 0.564,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.624,
+      "score_raw": 2.4958,
+      "latency_ms": 166,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0003,
+        "2": -0.0014,
+        "3": -0.0067,
+        "4": -0.0121
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 470,
+      "as_of": "2026-10-18T12:00:00Z",
+      "noul": 0.4858,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.6207,
+      "score_raw": 2.4826,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0011,
+        "2": -0.0065,
+        "3": -0.0118,
+        "4": -0.0109
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 471,
+      "as_of": "2026-10-18T13:00:00Z",
+      "noul": 0.4935,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5848,
+      "score_raw": 2.3394,
+      "latency_ms": 161,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0054,
+        "2": -0.0107,
+        "3": -0.0098,
+        "4": -0.011
+      },
+      "worth_trading": {
+        "1": false,
+        "2": true,
+        "3": false,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 472,
+      "as_of": "2026-10-18T14:00:00Z",
+      "noul": 0.4012,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6035,
+      "score_raw": 2.4142,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0054,
+        "2": -0.0044,
+        "3": -0.0056,
+        "4": -0.0042
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 473,
+      "as_of": "2026-10-18T15:00:00Z",
+      "noul": 0.3198,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6273,
+      "score_raw": 2.5093,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0009,
+        "2": -0.0003,
+        "3": 0.0011,
+        "4": 0.0011
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": false,
+        "2": true,
+        "3": false,
+        "4": false
+      }
+    },
+    {
+      "index": 474,
+      "as_of": "2026-10-18T16:00:00Z",
+      "noul": 0.1607,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5931,
+      "score_raw": 2.3725,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0012,
+        "2": 0.0002,
+        "3": 0.0002,
+        "4": -0.0037
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": true,
+        "2": false,
+        "3": false,
+        "4": true
+      }
+    },
+    {
+      "index": 475,
+      "as_of": "2026-10-18T17:00:00Z",
+      "noul": 0.1618,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6311,
+      "score_raw": 2.5246,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0014,
+        "2": 0.0014,
+        "3": -0.0025,
+        "4": -0.0014
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 476,
+      "as_of": "2026-10-18T18:00:00Z",
+      "noul": 0.1374,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5367,
+      "score_raw": 2.1467,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0,
+        "2": -0.0039,
+        "3": -0.0028,
+        "4": 0.0004
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 477,
+      "as_of": "2026-10-18T19:00:00Z",
+      "noul": 0.1293,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.524,
+      "score_raw": 2.096,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0039,
+        "2": -0.0028,
+        "3": 0.0003,
+        "4": 0.007
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 478,
+      "as_of": "2026-10-18T20:00:00Z",
+      "noul": 0.4242,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6657,
+      "score_raw": 2.663,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.001,
+        "2": 0.0042,
+        "3": 0.0109,
+        "4": 0.0153
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 479,
+      "as_of": "2026-10-18T21:00:00Z",
+      "noul": 0.3556,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5736,
+      "score_raw": 2.2946,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0032,
+        "2": 0.0099,
+        "3": 0.0142,
+        "4": 0.0165
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 480,
+      "as_of": "2026-10-18T22:00:00Z",
+      "noul": 0.6156,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5361,
+      "score_raw": 2.1444,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0067,
+        "2": 0.011,
+        "3": 0.0133,
+        "4": 0.015
+      },
+      "worth_trading": {
+        "1": false,
+        "2": true,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 481,
+      "as_of": "2026-10-18T23:00:00Z",
+      "noul": 0.9384,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7022,
+      "score_raw": 2.8087,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0043,
+        "2": 0.0066,
+        "3": 0.0083,
+        "4": 0.0117
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 482,
+      "as_of": "2026-10-19T00:00:00Z",
+      "noul": 0.8952,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6754,
+      "score_raw": 2.7017,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0023,
+        "2": 0.004,
+        "3": 0.0073,
+        "4": 0.0051
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": true,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 483,
+      "as_of": "2026-10-19T01:00:00Z",
+      "noul": 0.9259,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7225,
+      "score_raw": 2.8901,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0017,
+        "2": 0.0051,
+        "3": 0.0028,
+        "4": 0.0058
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": true,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 484,
+      "as_of": "2026-10-19T02:00:00Z",
+      "noul": 0.8968,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7187,
+      "score_raw": 2.8748,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0033,
+        "2": 0.0011,
+        "3": 0.0041,
+        "4": 0.0038
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": true,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 485,
+      "as_of": "2026-10-19T03:00:00Z",
+      "noul": 0.9228,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7384,
+      "score_raw": 2.9535,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0023,
+        "2": 0.0008,
+        "3": 0.0005,
+        "4": 0.0016
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": false,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 486,
+      "as_of": "2026-10-19T04:00:00Z",
+      "noul": 0.6757,
+      "bias": "none",
+      "regime": "trend",
+      "confidence": 0.6511,
+      "score_raw": 2.6045,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0031,
+        "2": 0.0027,
+        "3": 0.0039,
+        "4": 0.0023
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 487,
+      "as_of": "2026-10-19T05:00:00Z",
+      "noul": 0.845,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7035,
+      "score_raw": 2.814,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0003,
+        "2": 0.0008,
+        "3": -0.0008,
+        "4": 0.0005
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 488,
+      "as_of": "2026-10-19T06:00:00Z",
+      "noul": 0.6538,
+      "bias": "none",
+      "regime": "trend",
+      "confidence": 0.6587,
+      "score_raw": 2.6347,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0012,
+        "2": -0.0005,
+        "3": 0.0008,
+        "4": 0.0
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 489,
+      "as_of": "2026-10-19T07:00:00Z",
+      "noul": 0.7748,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6917,
+      "score_raw": 2.7668,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0016,
+        "2": -0.0004,
+        "3": -0.0011,
+        "4": -0.0052
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 490,
+      "as_of": "2026-10-19T08:00:00Z",
+      "noul": 0.7218,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.6125,
+      "score_raw": 2.4499,
+      "latency_ms": 167,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0013,
+        "2": 0.0005,
+        "3": -0.0035,
+        "4": -0.0044
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 491,
+      "as_of": "2026-10-19T09:00:00Z",
+      "noul": 0.7367,
+      "bias": "long",
+      "regime": "range",
+      "confidence": 0.641,
+      "score_raw": 2.5639,
+      "latency_ms": 156,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0008,
+        "2": -0.0048,
+        "3": -0.0056,
+        "4": -0.0027
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 492,
+      "as_of": "2026-10-19T10:00:00Z",
+      "noul": 0.4068,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5748,
+      "score_raw": 2.2991,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.004,
+        "2": -0.0048,
+        "3": -0.0019,
+        "4": -0.0076
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 493,
+      "as_of": "2026-10-19T11:00:00Z",
+      "noul": 0.4482,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.526,
+      "score_raw": 2.104,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0008,
+        "2": 0.0021,
+        "3": -0.0036,
+        "4": -0.0015
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 494,
+      "as_of": "2026-10-19T12:00:00Z",
+      "noul": 0.2333,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5113,
+      "score_raw": 2.0452,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.003,
+        "2": -0.0028,
+        "3": -0.0006,
+        "4": -0.005
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 495,
+      "as_of": "2026-10-19T13:00:00Z",
+      "noul": 0.4003,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5033,
+      "score_raw": 2.0131,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0057,
+        "2": -0.0036,
+        "3": -0.008,
+        "4": -0.0075
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 496,
+      "as_of": "2026-10-19T14:00:00Z",
+      "noul": 0.3623,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5645,
+      "score_raw": 2.2581,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0022,
+        "2": -0.0022,
+        "3": -0.0018,
+        "4": -0.0023
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 497,
+      "as_of": "2026-10-19T15:00:00Z",
+      "noul": 0.558,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5006,
+      "score_raw": 2.0024,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0044,
+        "2": -0.0039,
+        "3": -0.0045,
+        "4": -0.0041
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 498,
+      "as_of": "2026-10-19T16:00:00Z",
+      "noul": 0.3852,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5827,
+      "score_raw": 2.3307,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0005,
+        "2": -0.0001,
+        "3": 0.0003,
+        "4": -0.0008
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 499,
+      "as_of": "2026-10-19T17:00:00Z",
+      "noul": 0.1598,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5316,
+      "score_raw": 2.1266,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0005,
+        "2": -0.0002,
+        "3": -0.0012,
+        "4": 0.0005
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 500,
+      "as_of": "2026-10-19T18:00:00Z",
+      "noul": 0.1674,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5814,
+      "score_raw": 2.3258,
+      "latency_ms": 163,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0004,
+        "2": -0.0007,
+        "3": 0.0011,
+        "4": 0.0013
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 501,
+      "as_of": "2026-10-19T19:00:00Z",
+      "noul": 0.1495,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5183,
+      "score_raw": 2.0733,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.001,
+        "2": 0.0007,
+        "3": 0.0009,
+        "4": 0.0011
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 502,
+      "as_of": "2026-10-19T20:00:00Z",
+      "noul": 0.1461,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5805,
+      "score_raw": 2.3221,
+      "latency_ms": 162,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0017,
+        "2": 0.002,
+        "3": 0.0021,
+        "4": 0.0007
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 503,
+      "as_of": "2026-10-19T21:00:00Z",
+      "noul": 0.2037,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5192,
+      "score_raw": 2.0767,
+      "latency_ms": 156,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0002,
+        "2": 0.0004,
+        "3": -0.001,
+        "4": -0.0035
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 504,
+      "as_of": "2026-10-19T22:00:00Z",
+      "noul": 0.1637,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5071,
+      "score_raw": 2.0283,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0002,
+        "2": -0.0013,
+        "3": -0.0037,
+        "4": -0.003
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 505,
+      "as_of": "2026-10-19T23:00:00Z",
+      "noul": 0.2456,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5474,
+      "score_raw": 2.1896,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0014,
+        "2": -0.0039,
+        "3": -0.0031,
+        "4": -0.0032
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 506,
+      "as_of": "2026-10-20T00:00:00Z",
+      "noul": 0.1778,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5453,
+      "score_raw": 2.1813,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0025,
+        "2": -0.0017,
+        "3": -0.0018,
+        "4": 0.0024
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 507,
+      "as_of": "2026-10-20T01:00:00Z",
+      "noul": 0.449,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6576,
+      "score_raw": 2.6304,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0007,
+        "2": 0.0007,
+        "3": 0.0049,
+        "4": 0.0043
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 508,
+      "as_of": "2026-10-20T02:00:00Z",
+      "noul": 0.3006,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5823,
+      "score_raw": 2.3291,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0001,
+        "2": 0.0042,
+        "3": 0.0036,
+        "4": -0.0009
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 509,
+      "as_of": "2026-10-20T03:00:00Z",
+      "noul": 0.198,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6247,
+      "score_raw": 2.4988,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0042,
+        "2": 0.0037,
+        "3": -0.0008,
+        "4": 0.0002
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 510,
+      "as_of": "2026-10-20T04:00:00Z",
+      "noul": 0.7361,
+      "bias": "long",
+      "regime": "range",
+      "confidence": 0.5479,
+      "score_raw": 2.1915,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0006,
+        "2": -0.005,
+        "3": -0.004,
+        "4": -0.007
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 511,
+      "as_of": "2026-10-20T05:00:00Z",
+      "noul": 0.3325,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5095,
+      "score_raw": 2.0382,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0045,
+        "2": -0.0035,
+        "3": -0.0064,
+        "4": -0.0067
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 512,
+      "as_of": "2026-10-20T06:00:00Z",
+      "noul": 0.3235,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6207,
+      "score_raw": 2.4828,
+      "latency_ms": 183,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.001,
+        "2": -0.0019,
+        "3": -0.0022,
+        "4": -0.0028
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 513,
+      "as_of": "2026-10-20T07:00:00Z",
+      "noul": 0.2229,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5224,
+      "score_raw": 2.0895,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0029,
+        "2": -0.0032,
+        "3": -0.0038,
+        "4": -0.0031
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 514,
+      "as_of": "2026-10-20T08:00:00Z",
+      "noul": 0.3972,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6385,
+      "score_raw": 2.5539,
+      "latency_ms": 161,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0003,
+        "2": -0.0009,
+        "3": -0.0001,
+        "4": -0.0008
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 515,
+      "as_of": "2026-10-20T09:00:00Z",
+      "noul": 0.3391,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6308,
+      "score_raw": 2.523,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0005,
+        "2": 0.0002,
+        "3": -0.0005,
+        "4": 0.0009
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 516,
+      "as_of": "2026-10-20T10:00:00Z",
+      "noul": 0.2168,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6644,
+      "score_raw": 2.6577,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0007,
+        "2": 0.0001,
+        "3": 0.0015,
+        "4": 0.008
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 517,
+      "as_of": "2026-10-20T11:00:00Z",
+      "noul": 0.1491,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5789,
+      "score_raw": 2.3157,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0006,
+        "2": 0.0008,
+        "3": 0.0073,
+        "4": 0.0211
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 518,
+      "as_of": "2026-10-20T12:00:00Z",
+      "noul": 0.1559,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6259,
+      "score_raw": 2.5035,
+      "latency_ms": 165,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0014,
+        "2": 0.0079,
+        "3": 0.0217,
+        "4": 0.0137
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 519,
+      "as_of": "2026-10-20T13:00:00Z",
+      "noul": 0.3376,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5232,
+      "score_raw": 2.0927,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0065,
+        "2": 0.0203,
+        "3": 0.0122,
+        "4": 0.0142
+      },
+      "worth_trading": {
+        "1": false,
+        "2": true,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 520,
+      "as_of": "2026-10-20T14:00:00Z",
+      "noul": 0.9385,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6801,
+      "score_raw": 2.7204,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0137,
+        "2": 0.0057,
+        "3": 0.0077,
+        "4": 0.0082
+      },
+      "worth_trading": {
+        "1": true,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 521,
+      "as_of": "2026-10-20T15:00:00Z",
+      "noul": 0.9672,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7499,
+      "score_raw": 2.9996,
+      "latency_ms": 156,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0079,
+        "2": -0.006,
+        "3": -0.0055,
+        "4": -0.0089
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      }
+    },
+    {
+      "index": 522,
+      "as_of": "2026-10-20T16:00:00Z",
+      "noul": 0.8448,
+      "bias": "none",
+      "regime": "trend",
+      "confidence": 0.6361,
+      "score_raw": 2.5445,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0019,
+        "2": 0.0025,
+        "3": -0.001,
+        "4": -0.0001
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": true,
+        "2": true,
+        "3": false,
+        "4": false
+      }
+    },
+    {
+      "index": 523,
+      "as_of": "2026-10-20T17:00:00Z",
+      "noul": 0.8138,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6656,
+      "score_raw": 2.6622,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0005,
+        "2": -0.0029,
+        "3": -0.0021,
+        "4": 0.0008
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": true,
+        "2": false,
+        "3": false,
+        "4": true
+      }
+    },
+    {
+      "index": 524,
+      "as_of": "2026-10-20T18:00:00Z",
+      "noul": 0.5645,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.6419,
+      "score_raw": 2.5675,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0034,
+        "2": -0.0026,
+        "3": 0.0003,
+        "4": 0.0019
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 525,
+      "as_of": "2026-10-20T19:00:00Z",
+      "noul": 0.2308,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5104,
+      "score_raw": 2.0417,
+      "latency_ms": 212,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0008,
+        "2": 0.0037,
+        "3": 0.0053,
+        "4": 0.0068
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 526,
+      "as_of": "2026-10-20T20:00:00Z",
+      "noul": 0.3209,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5592,
+      "score_raw": 2.2368,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0029,
+        "2": 0.0045,
+        "3": 0.006,
+        "4": 0.0051
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 527,
+      "as_of": "2026-10-20T21:00:00Z",
+      "noul": 0.6791,
+      "bias": "long",
+      "regime": "range",
+      "confidence": 0.618,
+      "score_raw": 2.472,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0015,
+        "2": 0.0031,
+        "3": 0.0022,
+        "4": 0.0022
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 528,
+      "as_of": "2026-10-20T22:00:00Z",
+      "noul": 0.6661,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.6303,
+      "score_raw": 2.5212,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0015,
+        "2": 0.0006,
+        "3": 0.0007,
+        "4": 0.0003
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 529,
+      "as_of": "2026-10-20T23:00:00Z",
+      "noul": 0.7827,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6722,
+      "score_raw": 2.6888,
+      "latency_ms": 237,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0009,
+        "2": -0.0009,
+        "3": -0.0012,
+        "4": -0.0036
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 530,
+      "as_of": "2026-10-21T00:00:00Z",
+      "noul": 0.5761,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6106,
+      "score_raw": 2.4425,
+      "latency_ms": 623,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0,
+        "2": -0.0003,
+        "3": -0.0027,
+        "4": -0.0035
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 531,
+      "as_of": "2026-10-21T01:00:00Z",
+      "noul": 0.5963,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.6278,
+      "score_raw": 2.5112,
+      "latency_ms": 636,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0003,
+        "2": -0.0027,
+        "3": -0.0036,
+        "4": -0.0026
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 532,
+      "as_of": "2026-10-21T02:00:00Z",
+      "noul": 0.5471,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.6057,
+      "score_raw": 2.4227,
+      "latency_ms": 621,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0024,
+        "2": -0.0032,
+        "3": -0.0022,
+        "4": -0.004
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 533,
+      "as_of": "2026-10-21T03:00:00Z",
+      "noul": 0.2787,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5171,
+      "score_raw": 2.0684,
+      "latency_ms": 414,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0009,
+        "2": 0.0001,
+        "3": -0.0016,
+        "4": 0.0001
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 534,
+      "as_of": "2026-10-21T04:00:00Z",
+      "noul": 0.1381,
+      "bias": "short",
+      "regime": "low_vol",
+      "confidence": 0.5127,
+      "score_raw": 2.0508,
+      "latency_ms": 297,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.001,
+        "2": -0.0007,
+        "3": 0.0009,
+        "4": 0.0051
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 535,
+      "as_of": "2026-10-21T05:00:00Z",
+      "noul": 0.188,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.4915,
+      "score_raw": 1.9658,
+      "latency_ms": 514,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0017,
+        "2": -0.0001,
+        "3": 0.0041,
+        "4": 0.0052
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 536,
+      "as_of": "2026-10-21T06:00:00Z",
+      "noul": 0.2022,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5333,
+      "score_raw": 2.1331,
+      "latency_ms": 237,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0017,
+        "2": 0.0058,
+        "3": 0.007,
+        "4": 0.0091
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 537,
+      "as_of": "2026-10-21T07:00:00Z",
+      "noul": 0.344,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.529,
+      "score_raw": 2.1159,
+      "latency_ms": 372,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0042,
+        "2": 0.0053,
+        "3": 0.0074,
+        "4": 0.0071
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 538,
+      "as_of": "2026-10-21T08:00:00Z",
+      "noul": 0.932,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7121,
+      "score_raw": 2.8483,
+      "latency_ms": 476,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0011,
+        "2": 0.0033,
+        "3": 0.003,
+        "4": 0.0042
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 539,
+      "as_of": "2026-10-21T09:00:00Z",
+      "noul": 0.9113,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7248,
+      "score_raw": 2.8991,
+      "latency_ms": 476,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0021,
+        "2": 0.0018,
+        "3": 0.003,
+        "4": 0.0031
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 540,
+      "as_of": "2026-10-21T10:00:00Z",
+      "noul": 0.9217,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7409,
+      "score_raw": 2.9638,
+      "latency_ms": 468,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0003,
+        "2": 0.0009,
+        "3": 0.0009,
+        "4": 0.0048
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 541,
+      "as_of": "2026-10-21T11:00:00Z",
+      "noul": 0.6444,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6741,
+      "score_raw": 2.6963,
+      "latency_ms": 571,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0012,
+        "2": 0.0012,
+        "3": 0.0051,
+        "4": 0.0141
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 542,
+      "as_of": "2026-10-21T12:00:00Z",
+      "noul": 0.796,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7044,
+      "score_raw": 2.8176,
+      "latency_ms": 338,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0,
+        "2": 0.0039,
+        "3": 0.0129,
+        "4": 0.0125
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 543,
+      "as_of": "2026-10-21T13:00:00Z",
+      "noul": 0.7231,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6922,
+      "score_raw": 2.7688,
+      "latency_ms": 306,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0039,
+        "2": 0.0128,
+        "3": 0.0124,
+        "4": 0.0126
+      },
+      "worth_trading": {
+        "1": false,
+        "2": true,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 544,
+      "as_of": "2026-10-21T14:00:00Z",
+      "noul": 0.9468,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.742,
+      "score_raw": 2.9681,
+      "latency_ms": 312,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0089,
+        "2": 0.0085,
+        "3": 0.0087,
+        "4": 0.0102
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 545,
+      "as_of": "2026-10-21T15:00:00Z",
+      "noul": 0.961,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7466,
+      "score_raw": 2.9866,
+      "latency_ms": 303,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0004,
+        "2": -0.0003,
+        "3": 0.0012,
+        "4": -0.0019
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": false
+      }
+    },
+    {
+      "index": 546,
+      "as_of": "2026-10-21T16:00:00Z",
+      "noul": 0.8562,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6827,
+      "score_raw": 2.7306,
+      "latency_ms": 519,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0001,
+        "2": 0.0017,
+        "3": -0.0015,
+        "4": -0.0006
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": true,
+        "2": true,
+        "3": false,
+        "4": false
+      }
+    },
+    {
+      "index": 547,
+      "as_of": "2026-10-21T17:00:00Z",
+      "noul": 0.7918,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6812,
+      "score_raw": 2.7248,
+      "latency_ms": 461,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0015,
+        "2": -0.0016,
+        "3": -0.0007,
+        "4": 0.0016
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": true,
+        "2": false,
+        "3": false,
+        "4": true
+      }
+    },
+    {
+      "index": 548,
+      "as_of": "2026-10-21T18:00:00Z",
+      "noul": 0.7598,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.6908,
+      "score_raw": 2.7631,
+      "latency_ms": 697,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0031,
+        "2": -0.0023,
+        "3": 0.0001,
+        "4": 0.0019
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "BUY",
+      "base_direction_correct": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 549,
+      "as_of": "2026-10-21T19:00:00Z",
+      "noul": 0.5636,
+      "bias": "none",
+      "regime": "trend",
+      "confidence": 0.589,
+      "score_raw": 2.3559,
+      "latency_ms": 519,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0009,
+        "2": 0.0032,
+        "3": 0.0051,
+        "4": 0.0004
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 550,
+      "as_of": "2026-10-21T20:00:00Z",
+      "noul": 0.7155,
+      "bias": "none",
+      "regime": "trend",
+      "confidence": 0.5988,
+      "score_raw": 2.3952,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0023,
+        "2": 0.0042,
+        "3": -0.0005,
+        "4": -0.0047
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 551,
+      "as_of": "2026-10-21T21:00:00Z",
+      "noul": 0.7729,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.656,
+      "score_raw": 2.6242,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0019,
+        "2": -0.0028,
+        "3": -0.007,
+        "4": -0.0057
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 552,
+      "as_of": "2026-10-21T22:00:00Z",
+      "noul": 0.7264,
+      "bias": "long",
+      "regime": "low_vol",
+      "confidence": 0.6672,
+      "score_raw": 2.6687,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0047,
+        "2": -0.0088,
+        "3": -0.0076,
+        "4": -0.017
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 553,
+      "as_of": "2026-10-21T23:00:00Z",
+      "noul": 0.2458,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5031,
+      "score_raw": 2.0126,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0042,
+        "2": -0.0029,
+        "3": -0.0124,
+        "4": -0.0181
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 554,
+      "as_of": "2026-10-22T00:00:00Z",
+      "noul": 0.291,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5165,
+      "score_raw": 2.0659,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0013,
+        "2": -0.0082,
+        "3": -0.014,
+        "4": -0.0139
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 555,
+      "as_of": "2026-10-22T01:00:00Z",
+      "noul": 0.2301,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.485,
+      "score_raw": 1.9401,
+      "latency_ms": 161,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0095,
+        "2": -0.0153,
+        "3": -0.0152,
+        "4": -0.0153
+      },
+      "worth_trading": {
+        "1": false,
+        "2": true,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 556,
+      "as_of": "2026-10-22T02:00:00Z",
+      "noul": 0.5636,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6406,
+      "score_raw": 2.5624,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0058,
+        "2": -0.0057,
+        "3": -0.0059,
+        "4": -0.007
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": true,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 557,
+      "as_of": "2026-10-22T03:00:00Z",
+      "noul": 0.541,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6229,
+      "score_raw": 2.4916,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0001,
+        "2": -0.0001,
+        "3": -0.0012,
+        "4": -0.0051
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": false,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 558,
+      "as_of": "2026-10-22T04:00:00Z",
+      "noul": 0.1792,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5522,
+      "score_raw": 2.2088,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0002,
+        "2": -0.0013,
+        "3": -0.0052,
+        "4": -0.0083
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": true,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 559,
+      "as_of": "2026-10-22T05:00:00Z",
+      "noul": 0.1904,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6281,
+      "score_raw": 2.5122,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0011,
+        "2": -0.005,
+        "3": -0.0081,
+        "4": -0.0126
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": true
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": true,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 560,
+      "as_of": "2026-10-22T06:00:00Z",
+      "noul": 0.2169,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.607,
+      "score_raw": 2.4282,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0039,
+        "2": -0.007,
+        "3": -0.0115,
+        "4": -0.0105
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 561,
+      "as_of": "2026-10-22T07:00:00Z",
+      "noul": 0.343,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6416,
+      "score_raw": 2.5664,
+      "latency_ms": 161,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0031,
+        "2": -0.0076,
+        "3": -0.0066,
+        "4": -0.0055
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 562,
+      "as_of": "2026-10-22T08:00:00Z",
+      "noul": 0.4184,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6846,
+      "score_raw": 2.7383,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0046,
+        "2": -0.0035,
+        "3": -0.0024,
+        "4": -0.006
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 563,
+      "as_of": "2026-10-22T09:00:00Z",
+      "noul": 0.3729,
+      "bias": "short",
+      "regime": "trend",
+      "confidence": 0.6962,
+      "score_raw": 2.7846,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0011,
+        "2": 0.0022,
+        "3": -0.0014,
+        "4": -0.0021
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": false,
+        "2": false,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 564,
+      "as_of": "2026-10-22T10:00:00Z",
+      "noul": 0.1825,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6046,
+      "score_raw": 2.4183,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0011,
+        "2": -0.0024,
+        "3": -0.0032,
+        "4": -0.003
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "SELL",
+      "base_direction_correct": {
+        "1": false,
+        "2": true,
+        "3": true,
+        "4": true
+      }
+    },
+    {
+      "index": 565,
+      "as_of": "2026-10-22T11:00:00Z",
+      "noul": 0.1989,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5746,
+      "score_raw": 2.2982,
+      "latency_ms": 170,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0036,
+        "2": -0.0043,
+        "3": -0.0042,
+        "4": -0.0019
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 566,
+      "as_of": "2026-10-22T12:00:00Z",
+      "noul": 0.2626,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6851,
+      "score_raw": 2.7403,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0008,
+        "2": -0.0006,
+        "3": 0.0016,
+        "4": -0.0008
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 567,
+      "as_of": "2026-10-22T13:00:00Z",
+      "noul": 0.1965,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6572,
+      "score_raw": 2.6286,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0002,
+        "2": 0.0024,
+        "3": -0.0001,
+        "4": -0.0049
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 568,
+      "as_of": "2026-10-22T14:00:00Z",
+      "noul": 0.3267,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5958,
+      "score_raw": 2.3833,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0022,
+        "2": -0.0002,
+        "3": -0.0051,
+        "4": -0.006
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 569,
+      "as_of": "2026-10-22T15:00:00Z",
+      "noul": 0.2389,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5161,
+      "score_raw": 2.0646,
+      "latency_ms": 167,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0024,
+        "2": -0.0073,
+        "3": -0.0082,
+        "4": -0.0061
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 570,
+      "as_of": "2026-10-22T16:00:00Z",
+      "noul": 0.3412,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6192,
+      "score_raw": 2.4768,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0049,
+        "2": -0.0058,
+        "3": -0.0037,
+        "4": -0.0023
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 571,
+      "as_of": "2026-10-22T17:00:00Z",
+      "noul": 0.4776,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.676,
+      "score_raw": 2.704,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0009,
+        "2": 0.0012,
+        "3": 0.0026,
+        "4": -0.0001
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 572,
+      "as_of": "2026-10-22T18:00:00Z",
+      "noul": 0.2512,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.6718,
+      "score_raw": 2.6873,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0021,
+        "2": 0.0035,
+        "3": 0.0008,
+        "4": 0.0034
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 573,
+      "as_of": "2026-10-22T19:00:00Z",
+      "noul": 0.1908,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5523,
+      "score_raw": 2.2093,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0014,
+        "2": -0.0012,
+        "3": 0.0013,
+        "4": -0.0004
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 574,
+      "as_of": "2026-10-22T20:00:00Z",
+      "noul": 0.2277,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5306,
+      "score_raw": 2.1223,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0026,
+        "2": -0.0001,
+        "3": -0.0018,
+        "4": -0.001
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 575,
+      "as_of": "2026-10-22T21:00:00Z",
+      "noul": 0.1614,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.607,
+      "score_raw": 2.4278,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0025,
+        "2": 0.0009,
+        "3": 0.0017,
+        "4": 0.0022
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 576,
+      "as_of": "2026-10-22T22:00:00Z",
+      "noul": 0.2056,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.4929,
+      "score_raw": 1.9717,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0016,
+        "2": -0.0008,
+        "3": -0.0004,
+        "4": -0.0016
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 577,
+      "as_of": "2026-10-22T23:00:00Z",
+      "noul": 0.1531,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5541,
+      "score_raw": 2.2164,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0008,
+        "2": 0.0013,
+        "3": 0.0001,
+        "4": 0.0077
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 578,
+      "as_of": "2026-10-23T00:00:00Z",
+      "noul": 0.1541,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.4723,
+      "score_raw": 1.8892,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0005,
+        "2": -0.0007,
+        "3": 0.0069,
+        "4": 0.0058
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 579,
+      "as_of": "2026-10-23T01:00:00Z",
+      "noul": 0.4871,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5168,
+      "score_raw": 2.0672,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0012,
+        "2": 0.0064,
+        "3": 0.0053,
+        "4": 0.0016
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 580,
+      "as_of": "2026-10-23T02:00:00Z",
+      "noul": 0.3309,
+      "bias": "short",
+      "regime": "range",
+      "confidence": 0.5763,
+      "score_raw": 2.3051,
+      "latency_ms": 165,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0076,
+        "2": 0.0065,
+        "3": 0.0028,
+        "4": 0.0061
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 581,
+      "as_of": "2026-10-23T03:00:00Z",
+      "noul": 0.8691,
+      "bias": "long",
+      "regime": "range",
+      "confidence": 0.6253,
+      "score_raw": 2.5014,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.001,
+        "2": -0.0047,
+        "3": -0.0015,
+        "4": -0.001
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 582,
+      "as_of": "2026-10-23T04:00:00Z",
+      "noul": 0.4254,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5595,
+      "score_raw": 2.238,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0037,
+        "2": -0.0005,
+        "3": 0.0,
+        "4": -0.0038
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 583,
+      "as_of": "2026-10-23T05:00:00Z",
+      "noul": 0.1882,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.4851,
+      "score_raw": 1.9405,
+      "latency_ms": 599,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0032,
+        "2": 0.0037,
+        "3": -0.0001,
+        "4": 0.0021
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 584,
+      "as_of": "2026-10-23T06:00:00Z",
+      "noul": 0.7102,
+      "bias": "long",
+      "regime": "range",
+      "confidence": 0.5884,
+      "score_raw": 2.3536,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0005,
+        "2": -0.0033,
+        "3": -0.0011,
+        "4": -0.0021
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 585,
+      "as_of": "2026-10-23T07:00:00Z",
+      "noul": 0.3263,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5287,
+      "score_raw": 2.1147,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0038,
+        "2": -0.0016,
+        "3": -0.0026,
+        "4": -0.0024
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 586,
+      "as_of": "2026-10-23T08:00:00Z",
+      "noul": 0.1704,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5151,
+      "score_raw": 2.0603,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0022,
+        "2": 0.0012,
+        "3": 0.0014,
+        "4": 0.0018
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 587,
+      "as_of": "2026-10-23T09:00:00Z",
+      "noul": 0.7287,
+      "bias": "long",
+      "regime": "range",
+      "confidence": 0.5693,
+      "score_raw": 2.2773,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0011,
+        "2": -0.0009,
+        "3": -0.0004,
+        "4": -0.0002
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 588,
+      "as_of": "2026-10-23T10:00:00Z",
+      "noul": 0.2567,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.5059,
+      "score_raw": 2.0237,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0002,
+        "2": 0.0006,
+        "3": 0.0009,
+        "4": 0.0041
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 589,
+      "as_of": "2026-10-23T11:00:00Z",
+      "noul": 0.1814,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.4769,
+      "score_raw": 1.9076,
+      "latency_ms": 165,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0004,
+        "2": 0.0007,
+        "3": 0.0039,
+        "4": 0.0011
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 590,
+      "as_of": "2026-10-23T12:00:00Z",
+      "noul": 0.2914,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5178,
+      "score_raw": 2.071,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0003,
+        "2": 0.0035,
+        "3": 0.0007,
+        "4": -0.0004
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 591,
+      "as_of": "2026-10-23T13:00:00Z",
+      "noul": 0.4718,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.5578,
+      "score_raw": 2.2313,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0032,
+        "2": 0.0004,
+        "3": -0.0007,
+        "4": -0.0004
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 592,
+      "as_of": "2026-10-23T14:00:00Z",
+      "noul": 0.936,
+      "bias": "long",
+      "regime": "trend",
+      "confidence": 0.7009,
+      "score_raw": 2.8038,
+      "latency_ms": 157,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0027,
+        "2": -0.0039,
+        "3": -0.0036,
+        "4": -0.0044
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 593,
+      "as_of": "2026-10-23T15:00:00Z",
+      "noul": 0.688,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.549,
+      "score_raw": 2.1961,
+      "latency_ms": 160,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0011,
+        "2": -0.0008,
+        "3": -0.0016,
+        "4": -0.0042
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 594,
+      "as_of": "2026-10-23T16:00:00Z",
+      "noul": 0.3065,
+      "bias": "none",
+      "regime": "range",
+      "confidence": 0.4879,
+      "score_raw": 1.9517,
+      "latency_ms": 158,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": 0.0003,
+        "2": -0.0005,
+        "3": -0.0031,
+        "4": -0.005
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    },
+    {
+      "index": 595,
+      "as_of": "2026-10-23T17:00:00Z",
+      "noul": 0.1933,
+      "bias": "none",
+      "regime": "low_vol",
+      "confidence": 0.4893,
+      "score_raw": 1.9572,
+      "latency_ms": 159,
+      "error": null,
+      "error_kind": null,
+      "forward_returns": {
+        "1": -0.0008,
+        "2": -0.0034,
+        "3": -0.0053,
+        "4": -0.0045
+      },
+      "worth_trading": {
+        "1": false,
+        "2": false,
+        "3": false,
+        "4": false
+      },
+      "base_action": "HOLD",
+      "base_direction_correct": {
+        "1": null,
+        "2": null,
+        "3": null,
+        "4": null
+      }
+    }
+  ]
+}
