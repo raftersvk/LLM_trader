@@ -31,6 +31,7 @@ class GracefulShutdownManager:
         self._callbacks = []
         self._shutting_down = False
         self._reload_requested = False
+        self._shutdown_task: asyncio.Task | None = None
 
     @property
     def is_shutting_down(self) -> bool:
@@ -59,11 +60,35 @@ class GracefulShutdownManager:
         for sig in (signal.SIGINT, signal.SIGTERM):
             self.loop.add_signal_handler(sig, lambda s=sig: self.handle_signal(s))
 
+    def start_shutdown(self) -> asyncio.Task | None:
+        """Start shutdown in its own task and return it (idempotent per request)."""
+        if self._shutdown_task is not None and not self._shutdown_task.done():
+            return self._shutdown_task
+
+        async def _run() -> None:
+            await self.shutdown_gracefully()
+
+        self._shutdown_task = self.loop.create_task(_run())
+        return self._shutdown_task
+
+    @property
+    def shutdown_task(self) -> asyncio.Task | None:
+        """The task running shutdown_gracefully, when one was started."""
+        return self._shutdown_task
+
+    async def wait_for_shutdown(self) -> None:
+        """Wait for the in-flight shutdown task (suppressing cancellation)."""
+        task = self._shutdown_task
+        if task is None:
+            return
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     def _request_shutdown(self):
         if self.loop.is_running() and not self.loop.is_closed():
-            self.loop.call_soon_threadsafe(
-                lambda: self.loop.create_task(self.shutdown_gracefully())
-            )
+            self.loop.call_soon_threadsafe(self.start_shutdown)
 
     def _confirm_shutdown(self) -> bool:
         if not self.confirmation_callback:

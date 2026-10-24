@@ -70,3 +70,51 @@ def test_removing_the_override_restores_the_default_path(monkeypatch):
 
     monkeypatch.delenv("LLM_TRADER_CONFIG_INI")
     assert loader._resolve_config_ini_path() == loader.CONFIG_DIR / "config.ini"
+
+
+def _write_litellm_ini(path: Path) -> None:
+    path.write_text(
+        "[general]\n"
+        "crypto_pair = BTC/USDC\n"
+        "timeframe = 1h\n"
+        "\n"
+        "[ai_providers]\n"
+        "provider = googleai\n"
+        "litellm_context_window = 123456\n"
+        "vision_context_window = 8192\n"
+        "\n"
+        "[model_config]\n"
+        "max_tokens = 32768\n"
+        "google_max_tokens = 65536\n"
+        "\n"
+        "[model_context_windows]\n"
+        "litellm/deepseek-v4.1-flash = 64000\n"
+        "vision_litellm/vision-test = 8192\n",
+        encoding="utf-8",
+    )
+
+
+def test_litellm_context_windows_are_configurable(tmp_path, monkeypatch):
+    """litellm/vision keys and windows must be real, validated config."""
+    ini = tmp_path / "litellm.ini"
+    _write_litellm_ini(ini)
+    monkeypatch.setenv("LLM_TRADER_CONFIG_INI", str(ini))
+
+    config = Config()
+
+    assert config.LITELLM_CONTEXT_WINDOW == 123456
+    assert config.VISION_CONTEXT_WINDOW == 8192
+    assert config.MODEL_CONTEXT_WINDOWS["litellm/deepseek-v4.1-flash"] == 64000
+    assert config.MODEL_CONTEXT_WINDOWS["vision_litellm/vision-test"] == 8192
+
+
+def test_context_window_defaults_when_not_configured(tmp_path, monkeypatch):
+    """Vision falls back to the LiteLLM window; LiteLLM has a documented default."""
+    ini = tmp_path / "defaults.ini"
+    _write_ini(ini, "BTC/USDC")
+    monkeypatch.setenv("LLM_TRADER_CONFIG_INI", str(ini))
+
+    config = Config()
+
+    assert config.LITELLM_CONTEXT_WINDOW == 1_000_000
+    assert config.VISION_CONTEXT_WINDOW == config.LITELLM_CONTEXT_WINDOW

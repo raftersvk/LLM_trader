@@ -11,8 +11,26 @@ class _FakeShutdownManager:
     def __init__(self, already_shutting_down: bool = False):
         self._shutting_down = already_shutting_down
         self.callbacks = []
+        self._shutdown_task = None
+
+    @property
+    def shutdown_task(self):
+        return self._shutdown_task
+
+    async def wait_for_shutdown(self) -> None:
+        if self._shutdown_task is not None:
+            try:
+                await self._shutdown_task
+            except asyncio.CancelledError:
+                pass
+
+    def start_shutdown(self):
+        if self._shutdown_task is None or self._shutdown_task.done():
+            self._shutdown_task = asyncio.create_task(self.shutdown_gracefully())
+        return self._shutdown_task
 
     async def shutdown_gracefully(self) -> None:
+        self._shutdown_task = asyncio.current_task()
         self._shutting_down = True
         for callback in self.callbacks:
             await callback()
@@ -157,4 +175,42 @@ async def test_supervisor_returns_when_callbacks_abort_after_shutdown_started():
         await runner
 
     await asyncio.wait_for(supervisor, timeout=1.0)
+    manager.stop_all_pairs.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_supervisor_waits_for_the_shutdown_task_to_finish_cleanup():
+    """Returning on the pair-stop event alone would truncate later cleanup."""
+    manager = MagicMock()
+    manager.stop_all_pairs = AsyncMock()
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+
+    class _SlowCleanupManager(_FakeShutdownManager):
+        async def shutdown_gracefully(self) -> None:
+            self._shutdown_task = asyncio.current_task()
+            self._shutting_down = True
+            for callback in self.callbacks:
+                await callback()
+            cleanup_started.set()
+            await cleanup_release.wait()
+            cleanup_finished.set()
+
+    shutdown = _SlowCleanupManager()
+    root = _root(shutdown)
+
+    supervisor = asyncio.create_task(root._supervise_multi_pair(manager))
+    await asyncio.sleep(0)
+    shutdown.start_shutdown()
+    await asyncio.wait_for(cleanup_started.wait(), timeout=1.0)
+
+    # The pair-stop callback has already released the event, but cleanup runs on.
+    await asyncio.sleep(0.1)
+    assert not supervisor.done()
+    assert cleanup_finished.is_set() is False
+
+    cleanup_release.set()
+    await asyncio.wait_for(supervisor, timeout=1.0)
+    assert cleanup_finished.is_set() is True
     manager.stop_all_pairs.assert_awaited_once()

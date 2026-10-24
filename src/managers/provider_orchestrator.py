@@ -56,19 +56,26 @@ class ProviderOrchestrator:
         if self.prompt_budget is None:
             return
         windows = self.prompt_budget.context_windows
-        default_window = int(getattr(self.config, "LITELLM_CONTEXT_WINDOW", 1_000_000) or 1_000_000)
-        candidates = {
-            "litellm": getattr(self.config, "LITELLM_MODEL", None),
-            "vision_litellm": (
+        litellm_window = getattr(self.config, "LITELLM_CONTEXT_WINDOW", None)
+        vision_window = getattr(self.config, "VISION_CONTEXT_WINDOW", None) or litellm_window
+        candidates = (
+            ("litellm", getattr(self.config, "LITELLM_MODEL", None), litellm_window),
+            (
+                "vision_litellm",
                 getattr(self.config, "VISION_MODEL", None)
-                or getattr(self.config, "LITELLM_MODEL", None)
+                or getattr(self.config, "LITELLM_MODEL", None),
+                vision_window,
             ),
-        }
-        for provider, model in candidates.items():
-            if not model:
+        )
+        for provider, model, window in candidates:
+            if not model or window is None:
+                # No configured capacity: leave it unregistered so the budget
+                # refuses the request instead of guessing.
                 continue
-            key = f"{provider}/{model}"
-            windows.setdefault(key, default_window)
+            try:
+                windows.setdefault(f"{provider}/{model}", int(window))
+            except (TypeError, ValueError):
+                continue
 
     def _build_provider_metadata(self) -> dict[str, ProviderMetadata]:
         """Build provider metadata registry from clients and config."""

@@ -321,6 +321,8 @@ async def test_vision_chart_goes_through_the_prompt_budget():
         LITELLM_MODEL="deepseek-v4.1-flash",
         BLOCKRUN_MODEL="blockrun-test",
         VISION_MODEL="vision-test",
+        LITELLM_CONTEXT_WINDOW=1_000_000,
+        VISION_CONTEXT_WINDOW=200_000,
         get_model_config=lambda model: {"model": model, "max_tokens": 2048},
     )
     vision_client = LitellmAIClient(
@@ -350,3 +352,71 @@ async def test_vision_chart_goes_through_the_prompt_budget():
 
     assert result.success is True
     assert result.provider == "vision_litellm"
+
+
+def _budget_orchestrator(context_windows, config_overrides):
+    from src.utils.prompt_budget import PromptBudgetPolicy
+
+    token_counter = MagicMock()
+    token_counter.count_tokens.return_value = 10
+    policy = PromptBudgetPolicy(
+        token_counter=token_counter,
+        logger=MagicMock(),
+        context_windows=context_windows,
+        brain_max_tokens=5000,
+        request_max_tokens=10000,
+    )
+    config = SimpleNamespace(
+        GOOGLE_STUDIO_MODEL="gemini-test",
+        OPENROUTER_BASE_MODEL="openrouter/test",
+        LITELLM_MODEL="deepseek-v4.1-flash",
+        BLOCKRUN_MODEL="blockrun-test",
+        VISION_MODEL="vision-test",
+        get_model_config=lambda model: {"model": model, "max_tokens": 2048},
+        **config_overrides,
+    )
+    vision_client = LitellmAIClient(
+        config={
+            "provider": "litellm",
+            "base_url": "https://vision.example/v1",
+            "api_key": "vision-key",
+            "model": "vision-test",
+        },
+        logger=MagicMock(),
+    )
+    orchestrator = ProviderOrchestrator(
+        logger=MagicMock(),
+        config=config,
+        clients=ProviderClients(vision_litellm=vision_client),
+        prompt_budget=policy,
+    )
+    return orchestrator, policy
+
+
+def test_configured_context_window_is_used_and_exact_entry_wins():
+    """The configured key is authoritative; exact [model_context_windows] wins."""
+    orchestrator, policy = _budget_orchestrator(
+        {"vision_litellm/vision-test": 8192},
+        {"LITELLM_CONTEXT_WINDOW": 1_000_000, "VISION_CONTEXT_WINDOW": 200_000},
+    )
+
+    assert policy.context_windows["vision_litellm/vision-test"] == 8192
+    assert policy.context_windows["litellm/deepseek-v4.1-flash"] == 1_000_000
+
+
+@pytest.mark.asyncio
+async def test_unknown_vision_capacity_is_refused():
+    """Without a configured window the budget must refuse, not guess."""
+    orchestrator, policy = _budget_orchestrator({}, {})
+
+    assert "vision_litellm/vision-test" not in policy.context_windows
+    with patch(
+        "src.platforms.ai_providers.litellm_client.acompletion",
+        new=AsyncMock(return_value=_response("should not run")),
+    ):
+        result = await orchestrator.get_chart_response(
+            "all", [{"role": "user", "content": "chart"}], io.BytesIO(b"png")
+        )
+
+    assert result.success is False
+    assert "Context window is not configured" in (result.error or "")

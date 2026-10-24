@@ -160,7 +160,8 @@ class Config:
         windows = dict(PromptBudgetPolicy.DEFAULT_CONTEXT_WINDOWS)
         for key, value in self._config_data.get("model_context_windows", {}).items():
             provider, _, model = key.partition("/")
-            if provider not in VALID_PROVIDERS | {"blockrun"} or not model or model != model.strip():
+            allowed_context_providers = VALID_PROVIDERS | {"blockrun", "vision_litellm"}
+            if provider not in allowed_context_providers or not model or model != model.strip():
                 raise ValueError(f"Invalid model context key: {key}")
             if type(value) is not int or value <= 0:
                 raise ValueError(f"Context window for {key} must be a positive integer")
@@ -1058,6 +1059,26 @@ class Config:
     @property
     def LITELLM_MODEL(self):
         return self.get_config('ai_providers', 'litellm_model', 'local-model')
+
+    @property
+    def LITELLM_CONTEXT_WINDOW(self) -> int:
+        """Context window used when [model_context_windows] has no litellm entry."""
+        try:
+            return int(self.get_config('ai_providers', 'litellm_context_window', 1_000_000))
+        except (TypeError, ValueError):
+            return 1_000_000
+
+    @property
+    def VISION_CONTEXT_WINDOW(self) -> int:
+        """Context window for the dedicated vision model (falls back to LiteLLM)."""
+        try:
+            return int(
+                self.get_config(
+                    'ai_providers', 'vision_context_window', self.LITELLM_CONTEXT_WINDOW
+                )
+            )
+        except (TypeError, ValueError):
+            return self.LITELLM_CONTEXT_WINDOW
 
     @property
     def LITELLM_SESSION_ID(self):

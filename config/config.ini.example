@@ -88,10 +88,15 @@ litellm_model = deepseek-v4.1-flash
 litellm_streaming = true
 litellm_user_agent = tradingbot/0.1
 litellm_session_id = tradingbot
+# Context window (tokens) for LiteLLM models without an exact [model_context_windows]
+# entry. Ignored when litellm/<model> is listed there.
+litellm_context_window = 1000000
 # Dedicated vision LiteLLM provider for chart analysis (optional).
 # vision_provider = litellm
 # vision_model = openai/gpt-4o-mini
 # vision_base_url = https://api.openai.com/v1
+# Context window for the vision model; defaults to litellm_context_window.
+# vision_context_window = 1000000
 [model_config]
 # New analysis detail + approximate NARRATIVE length (tokens, not characters):
 # low = 400 (3 lines), medium = 1000 (5 lines), high = 2000 (13 lines),
@@ -343,6 +348,9 @@ googleai/gemini-3.8-flash = 1048576
 googleai/gemini-3-flash-preview = 1048576
 openrouter/google/gemini-3-flash-preview = 1048576
 openrouter/deepseek/deepseek-v4.1-flash = 1048576
+# Fork LiteLLM/OpenCode Go providers (vision_litellm is accepted here too).
+litellm/deepseek-v4.1-flash = 1000000
+# vision_litellm/openai/gpt-4o-mini = 128000
 
 # === Paths ===
 [directories]

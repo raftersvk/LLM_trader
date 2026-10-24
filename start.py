@@ -558,21 +558,31 @@ class CompositionRoot(ProvisioningMixin):
             if self.shutdown_manager.is_shutting_down:
                 shutdown_event.set()
         try:
-            # Also watch the shutdown flag: an aborted callback chain (e.g. a bot
-            # cancelling its tasks) must not leave this supervisor waiting forever.
             while not shutdown_event.is_set():
+                # The pair-stop callback releases us on the normal path. Only use
+                # the shutdown flag as a watchdog once the shutdown task is known
+                # to have aborted: releasing on the flag alone would return while
+                # cleanup callbacks are still running.
+                task = getattr(self.shutdown_manager, "shutdown_task", None)
                 if (
                     self.shutdown_manager is not None
                     and self.shutdown_manager.is_shutting_down
+                    and task is not None
+                    and task.done()
                 ):
-                    shutdown_event.set()
                     break
                 await asyncio.sleep(0.05)
-            await shutdown_event.wait()
         finally:
             # Cancellation or a missing/failed callback must still stop the loops.
             if not stopped:
                 await multi_pair_manager.stop_all_pairs()
+
+        # Let the remaining cleanup callbacks finish before run_async returns.
+        wait_for_shutdown = getattr(
+            self.shutdown_manager, "wait_for_shutdown", None
+        )
+        if wait_for_shutdown is not None:
+            await wait_for_shutdown()
 
     def start(self) -> int:
         """Main entry point with clean shutdown delegation.
