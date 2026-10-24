@@ -521,8 +521,12 @@ class PairAnalyzer:
                     self.symbol,
                 )
             extractor = PositionExtractor(logger=None, unified_parser=parser)
-            signal, confidence, stop_loss, take_profit, position_size, reasoning, _symbol = \
-                extractor.extract_trading_info(raw_response)
+            (signal, confidence, stop_loss, take_profit, position_size, reasoning,
+             _symbol, numeric_confidence) = extractor.extract_trading_info_with_confidence(raw_response)
+            # Keep the raw 0-100 score so contract.confidence_to_float can apply
+            # its 5% rounding; fall back to the label when none was provided.
+            if numeric_confidence is not None:
+                confidence = numeric_confidence
         else:
             signal = str(result.get("recommendation", "HOLD")).upper()
             confidence = result.get("confidence", "LOW")

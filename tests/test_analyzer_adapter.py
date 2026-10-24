@@ -891,11 +891,10 @@ FENCED_NUMERIC_CONFIDENCE = (
 
 @pytest.mark.asyncio
 async def test_numeric_confidence_uses_json_path_and_is_vetted():
-    """Numeric confidence must normalize like the live bot (45 -> LOW -> 0.35).
+    """Numeric confidence must survive extraction (45 -> 0.45) and be vetted.
 
-    Without the engine's UnifiedParser the extractor falls back to regex,
-    misses the numeric value and silently defaults to MEDIUM (0.65), letting a
-    low-confidence signal pass the 0.6 min_confidence gate.
+    The JSON path keeps the raw 0-100 score rather than collapsing it to a
+    label, so a low-confidence signal still fails the 0.6 min_confidence gate.
     """
     engine = _attach_unified_parser(FakeEngine(
         raw_response=FENCED_NUMERIC_CONFIDENCE,
@@ -907,8 +906,93 @@ async def test_numeric_confidence_uses_json_path_and_is_vetted():
     signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
 
     assert signal.action == "BUY"
+    assert signal.confidence == 0.45
+    assert signal.risk_approved is False
+
+
+FENCED_CONFIDENCE_57 = (
+    "```json\n"
+    '{"signal": "BUY", "confidence": 57, "stop_loss": 67000.0, '
+    '"take_profit": 70000.0, "position_size": 5, "reasoning": "decent setup"}\n'
+    "```"
+)
+
+
+@pytest.mark.asyncio
+async def test_numeric_confidence_57_is_preserved_as_055():
+    """57 must round to 0.55, not collapse to the MEDIUM label's 0.65."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=FENCED_CONFIDENCE_57,
+        result={**RESULT_META, "raw_response": FENCED_CONFIDENCE_57},
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.confidence == 0.55
+
+
+FENCED_NAN_CONFIDENCE = (
+    "```json\n"
+    '{"signal": "BUY", "confidence": NaN, "stop_loss": 67000.0, '
+    '"take_profit": 70000.0, "position_size": 5, "reasoning": "bad score"}\n'
+    "```"
+)
+
+
+@pytest.mark.asyncio
+async def test_nan_confidence_never_becomes_max_confidence():
+    """A NaN score must not be clamped to 1.0 and approved.
+
+    Python's json.loads accepts NaN; the extractor drops the non-finite score
+    so the historical LOW label fallback (0.35) applies instead.
+    """
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=FENCED_NAN_CONFIDENCE,
+        result={**RESULT_META, "raw_response": FENCED_NAN_CONFIDENCE},
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
     assert signal.confidence == 0.35
     assert signal.risk_approved is False
+
+
+@pytest.mark.asyncio
+async def test_label_only_confidence_keeps_the_legacy_mapping():
+    """Without a numeric score, the label fallback is unchanged."""
+    raw = (
+        '{"signal": "HOLD", "confidence": "MEDIUM", "reasoning": "no setup"}'
+    )
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=raw,
+        result={**RESULT_META, "raw_response": raw},
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.confidence == 0.65
+
+
+@pytest.mark.asyncio
+async def test_missing_confidence_defaults_to_medium_as_before():
+    """A payload without confidence keeps the historical MEDIUM (0.65) default."""
+    raw = '{"signal": "HOLD", "reasoning": "no setup"}'
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=raw,
+        result={**RESULT_META, "raw_response": raw},
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.confidence == 0.65
 
 
 FENCED_ACTION_KEY = (

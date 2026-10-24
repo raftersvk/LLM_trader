@@ -9,6 +9,7 @@ is kept, plus a sha256 fingerprint of the raw response for audit.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -76,19 +77,38 @@ def timeframe_seconds(timeframe: str) -> int:
 def confidence_to_float(confidence: Any) -> float:
     """Map HIGH/MEDIUM/LOW (or a 0-100 numeric) to a float in [0, 1].
 
+    A numeric score is preserved instead of being collapsed to a label: it is
+    clamped to 0-100, then rounded to the nearest 5 percentage points with
+    half-up rounding. Only values strictly between 0 and 1 are treated as an
+    already-normalized fraction; 1 and 1.0 are valid 0-100 scores (a raw score
+    of 1 is minimum confidence, not 100%). For example, 51 and 52 map to 0.50,
+    53 to 0.55, 57 to 0.55 and 58 to 0.60. Labels remain the fallback and keep
+    their historical mapping (HIGH=0.90, MEDIUM=0.65, LOW=0.35). Non-finite
+    scores (NaN, Infinity) are rejected with :class:`SignalValidationError`
+    rather than clamped into a valid range.
+
     Args:
         confidence: "HIGH", "MEDIUM", "LOW" or a numeric 0-100 value.
 
     Returns:
         Confidence as a float between 0 and 1.
+
+    Raises:
+        SignalValidationError: for labels or numbers that are not valid
+            confidence values, including non-finite scores.
     """
     if isinstance(confidence, (int, float)):
-        raw_100 = float(confidence) * 100.0 if float(confidence) <= 1.0 else float(confidence)
-        if raw_100 >= 70:
-            return 0.90
-        if raw_100 >= 50:
-            return 0.65
-        return 0.35
+        raw_100 = float(confidence)
+        if not math.isfinite(raw_100):
+            raise SignalValidationError(f"Invalid confidence value: {confidence!r}")
+        # 1 and 1.0 are valid 0-100 scores (the extractor forwards raw scores),
+        # so only a strictly fractional value is rescaled.
+        if 0.0 < raw_100 < 1.0:
+            raw_100 *= 100.0
+        raw_100 = max(0.0, min(100.0, raw_100))
+        # Add half a step before truncating to round half-up (e.g. 52.5 -> 55).
+        rounded = int(raw_100 / 5.0 + 0.5) * 5
+        return rounded / 100.0
     text = str(confidence).strip().upper()
     if text in CONFIDENCE_MAP:
         return CONFIDENCE_MAP[text]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from re import Pattern
 from typing import Tuple, Optional, Dict, Any, TYPE_CHECKING
@@ -31,6 +32,10 @@ class PositionExtractor:
         )
         self.confidence_pattern: Pattern = re.compile(
             r'confidence["\s:]*\[?(HIGH|MEDIUM|LOW)\]?',
+            re.IGNORECASE
+        )
+        self.numeric_confidence_pattern: Pattern = re.compile(
+            r'confidence["\s:]*\[?([0-9]+(?:\.[0-9]+)?)\]?%?',
             re.IGNORECASE
         )
         self.stop_loss_pattern: Pattern = re.compile(
@@ -106,6 +111,64 @@ class PositionExtractor:
 
         # Fall back to regex extraction (symbol will be None)
         return self._extract_from_text(text) + (None,)
+
+    def extract_trading_info_with_confidence(self, text):
+        """Extract trading info plus the raw numeric confidence, when present.
+
+        This is a non-breaking sibling of :meth:`extract_trading_info`: the
+        existing tuple is returned unchanged with the raw confidence appended
+        as its last element (a float in 0-100 or ``None``). Callers that only
+        need the label keep using ``extract_trading_info``.
+
+        Args:
+            text: AI response text or an already-parsed analysis dict.
+
+        Returns:
+            The existing tuple plus a raw confidence. A dict input returns a
+            7-tuple (the 6-tuple contract plus confidence); text input returns
+            an 8-tuple (the 7-tuple contract plus confidence).
+        """
+        if isinstance(text, dict):
+            base = self._extract_from_dict(text)[:6]
+            return base + (self._raw_confidence(text.get("confidence")),)
+
+        json_data = self.extract_from_json(text)
+        if json_data:
+            base = self._extract_from_dict(json_data)
+            return base + (self._raw_confidence(json_data.get("confidence")),)
+
+        base = self._extract_from_text(text) + (None,)
+        return base + (self._numeric_confidence_from_text(text),)
+
+    def _raw_confidence(self, value: Any) -> Optional[float]:
+        """Return a finite numeric confidence (0-100) or None.
+
+        Labels and non-finite numbers (NaN, Infinity) yield None so the label
+        fallback is used instead of forwarding an invalid score downstream.
+        """
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+            return numeric if math.isfinite(numeric) else None
+        if isinstance(value, str):
+            try:
+                numeric = float(value.strip())
+            except ValueError:
+                return None
+            return numeric if math.isfinite(numeric) else None
+        return None
+
+    def _numeric_confidence_from_text(self, text: str) -> Optional[float]:
+        """Extract a finite numeric confidence from free-form text, if any."""
+        match = self.numeric_confidence_pattern.search(text)
+        if not match:
+            return None
+        try:
+            numeric = float(match.group(1))
+        except ValueError:
+            return None
+        return numeric if math.isfinite(numeric) else None
 
     def _extract_from_dict(self, data: Dict[str, Any]) -> Tuple[str, str, Optional[float], Optional[float], Optional[float], str, Optional[str]]:
         """Extract trading info from a dictionary.

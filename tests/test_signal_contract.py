@@ -61,10 +61,62 @@ def test_confidence_mapping():
     assert confidence_to_float("MEDIUM") == CONFIDENCE_MAP["MEDIUM"]
     assert confidence_to_float("LOW") == CONFIDENCE_MAP["LOW"]
     assert 0.0 <= confidence_to_float("HIGH") <= 1.0
-    assert confidence_to_float(85) == CONFIDENCE_MAP["HIGH"]
-    assert confidence_to_float(0.95) == CONFIDENCE_MAP["HIGH"]
+    assert confidence_to_float(85) == 0.85
+    assert confidence_to_float(0.95) == 0.95
     with pytest.raises(SignalValidationError):
         confidence_to_float("NONSENSE")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param(51, 0.50, id="51-down"),
+        pytest.param(52, 0.50, id="52-down"),
+        pytest.param(53, 0.55, id="53-up"),
+        pytest.param(55, 0.55, id="55-exact"),
+        pytest.param(57, 0.55, id="57-down"),
+        pytest.param(58, 0.60, id="58-up"),
+        pytest.param(68, 0.70, id="68-up"),
+        pytest.param(100, 1.00, id="100-max"),
+        pytest.param(0, 0.00, id="0-min"),
+    ],
+)
+def test_numeric_confidence_rounds_to_nearest_five_percent(raw, expected):
+    """A numeric score keeps its precision, rounded to the nearest 5% half-up."""
+    assert confidence_to_float(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param(-5, 0.0, id="below-zero-clamped"),
+        pytest.param(140, 1.0, id="above-hundred-clamped"),
+        pytest.param(0.6, 0.60, id="fraction-input"),
+        pytest.param("57", 0.55, id="numeric-string"),
+        pytest.param(1, 0.0, id="integer-one-is-a-low-score"),
+        pytest.param(1.0, 0.0, id="float-one-is-a-low-score"),
+        pytest.param(2, 0.0, id="two-is-a-low-score"),
+        pytest.param(0.99, 1.0, id="just-below-one-is-a-fraction"),
+    ],
+)
+def test_numeric_confidence_clamps_and_accepts_fractions(raw, expected):
+    assert confidence_to_float(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param(float("nan"), id="nan-float"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+        pytest.param("NaN", id="nan-string"),
+        pytest.param("Infinity", id="infinity-string"),
+    ],
+)
+def test_non_finite_confidence_is_rejected(raw):
+    """NaN and Infinity must never be clamped into a valid high confidence."""
+    with pytest.raises(SignalValidationError):
+        confidence_to_float(raw)
 
 
 def test_hash_raw_response_format_and_determinism():

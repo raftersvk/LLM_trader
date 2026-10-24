@@ -1981,6 +1981,41 @@ class TestParserAndExtractorContract:
         assert PositionExtractor().validate_signal(extracted[0]) is True
 
     @pytest.mark.parametrize(
+        ("confidence", "expected_label", "expected_raw"),
+        [
+            pytest.param(57, "MEDIUM", 57.0, id="numeric"),
+            pytest.param(68, "MEDIUM", 68.0, id="numeric-high-medium"),
+            pytest.param("HIGH", "HIGH", None, id="label-only"),
+            pytest.param("MEDIUM", "MEDIUM", None, id="label-medium"),
+        ],
+    )
+    def test_extractor_with_confidence_keeps_the_raw_numeric_score(
+        self, confidence: Any, expected_label: str, expected_raw: float | None
+    ) -> None:
+        """The sibling accessor appends the raw score without changing the label tuple."""
+        analysis = _analysis_payload(confidence=confidence, reasoning="Test setup.")["analysis"]
+
+        extracted = PositionExtractor().extract_trading_info_with_confidence(analysis)
+
+        assert len(extracted) == 7
+        assert extracted[1] == expected_label
+        assert extracted[-1] == expected_raw
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(float("nan"), id="nan"),
+            pytest.param(float("inf"), id="positive-infinity"),
+            pytest.param(float("-inf"), id="negative-infinity"),
+        ],
+    )
+    def test_extractor_does_not_forward_non_finite_confidence(self, value: float) -> None:
+        """Non-finite scores fall back to the label instead of reaching the contract."""
+        extracted = PositionExtractor().extract_trading_info_with_confidence({"confidence": value})
+
+        assert extracted[-1] is None
+
+    @pytest.mark.parametrize(
         ("raw_position_size", "expected_position_size"),
         [
             pytest.param("5%", 0.05, id="percent-string"),
