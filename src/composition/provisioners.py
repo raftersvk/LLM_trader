@@ -370,6 +370,10 @@ class ProvisioningMixin:
                 logger=self.logger,
             )
             self.logger.debug("BlockRun client initialized")
+        # Fork: OpenCode Go / LiteLLM provider clients (text + vision).
+        from src.factories.litellm_factory import LiteLLMFactory
+
+        litellm_clients = LiteLLMFactory(self.logger, self.config).get_all_clients()
         provider_clients = ProviderClients(
             google=google_client,
             google_paid=google_paid_client,
@@ -377,6 +381,8 @@ class ProvisioningMixin:
             lmstudio=lmstudio_client,
             blockrun=blockrun_client,
             deepseek=deepseek_client,
+            litellm=litellm_clients.get("litellm"),
+            vision_litellm=litellm_clients.get("vision_litellm"),
         )
         provider_health = None
         if getattr(self.config, "CIRCUIT_BREAKER_ENABLED", True):
@@ -739,6 +745,9 @@ class ProvisioningMixin:
             admin_credentials=admin_credentials,
             post_mortem_repo=trading.get("post_mortem_repo"),
             connection_manager=connection_manager,
+            engine_registry=getattr(self, "engine_registry", None),
+            vector_memory_registry=getattr(self, "vector_memory_registry", None),
+            multi_pair_manager=getattr(self, "multi_pair_manager", None),
         )
         trading["strategy"].set_dashboard_state(dashboard_server.dashboard_state)
 
