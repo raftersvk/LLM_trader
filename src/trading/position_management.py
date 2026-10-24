@@ -490,99 +490,114 @@ class PositionManagementMixin:
                 )
                 return None
 
-        self.current_position = Position(
-            entry_price=risk.entry_price,
-            stop_loss=risk.stop_loss,
-            take_profit=risk.take_profit,
-            size=quantity,
-            entry_time=datetime.now(timezone.utc),
-            confidence=confidence,
-            direction=direction,
-            symbol=symbol,
-            confluence_factors=confluence_factors,
-            entry_fee=entry_fee,
-            quote_amount=quote_amount,
-            size_pct=size_pct,
-            atr_at_entry=mc.atr,
-            atr_percentage_at_entry=mc.atr_percentage,
-            conditions_at_entry=mc,
-            volatility_level=risk.volatility_level,
-            sl_distance_pct=risk.sl_distance_pct,
-            tp_distance_pct=risk.tp_distance_pct,
-            rr_ratio_at_entry=risk.rr_ratio,
-            adx_at_entry=mc.adx,
-            rsi_at_entry=mc.rsi,
-            trend_direction_at_entry=mc.trend_direction,
-            macd_signal_at_entry=mc.macd_signal,
-            bb_position_at_entry=mc.bb_position,
-            volume_state_at_entry=mc.volume_state,
-            market_sentiment_at_entry=mc.market_sentiment,
-            order_book_bias_at_entry=mc.order_book_bias,
-            stop_loss_type_at_entry=ec.stop_loss_type,
-            stop_loss_check_interval_at_entry=ec.stop_loss_check_interval,
-            take_profit_type_at_entry=ec.take_profit_type,
-            take_profit_check_interval_at_entry=ec.take_profit_check_interval,
-            max_drawdown_pct=0.0,
-            max_profit_pct=0.0,
-            regime_profile=risk.regime_profile,
-        )
+        try:
+            self.current_position = Position(
+                entry_price=risk.entry_price,
+                stop_loss=risk.stop_loss,
+                take_profit=risk.take_profit,
+                size=quantity,
+                entry_time=datetime.now(timezone.utc),
+                confidence=confidence,
+                direction=direction,
+                symbol=symbol,
+                confluence_factors=confluence_factors,
+                entry_fee=entry_fee,
+                quote_amount=quote_amount,
+                size_pct=size_pct,
+                atr_at_entry=mc.atr,
+                atr_percentage_at_entry=mc.atr_percentage,
+                conditions_at_entry=mc,
+                volatility_level=risk.volatility_level,
+                sl_distance_pct=risk.sl_distance_pct,
+                tp_distance_pct=risk.tp_distance_pct,
+                rr_ratio_at_entry=risk.rr_ratio,
+                adx_at_entry=mc.adx,
+                rsi_at_entry=mc.rsi,
+                trend_direction_at_entry=mc.trend_direction,
+                macd_signal_at_entry=mc.macd_signal,
+                bb_position_at_entry=mc.bb_position,
+                volume_state_at_entry=mc.volume_state,
+                market_sentiment_at_entry=mc.market_sentiment,
+                order_book_bias_at_entry=mc.order_book_bias,
+                stop_loss_type_at_entry=ec.stop_loss_type,
+                stop_loss_check_interval_at_entry=ec.stop_loss_check_interval,
+                take_profit_type_at_entry=ec.take_profit_type,
+                take_profit_check_interval_at_entry=ec.take_profit_check_interval,
+                max_drawdown_pct=0.0,
+                max_profit_pct=0.0,
+                regime_profile=risk.regime_profile,
+            )
 
-        await self.persistence.async_save_position(self.current_position)
-        self.logger.info(
-            "Opened %s position @ $%s (SL: $%s, TP: $%s, Qty: %.6f, %s)",
-            direction, f"{current_price:,.2f}", f"{risk.stop_loss:,.2f}",
-            f"{risk.take_profit:,.2f}", quantity, self._commission_text(entry_fee),
-        )
-        intent.transition_to(
-            OrderLifecycle.READY_FOR_REVIEW,
-            reason="Intent persisted; execution awaits executor evidence",
-        )
+            await self.persistence.async_save_position(self.current_position)
+            self.logger.info(
+                "Opened %s position @ $%s (SL: $%s, TP: $%s, Qty: %.6f, %s)",
+                direction, f"{current_price:,.2f}", f"{risk.stop_loss:,.2f}",
+                f"{risk.take_profit:,.2f}", quantity, self._commission_text(entry_fee),
+            )
+            intent.transition_to(
+                OrderLifecycle.READY_FOR_REVIEW,
+                reason="Intent persisted; execution awaits executor evidence",
+            )
 
-        decision = TradeDecision(
-            timestamp=datetime.now(timezone.utc),
-            symbol=symbol,
-            action=signal,
-            confidence=confidence,
-            price=current_price,
-            stop_loss=risk.stop_loss,
-            take_profit=risk.take_profit,
-            position_size=size_pct,
-            quote_amount=quote_amount,
-            quantity=quantity,
-            fee=entry_fee,
-            reasoning=reasoning,
-            indicators_json={
-                "adx_at_entry": mc.adx,
-                "rsi_at_entry": mc.rsi,
-                "volatility_level": risk.volatility_level,
-                "macd_signal_at_entry": mc.macd_signal,
-                "bb_position_at_entry": mc.bb_position,
-                "volume_state_at_entry": mc.volume_state,
-                "market_sentiment_at_entry": mc.market_sentiment,
-                "order_book_bias_at_entry": mc.order_book_bias,
-                "sl_distance_pct": risk.sl_distance_pct,
-                "tp_distance_pct": risk.tp_distance_pct,
-                "rr_ratio_at_entry": risk.rr_ratio,
-                "trend_direction_at_entry": mc.trend_direction,
-            },
-            order_id=order_id,
-        )
-        self.register_position_intent(
-            INTENT_ACTION_ENTRY,
-            symbol,
-            order_id=order_id,
-            position_id=position_identity(self.current_position),
-            state=INTENT_PENDING if self._executor_query_available() else INTENT_LOCAL_ONLY,
-            payload={"entry_history_time": decision.timestamp.isoformat()},
-            detail=(
-                "entry forwarded to the executor — awaiting its receipt; local position is "
-                "bookkeeping, NOT a confirmed execution"
-                if self._executor_query_available()
-                else "executor integration disabled — no command sent, local bookkeeping only"
-            ),
-        )
-        await self._record_trade_decision(decision)
-        return decision
+            decision = TradeDecision(
+                timestamp=datetime.now(timezone.utc),
+                symbol=symbol,
+                action=signal,
+                confidence=confidence,
+                price=current_price,
+                stop_loss=risk.stop_loss,
+                take_profit=risk.take_profit,
+                position_size=size_pct,
+                quote_amount=quote_amount,
+                quantity=quantity,
+                fee=entry_fee,
+                reasoning=reasoning,
+                indicators_json={
+                    "adx_at_entry": mc.adx,
+                    "rsi_at_entry": mc.rsi,
+                    "volatility_level": risk.volatility_level,
+                    "macd_signal_at_entry": mc.macd_signal,
+                    "bb_position_at_entry": mc.bb_position,
+                    "volume_state_at_entry": mc.volume_state,
+                    "market_sentiment_at_entry": mc.market_sentiment,
+                    "order_book_bias_at_entry": mc.order_book_bias,
+                    "sl_distance_pct": risk.sl_distance_pct,
+                    "tp_distance_pct": risk.tp_distance_pct,
+                    "rr_ratio_at_entry": risk.rr_ratio,
+                    "trend_direction_at_entry": mc.trend_direction,
+                },
+                order_id=order_id,
+            )
+            self.register_position_intent(
+                INTENT_ACTION_ENTRY,
+                symbol,
+                order_id=order_id,
+                position_id=position_identity(self.current_position),
+                state=INTENT_PENDING if self._executor_query_available() else INTENT_LOCAL_ONLY,
+                payload={"entry_history_time": decision.timestamp.isoformat()},
+                detail=(
+                    "entry forwarded to the executor — awaiting its receipt; local position is "
+                    "bookkeeping, NOT a confirmed execution"
+                    if self._executor_query_available()
+                    else "executor integration disabled — no command sent, local bookkeeping only"
+                ),
+            )
+            await self._record_trade_decision(decision)
+            return decision
+        except Exception:
+            # Give the reservation back if anything after it failed; otherwise the
+            # symbol stays allocated with no position and can never trade again.
+            if getattr(self, "portfolio_capital_service", None):
+                self.portfolio_capital_service.release_position(symbol, 0.0)
+            self.current_position = None
+            try:
+                await self.persistence.async_save_position(None)
+            except Exception:  # noqa: BLE001
+                self.logger.warning(
+                    "Failed to clear the persisted position after an open failure",
+                    exc_info=True,
+                )
+            raise
 
     def _record_refused_command(
         self,
