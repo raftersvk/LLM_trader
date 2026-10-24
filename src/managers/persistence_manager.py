@@ -104,7 +104,10 @@ class PersistenceManager:
                 "quote_amount": position.quote_amount,
                 "atr_at_entry": position.atr_at_entry,
                 "atr_percentage_at_entry": position.atr_percentage_at_entry,
-                "conditions_at_entry": position.conditions_at_entry.to_dict(),
+                "conditions_at_entry": (
+                    position.conditions_at_entry.to_dict()
+                    if position.conditions_at_entry is not None else None
+                ),
                 "volatility_level": position.volatility_level,
                 "sl_distance_pct": position.sl_distance_pct,
                 "tp_distance_pct": position.tp_distance_pct,
@@ -176,7 +179,10 @@ class PersistenceManager:
                     size_pct=data.get("size_pct", 0.0),
                     atr_at_entry=data.get("atr_at_entry", 0.0),
                     atr_percentage_at_entry=data.get("atr_percentage_at_entry", 0.0),
-                    conditions_at_entry=MarketConditions.from_dict(data["conditions_at_entry"]),
+                    conditions_at_entry=(
+                        MarketConditions.from_dict(data["conditions_at_entry"])
+                        if isinstance(data.get("conditions_at_entry"), dict) else None
+                    ),
                     volatility_level=data.get("volatility_level", "MEDIUM"),
                     sl_distance_pct=data.get("sl_distance_pct", 0.0),
                     tp_distance_pct=data.get("tp_distance_pct", 0.0),

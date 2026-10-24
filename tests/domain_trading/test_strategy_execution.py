@@ -698,8 +698,10 @@ class TestPositionPersistence:
         assert loaded.conditions_at_entry.portfolio_pnl_pct == -1.3
         assert manager.validate_loaded_position() == []
 
-    def test_position_file_without_conditions_snapshot_is_refused(self, tmp_path: Path) -> None:
-        """A file lacking the entry snapshot is rejected instead of rebuilt from defaults."""
+    def test_position_file_without_conditions_snapshot_loads_without_fabricating(
+        self, tmp_path: Path
+    ) -> None:
+        """Legacy fork files load with no snapshot; defaults are never fabricated."""
         manager = PersistenceManager(null_logger(), data_dir=str(tmp_path))
         manager.positions_file.write_text(
             json.dumps(
@@ -716,7 +718,10 @@ class TestPositionPersistence:
             ),
             encoding="utf-8",
         )
-        assert manager.load_position() is None
+        loaded = manager.load_position()
+        assert loaded is not None
+        assert loaded.symbol == "BTC/USDC"
+        assert loaded.conditions_at_entry is None
 
     def test_position_file_without_exit_snapshot_defaults_to_unknown(self, tmp_path: Path) -> None:
         """Old files without the typed-exit fields load as unknown, not as a fabricated type."""
