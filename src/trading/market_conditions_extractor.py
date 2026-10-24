@@ -6,6 +6,7 @@ Extracted from TradingStrategy to reduce SRP violation (was 1151 lines / 19 meth
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from src.utils.indicator_classifier import (
@@ -18,6 +19,7 @@ from src.utils.indicator_classifier import (
     classify_volume_state,
     resolve_scalar,
 )
+from src.utils.market_calendar import is_weekend as market_is_weekend
 
 from .data_models import MarketConditions, Position
 
@@ -148,6 +150,7 @@ class MarketConditionsExtractor:
             conditions["market_sentiment"] = classify_market_sentiment(sentiment_data)
             conditions["fear_greed_index"] = sentiment_data.get("fear_greed_index", 50) if sentiment_data else 50
             conditions["order_book_bias"] = classify_order_book_bias(microstructure_data)
+            conditions["is_weekend"] = market_is_weekend(datetime.now(timezone.utc))
 
             reddit_assessment = analysis.get("reddit_sentiment")
             conditions["social_sentiment_reddit"] = reddit_assessment["outlook"] if reddit_assessment else ""
@@ -166,6 +169,7 @@ class MarketConditionsExtractor:
             macd_signal=conditions.get("macd_signal", "NEUTRAL"),
             bb_position=conditions.get("bb_position", "MIDDLE"),
             volume_state=conditions.get("volume_state", "NORMAL"),
+            is_weekend=bool(conditions.get("is_weekend", False)),
             market_sentiment=conditions.get("market_sentiment", "NEUTRAL"),
             order_book_bias=conditions.get("order_book_bias", "BALANCED"),
             fear_greed_index=int(conditions.get("fear_greed_index", 50)),

@@ -25,6 +25,7 @@ from src.utils.indicator_classifier import (
     classify_volume_state,
     resolve_scalar,
 )
+from src.utils.market_calendar import is_weekend as market_is_weekend
 from src.utils.pattern_recency import filter_recent_patterns
 from src.utils.profiler import profile_performance
 from src.utils.timeframe_validator import TimeframeValidator
@@ -779,6 +780,8 @@ class AnalysisEngine:
         assert self.context is not None
         bb_position = classify_bb_position(technical_data, self.context.current_price)
 
+        is_weekend = market_is_weekend(datetime.now(timezone.utc))
+
         market_sentiment = classify_market_sentiment(self.context.sentiment)
 
         order_book_bias = classify_order_book_bias(self.context.market_microstructure)
@@ -808,6 +811,7 @@ class AnalysisEngine:
             macd_signal=macd_signal,
             volume_state=volume_state,
             bb_position=bb_position,
+            is_weekend=is_weekend,
             market_sentiment=market_sentiment,
             order_book_bias=order_book_bias,
             exit_execution_context=exit_execution_context,

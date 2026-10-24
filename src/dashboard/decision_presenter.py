@@ -7,6 +7,7 @@ owns the HTTP surface and delegates to these builders.
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from src.utils.indicator_classifier import (
     classify_trend_direction,
     format_exit_execution_context,
 )
+from src.utils.market_calendar import is_weekend as market_is_weekend
 
 RULE_METADATA_FIELDS = frozenset((
     "rule_type",
@@ -548,10 +550,12 @@ def build_current_market_context(config, logger, unified_parser=None) -> tuple[s
         response = data.get("response", {})
         current_price = response.get("current_price")
         sentiment_data: dict[str, Any] | None = data.get("sentiment")
+        is_weekend = market_is_weekend(datetime.now(timezone.utc))
         shared_kwargs: dict[str, Any] = {
             "technical_data": technical_data,
             "current_price": current_price,
             "sentiment_data": sentiment_data,
+            "is_weekend": is_weekend,
             "exit_execution_context": exit_execution_context,
         }
         display_context = build_context_string_from_technical_data(**shared_kwargs)

@@ -233,6 +233,12 @@ class PromptBuilder:
 
         analysis_timeframes = f"{self.timeframe.upper()}, 1D, 7D, 30D, 365D, and WEEKLY timeframes"
         day_of_week = current_time.strftime("%A")
+        weekend_note = ""
+        if day_of_week in ["Saturday", "Sunday"]:
+            weekend_note = (
+                "\n        - WEEKEND MODE: Trading volume/liquidity is typically lower. "
+                "Be cautious of fakeouts/manipulation."
+            )
 
         milestones = self._get_market_milestones(current_time)
 
@@ -241,7 +247,7 @@ class PromptBuilder:
             f"- Symbol: {context.symbol}\n"
             f"- Current Day: {day_of_week} (UTC)\n"
             f"- Current Price: {context.current_price}\n"
-            f"- Analysis Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC{candle_status}\n"
+            f"- Analysis Time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC{candle_status}{weekend_note}\n"
             f"- Primary Timeframe: {self.timeframe} ({timeframe_minutes} min/candle)\n"
             f"- Analysis Includes: {analysis_timeframes}\n"
             f"\n### Market Milestones (UTC)\n"
@@ -260,6 +266,24 @@ class PromptBuilder:
 
         next_daily = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         milestones.append(f"- Daily Close: in {format_delta(next_daily - current_time)} (00:00 UTC)")
+
+        if current_time.weekday() == 6:
+            cme_open = current_time.replace(hour=22, minute=0, second=0, microsecond=0)
+            if current_time < cme_open:
+                milestones.append(
+                    f"- CME/Service Open: in {format_delta(cme_open - current_time)} (Today 22:00 UTC)"
+                )
+            else:
+                milestones.append("- CME/Service Open: Currently Active (since 22:00 UTC)")
+
+        if current_time.weekday() >= 5:
+            days_until_monday = (7 - current_time.weekday()) % 7 or 7
+            next_weekly = (current_time + timedelta(days=days_until_monday)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            milestones.append(
+                f"- Weekly Open: in {format_delta(next_weekly - current_time)} (Mon 00:00 UTC)"
+            )
 
         return "\n".join(milestones) if milestones else "- No major milestones within 24h"
 

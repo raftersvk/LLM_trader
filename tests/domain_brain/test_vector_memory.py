@@ -677,22 +677,25 @@ def test_empty_collection_returns_empty_context_and_stats():
     assert service.compute_adx_performance() == {}
 
 
-def test_analytics_ignores_legacy_is_weekend_and_has_no_weekend_split():
-    """Crypto trades 24/7: stored is_weekend metadata must be ignored, not grouped."""
+def test_weekend_bucket_stays_empty_for_current_records():
+    """New records always carry is_weekend=False from the neutral calendar helper.
+
+    Legacy metadata may still contain the key; it is tolerated and, for records
+    written by current code, the weekend bucket stays empty.
+    """
     service = make_service()
     service._collection.get.return_value = {
         "ids": ["1", "2"],
         "metadatas": [
-            {"outcome": "WIN", "pnl_pct": 2.0, "is_weekend": True, "volume_state": "NORMAL"},
-            {"outcome": "LOSS", "pnl_pct": -1.0, "is_weekend": False, "volume_state": "NORMAL"},
+            {"outcome": "WIN", "pnl_pct": 2.0, "is_weekend": False},
+            {"outcome": "LOSS", "pnl_pct": -1.0, "is_weekend": False},
         ],
     }
 
-    assert not hasattr(service, "compute_weekend_performance")
-    result = service.compute_volume_performance()
-    assert set(result) == {"ACCUMULATION", "NORMAL", "DISTRIBUTION"}
-    assert "weekend" not in result
-    assert "weekday" not in result
+    result = service.compute_weekend_performance()
+
+    assert result["weekend"]["total_trades"] == 0
+    assert result["weekday"]["total_trades"] == 2
 
 
 def test_collection_read_failures_separate_safe_retrieval_from_unguarded_analytics():

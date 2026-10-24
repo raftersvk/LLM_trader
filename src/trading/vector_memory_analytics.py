@@ -356,6 +356,43 @@ class VectorMemoryAnalyticsMixin:
 
         return result
 
+    def compute_weekend_performance(self) -> dict[str, Any]:
+        """Compute win rate for weekend vs weekday trades.
+
+        Returns dict with 'weekend' and 'weekday' keys.
+        """
+        metas = self.get_trade_metadatas()
+        if not metas:
+            return {}
+
+        groups = {
+            "weekend": {"total": 0, "wins": 0, "pnl_sum": 0.0},
+            "weekday": {"total": 0, "wins": 0, "pnl_sum": 0.0},
+        }
+
+        for meta in metas:
+            is_weekend = bool(meta.get("is_weekend", False))
+            key = "weekend" if is_weekend else "weekday"
+            pnl = meta.get("pnl_pct", 0)
+            is_win = meta.get("outcome") == "WIN"
+
+            groups[key]["total"] += 1
+            if is_win:
+                groups[key]["wins"] += 1
+            groups[key]["pnl_sum"] += pnl
+
+        result: dict[str, Any] = {}
+        for key, data in groups.items():
+            total = data["total"]
+            result[key] = {
+                "total_trades": total,
+                "winning_trades": data["wins"],
+                "win_rate": (data["wins"] / total * 100) if total > 0 else None,
+                "avg_pnl_pct": (data["pnl_sum"] / total) if total > 0 else None,
+            }
+
+        return result
+
     def compute_adx_performance(self) -> dict[str, dict[str, Any]]:
         """Compute ADX bucket performance from all stored experiences."""
         metas = self.get_trade_metadatas()

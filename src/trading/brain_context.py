@@ -257,7 +257,7 @@ class BrainContextProvider:
     def _build_condition_performance_context(self) -> str:
         """Build a 'Market Condition Performance' block from aggregated trade stats.
 
-        Shows win rate per RSI bucket and volume state.
+        Shows win rate per RSI bucket, volume state, and weekend/weekday split.
         Helps the LLM spot which entry conditions historically led to wins/losses.
         Only includes buckets with >= 2 trades for statistical relevance.
         """
@@ -266,8 +266,9 @@ class BrainContextProvider:
 
         rsi_stats = self.vector_memory.compute_rsi_performance()
         vol_stats = self.vector_memory.compute_volume_performance()
+        wknd_stats = self.vector_memory.compute_weekend_performance()
 
-        if not rsi_stats and not vol_stats:
+        if not rsi_stats and not vol_stats and not wknd_stats:
             return ""
 
         lines = ["### Market Condition Performance (from trade history):"]
@@ -310,6 +311,27 @@ class BrainContextProvider:
             if lines:
                 lines.append("")
             lines.extend(vol_lines)
+
+        wknd_lines = []
+        for key in ("weekend", "weekday"):
+            data = wknd_stats.get(key, {})
+            total = data.get("total_trades", 0)
+            wr = data.get("win_rate")
+            if total >= MIN_TRADES and wr is not None:
+                if wr >= 65:
+                    tag = "FAVORABLE"
+                elif wr <= 35:
+                    tag = "UNFAVORABLE"
+                else:
+                    tag = "neutral"
+                wknd_lines.append(
+                    f"- {key.capitalize()}: {data['winning_trades']}/{total} wins "
+                    f"({wr:.0f}% WR) — {tag}"
+                )
+        if wknd_lines:
+            if lines:
+                lines.append("")
+            lines.extend(wknd_lines)
 
         if len(lines) <= 1:
             return ""

@@ -223,6 +223,7 @@ def build_context_string_from_technical_data(
     current_price: float | None = None,
     sentiment_data: dict[str, Any] | None = None,
     microstructure_data: dict[str, Any] | None = None,
+    is_weekend: bool = False,
     exit_execution_context: "ExitExecutionContext | None" = None,
 ) -> str:
     """Build the rich context string from raw technical indicators.
@@ -253,6 +254,7 @@ def build_context_string_from_technical_data(
             macd_signal=macd_signal,
             volume_state=volume_state,
             bb_position=bb_position,
+            is_weekend=is_weekend,
             market_sentiment=market_sentiment,
             order_book_bias=order_book_bias,
             exit_execution_context=exit_execution_context,
@@ -274,6 +276,8 @@ def build_context_string_from_classified_values(snapshot: "MarketSnapshot") -> s
         context_parts.append(f"Volume {snapshot.volume_state}")
     if snapshot.bb_position != "MIDDLE":
         context_parts.append(f"Price at BB {snapshot.bb_position}")
+    if snapshot.is_weekend:
+        context_parts.append("Weekend Low Volume")
     if snapshot.market_sentiment not in _NEUTRAL_SENTIMENTS:
         context_parts.append(f"Sentiment {snapshot.market_sentiment}")
     if snapshot.order_book_bias not in _BALANCED_BIASES:
@@ -290,6 +294,7 @@ def build_query_document_from_technical_data(
     current_price: float | None = None,
     sentiment_data: dict[str, Any] | None = None,
     microstructure_data: dict[str, Any] | None = None,
+    is_weekend: bool = False,
     exit_execution_context: "ExitExecutionContext | None" = None,
 ) -> str:
     """Build an enriched query document for vector similarity search.
@@ -320,6 +325,7 @@ def build_query_document_from_technical_data(
             macd_signal=macd_signal,
             volume_state=classify_volume_state(technical_data),
             bb_position=bb_position,
+            is_weekend=is_weekend,
             market_sentiment=market_sentiment,
             order_book_bias=order_book_bias,
             exit_execution_context=exit_execution_context,
