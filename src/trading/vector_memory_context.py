@@ -9,6 +9,7 @@ from src.utils.indicator_classifier import (
     classify_rsi_label,
     format_exit_execution_context,
 )
+from src.utils.market_calendar import is_weekend as market_is_weekend
 
 from .data_models import ExitExecutionContext, VectorSearchResult
 
@@ -569,7 +570,7 @@ class VectorMemoryContextMixin:
         if chand_dist is not None:
             parts.append(f"ChandDist={chand_dist * 100:+.2f}%")
 
-        if meta.get("is_weekend", False):
+        if market_is_weekend():
             parts.append("Weekend ⚠️")
 
         exit_execution_text = format_exit_execution_context(

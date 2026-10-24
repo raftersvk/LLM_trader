@@ -11,6 +11,7 @@ import numpy as np
 
 from src.logger.logger import Logger
 from src.utils.data_utils import last_or_scalar
+from src.utils.market_calendar import is_weekend
 
 from ..analysis_context import AnalysisContext
 from ..formatters import (
@@ -234,7 +235,7 @@ class PromptBuilder:
         analysis_timeframes = f"{self.timeframe.upper()}, 1D, 7D, 30D, 365D, and WEEKLY timeframes"
         day_of_week = current_time.strftime("%A")
         weekend_note = ""
-        if day_of_week in ["Saturday", "Sunday"]:
+        if is_weekend(current_time):
             weekend_note = (
                 "\n        - WEEKEND MODE: Trading volume/liquidity is typically lower. "
                 "Be cautious of fakeouts/manipulation."
@@ -267,7 +268,7 @@ class PromptBuilder:
         next_daily = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         milestones.append(f"- Daily Close: in {format_delta(next_daily - current_time)} (00:00 UTC)")
 
-        if current_time.weekday() == 6:
+        if is_weekend(current_time):
             cme_open = current_time.replace(hour=22, minute=0, second=0, microsecond=0)
             if current_time < cme_open:
                 milestones.append(
@@ -276,7 +277,7 @@ class PromptBuilder:
             else:
                 milestones.append("- CME/Service Open: Currently Active (since 22:00 UTC)")
 
-        if current_time.weekday() >= 5:
+        if is_weekend(current_time):
             days_until_monday = (7 - current_time.weekday()) % 7 or 7
             next_weekly = (current_time + timedelta(days=days_until_monday)).replace(
                 hour=0, minute=0, second=0, microsecond=0

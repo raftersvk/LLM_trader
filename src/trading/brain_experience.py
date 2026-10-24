@@ -1,9 +1,11 @@
 """Experience recording behavior for the trading brain."""
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from src.logger.logger import Logger
+from src.utils.market_calendar import is_weekend as market_is_weekend
 from src.utils.indicator_classifier import (
     build_context_string_from_classified_values,
     build_exit_execution_context_from_position,
@@ -65,7 +67,7 @@ class BrainExperienceRecorder:
         surprise_ratio = round(
             abs(pnl_pct - expected_pnl_pct) / max(abs(expected_pnl_pct), 0.01), 4
         )
-        conditions = market_conditions
+        conditions = replace(market_conditions, is_weekend=market_is_weekend())
         exit_execution_context = build_exit_execution_context_from_position(position).with_defaults(
             self.default_exit_execution_context
         )
@@ -171,7 +173,7 @@ class BrainExperienceRecorder:
         timeframe_minutes: int | None = None,
     ) -> None:
         """Track position update decisions for learning."""
-        conditions = market_conditions
+        conditions = replace(market_conditions, is_weekend=market_is_weekend())
         exit_execution_context = build_exit_execution_context_from_position(position)
         sl_moved = new_sl != old_sl
         tp_moved = new_tp != old_tp
