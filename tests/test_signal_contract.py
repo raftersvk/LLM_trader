@@ -93,6 +93,10 @@ def test_numeric_confidence_rounds_to_nearest_five_percent(raw, expected):
         pytest.param(140, 1.0, id="above-hundred-clamped"),
         pytest.param(0.6, 0.60, id="fraction-input"),
         pytest.param("57", 0.55, id="numeric-string"),
+        pytest.param(1, 0.0, id="integer-one-is-a-low-score"),
+        pytest.param(1.0, 0.0, id="float-one-is-a-low-score"),
+        pytest.param(2, 0.0, id="two-is-a-low-score"),
+        pytest.param(0.99, 1.0, id="just-below-one-is-a-fraction"),
     ],
 )
 def test_numeric_confidence_clamps_and_accepts_fractions(raw, expected):
