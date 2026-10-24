@@ -16,8 +16,32 @@ from src.utils.timeframe_validator import TimeframeValidator
 
 ROOT_DIR = Path(__file__).parent.parent.parent.resolve()
 CONFIG_DIR = ROOT_DIR / "config"
-KEYS_ENV_PATH = ROOT_DIR / "keys.env"
-CONFIG_INI_PATH = CONFIG_DIR / "config.ini"
+
+
+def _resolve_keys_env_path() -> Path:
+    """Resolve the keys file: environment override, then the module constant.
+
+    Falls back to the module-level ``KEYS_ENV_PATH`` so tests (and embedders)
+    that monkeypatch it keep working.
+    """
+    override = os.environ.get("LLM_TRADER_KEYS_ENV")
+    if override:
+        return Path(override)
+    return globals().get("KEYS_ENV_PATH", ROOT_DIR / "keys.env")
+
+
+def _resolve_config_ini_path() -> Path:
+    """Resolve config.ini: environment override, then the module constant."""
+    override = os.environ.get("LLM_TRADER_CONFIG_INI")
+    if override:
+        return Path(override)
+    return globals().get("CONFIG_INI_PATH", CONFIG_DIR / "config.ini")
+
+
+# Module-level defaults (kept for importers); Config resolves them again per
+# instance so --config and Config.reload() see environment changes.
+KEYS_ENV_PATH = _resolve_keys_env_path()
+CONFIG_INI_PATH = _resolve_config_ini_path()
 
 VALID_PROVIDERS = {"local", "googleai", "openrouter", "deepseek", "litellm", "all"}
 VALID_EXIT_TYPES = {"soft", "hard"}
@@ -42,7 +66,8 @@ class Config:
 
     def _load_environment(self):
         """Merge optional keys.env with process variables; process values take precedence."""
-        env_vars = dotenv_values(KEYS_ENV_PATH) if KEYS_ENV_PATH.exists() else {}
+        keys_path = _resolve_keys_env_path()
+        env_vars = dotenv_values(keys_path) if keys_path.exists() else {}
         env_vars.update(os.environ)
         for key, value in env_vars.items():
             if value is None:
@@ -59,9 +84,10 @@ class Config:
 
     def _load_ini_config(self):
         """Load configuration from config.ini file."""
-        if not CONFIG_INI_PATH.exists():
+        config_ini_path = _resolve_config_ini_path()
+        if not config_ini_path.exists():
             raise FileNotFoundError(
-                f"Configuration file not found: {CONFIG_INI_PATH}. "
+                f"Configuration file not found: {config_ini_path}. "
                 "Please create config.ini in the config directory."
             )
 
@@ -71,7 +97,7 @@ class Config:
                 inline_comment_prefixes=("#", ";"),
             )
             config.optionxform = lambda optionstr: optionstr
-            config.read(CONFIG_INI_PATH, encoding="utf-8")
+            config.read(config_ini_path, encoding="utf-8")
 
             for section_name in config.sections():
                 section_data = {}
@@ -88,7 +114,7 @@ class Config:
                     section_data[key] = converted_value
                 self._config_data[section_name] = section_data
         except Exception as e:
-            raise RuntimeError(f"Error loading configuration file {CONFIG_INI_PATH}: {e}") from e
+            raise RuntimeError(f"Error loading configuration file {config_ini_path}: {e}") from e
 
     def _prompt_budget_int(self, key: str, default: int) -> int:
         value = self.get_config("prompt_budget", key, default)
@@ -1068,5 +1094,22 @@ class Config:
     @property
     def VISION_PROVIDER(self):
         return self.get_config('ai_providers', 'vision_provider', None)
+
+    def reload(self) -> None:
+        """Reload keys.env and config.ini (honours the path env overrides again).
+
+        Keeps the long-lived ``config`` instance usable after a runtime config
+        change without restarting the process.
+        """
+        self._env_vars = {}
+        self._config_data = {}
+        self._load_environment()
+        self._load_ini_config()
+        self._validate_provider()
+        self._validate_exit_monitoring()
+        self._build_model_configs()
+        self._validate_model_verbosity()
+        self._validate_prompt_budget()
+
 
 config = Config()
