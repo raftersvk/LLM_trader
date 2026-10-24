@@ -55,22 +55,20 @@ class BotDependencyFactory:
             return self._bot_instances[symbol]
 
         self.logger.debug("BotFactory: cloning shared dependencies for %s", symbol)
-        deps = self._clone_dependencies(symbol)
+        shared_deps = self._clone_dependencies(symbol)
         self.logger.debug("BotFactory: creating pair-specific services for %s", symbol)
         pair_services = self._create_pair_services(symbol)
-
-        deps['persistence'] = pair_services['persistence']
-        deps['brain_service'] = pair_services['brain_service']
-        deps['statistics_service'] = pair_services['statistics_service']
-        deps['memory_service'] = pair_services['memory_service']
-        deps['trading_strategy'] = pair_services['strategy']
 
         self.logger.debug("BotFactory: instantiating CryptoTradingBot for %s", symbol)
         bot_logger = self.logger.getChild(symbol.replace("/", "_"))
         bot_logger.set_symbol(symbol)
 
         pair_deps = dict(self.base_dependencies)
+        pair_deps.update(shared_deps)
         pair_deps.update(pair_services)
+        # _create_pair_services exposes the strategy as "strategy"; BotServices and
+        # the position monitor read it as "trading_strategy".
+        pair_deps["trading_strategy"] = pair_services["strategy"]
         pair_deps["market_analyzer"] = await self._create_engine_for_pair(symbol)
 
         def _create_position_monitor(bot: CryptoTradingBot) -> PositionStatusMonitor:
