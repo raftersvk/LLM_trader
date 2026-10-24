@@ -350,10 +350,12 @@ def evaluate_threshold(
         observation for observation in scored
         if observation.noul >= effective_threshold(observation, threshold, rules)
     ]
+    # Match JevGate.check_pre: only an explicit ``none`` bias blocks; a
+    # missing or unparseable bias (None) is allowed and the trade is taken.
     taken = [
         observation for observation in covered
         if observation.is_directional
-        and observation.bias not in (None, "none")
+        and observation.bias != "none"
         and not _bias_conflict(observation)
     ]
     returns = [value for value in (net_return_pct(observation, horizon, cost_pct) for observation in taken)

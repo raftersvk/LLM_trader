@@ -136,6 +136,16 @@ def test_threshold_curve_mirrors_pre_gate_rules():
     assert row["directional_auc"] == pytest.approx(1.0)
 
 
+def test_threshold_curve_allows_missing_bias():
+    """check_pre only blocks an explicit ``none`` bias, not a missing answer."""
+    record = _record(0.9, None, "BUY", 0.02)
+    row = jev_calibration.threshold_curve([record], [0.5], horizon=1)[0]
+
+    assert row["trade_count"] == 1
+    assert row["hold_count"] == 0
+    assert row["base_trade_precision"] == pytest.approx(1.0)
+
+
 def test_threshold_curve_auc_is_none_without_both_classes():
     """A one-sided directional subset must not fabricate an AUC."""
     records = [

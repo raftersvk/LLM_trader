@@ -333,6 +333,17 @@ def test_load_observations_skips_malformed_lines(tmp_path):
     assert jev_calibrate.filter_window(observations, NOW + timedelta(days=61)) == []
 
 
+def test_missing_bias_is_tradeable_but_explicit_none_is_not():
+    """Match JevGate.check_pre: None bias is allowed, ``none`` is a hold."""
+    missing = jev_calibrate.evaluate_threshold([_obs(0.9, "BUY", 0.02, bias=None)], 0.5)
+    explicit = jev_calibrate.evaluate_threshold([_obs(0.9, "BUY", 0.02, bias="none")], 0.5)
+
+    assert missing["trades"] == 1
+    assert missing["net_benefit"] == pytest.approx(1.9)
+    assert explicit["trades"] == 0
+    assert explicit["net_benefit"] == 0.0
+
+
 def test_net_labels_apply_cost_and_direction():
     """Labels and net returns use the base direction and the cost."""
     buy_win = _obs(0.5, "BUY", 0.02)

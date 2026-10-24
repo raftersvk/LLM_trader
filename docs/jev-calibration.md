@@ -143,6 +143,7 @@ can improve the hit rate but cannot make the probability itself honest.
   dominated by this rare-event base rate; noul could still be useful for a
   different tradeability definition or horizon.
 - Coverage uses noul alone; trade count and false holds additionally apply the
-  bias-none and bias-conflict rules of the production pre-gate.
+  production pre-gate rules: an explicit `bias == none` and a bias conflict
+  block, while a missing/unparseable bias is allowed (as in `check_pre`).
 - No LLM decisions were run in this calibration; rerun with `--base llm` style
   plumbing only after an LLM baseline is available.

@@ -273,13 +273,15 @@ def _is_blocked(record: CalibrationRecord, threshold: float) -> bool:
 
     Mirrors the production pre-gate: a state is tradeable when ``noul`` is at
     or above the threshold and the bias is not ``none``; a bias that directly
-    contradicts the base action also blocks the trade.
+    contradicts the base action also blocks the trade. A missing or
+    unparseable bias (``None``) is allowed by ``JevGate.check_pre`` and must
+    not be treated as a hold here.
     """
     if record.base_action not in ("BUY", "SELL"):
         return False
     if record.noul is None or record.noul < threshold:
         return True
-    if record.bias is None or record.bias == "none":
+    if record.bias == "none":
         return True
     if record.base_action == "BUY" and record.bias == "short":
         return True
