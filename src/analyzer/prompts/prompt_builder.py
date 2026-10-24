@@ -49,6 +49,9 @@ class PromptBuilder:
         self.logger = logger
         self.custom_instructions: list[str] = []
         self.context: AnalysisContext | None = None
+        # Prompt clock: None means the current wall clock; replay/signals set
+        # the analysed candle close so no later date leaks into the prompt.
+        self.analysis_as_of: datetime | None = None
         self.config = config
         if format_utils is None:
             raise ValueError("format_utils is required for PromptBuilder")
@@ -86,7 +89,7 @@ class PromptBuilder:
         self.context = context
 
         sections = [
-            self.build_trading_context(context),
+            self.build_trading_context(context, now=self.analysis_as_of),
         ]
 
         if position_context:
@@ -207,8 +210,15 @@ class PromptBuilder:
 
         return final_prompt
 
-    def build_trading_context(self, context: AnalysisContext) -> str:
-        current_time = datetime.now(timezone.utc)
+    def build_trading_context(self, context: AnalysisContext, now: datetime | None = None) -> str:
+        """Build the trading context with an explicit prompt clock.
+
+        Args:
+            context: Analysis context with symbol and price.
+            now: Prompt clock. None uses the current UTC time; replay passes the
+                analysed candle close so the prompt cannot describe a later date.
+        """
+        current_time = now or datetime.now(timezone.utc)
         candle_status = ""
         timeframe_minutes = 60
         if self.timeframe_validator:
@@ -575,6 +585,7 @@ class PromptBuilder:
             indicator_delta_alert="",
             dynamic_thresholds=dynamic_thresholds,
             model_verbosity=eff_verbosity,
+            analysis_as_of=self.analysis_as_of,
         )
 
         if ev_context:

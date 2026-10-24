@@ -314,7 +314,8 @@ class TemplateManager:
                             last_analysis_time: str | None = None,
                             indicator_delta_alert: str = "",
                             dynamic_thresholds: dict[str, Any] | None = None,
-                            model_verbosity: str | None = None) -> str:
+                            model_verbosity: str | None = None,
+                            analysis_as_of: datetime | None = None) -> str:
         # pylint: disable=too-many-arguments
         """Build the system prompt for trading decision AI.
         Returns:
@@ -595,7 +596,7 @@ class TemplateManager:
                     ])
                 header_lines.extend([
                     "### DETERMINISTIC TIME CHECK",
-                    f"- **Current Time**: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC",
+                    f"- **Current Time**: {(analysis_as_of or datetime.now(timezone.utc)).strftime('%Y-%m-%d %H:%M:%S')} UTC",
                     "- **Relevance**: Previous reasoning must be verified against current data. If previous claims (e.g., 'approaching' events) contradict the current clock or were based on now-outdated milestones, ignore or correct them.",
                     f"- **Relevance Window**: Only consider an event 'imminent' if it occurs within the next 2 full candles (Window: {window_minutes} minutes).",
                     "",

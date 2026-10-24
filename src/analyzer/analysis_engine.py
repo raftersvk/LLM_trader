@@ -92,9 +92,14 @@ class AnalysisEngine:
         data_collector=None,
         metrics_calculator=None,
         result_processor=None,
-        chart_generator=None
+        chart_generator=None,
+        analysis_as_of: datetime | None = None
     ) -> None:
-        """Initialize the engine with the injected DI dependencies."""
+        """Initialize the engine with the injected DI dependencies.
+
+        ``analysis_as_of`` is the explicit prompt clock. It is ``None`` for the
+        live bot (wall clock) and the analysed candle close in replay/signals.
+        """
         # pylint: disable=too-many-arguments, too-many-locals
         self.logger = logger
 
@@ -105,6 +110,8 @@ class AnalysisEngine:
         self.context = None
         self.article_urls = {}
         self.previous_microstructure_snapshots: dict[str, dict[str, Any]] = {}
+        # Explicit prompt clock: None means the current wall clock.
+        self.analysis_as_of: datetime | None = analysis_as_of
 
         try:
             self.timeframe = TimeframeValidator.validate_and_normalize(self.config.TIMEFRAME)
@@ -138,6 +145,15 @@ class AnalysisEngine:
         self.last_response_timestamp: str | None = None
         self.last_response_validation: dict[str, Any] | None = None
         self.last_chart_buffer: io.BytesIO | None = None
+
+    def set_analysis_as_of(self, analysis_as_of: datetime | None) -> None:
+        """Freeze the prompt clock to an explicit time (None restores wall clock).
+
+        Args:
+            analysis_as_of: Time the prompt must describe, normally the close of
+                the analysed candle.
+        """
+        self.analysis_as_of = analysis_as_of
 
     def initialize_for_symbol(self, symbol: str, exchange, timeframe=None) -> None:
         """
@@ -521,6 +537,10 @@ class AnalysisEngine:
                     self.logger.warning("Chart generation failed, proceeding without chart analysis")
 
         assert self.prompt_builder is not None
+        # Freeze the prompt clock to the analysed candle close (replay) or to
+        # the current wall clock (live default). Without this the prompt tells
+        # the model today's date while replay shows a historical candle.
+        self.prompt_builder.analysis_as_of = self.analysis_as_of
         system_prompt = self.prompt_builder.build_system_prompt(
             self.symbol,
             self.context,
