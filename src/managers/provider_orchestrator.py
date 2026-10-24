@@ -45,6 +45,30 @@ class ProviderOrchestrator:
         self.prompt_budget = prompt_budget
         self.provider_health = provider_health
         self._providers = self._build_provider_metadata()
+        self._register_litellm_context_windows()
+
+    def _register_litellm_context_windows(self) -> None:
+        """Give the LiteLLM/vision models a context window for the prompt budget.
+
+        PromptBudgetPolicy refuses unknown targets, so without this the fork's
+        providers could never run through the budgeted request pipeline.
+        """
+        if self.prompt_budget is None:
+            return
+        windows = self.prompt_budget.context_windows
+        default_window = int(getattr(self.config, "LITELLM_CONTEXT_WINDOW", 1_000_000) or 1_000_000)
+        candidates = {
+            "litellm": getattr(self.config, "LITELLM_MODEL", None),
+            "vision_litellm": (
+                getattr(self.config, "VISION_MODEL", None)
+                or getattr(self.config, "LITELLM_MODEL", None)
+            ),
+        }
+        for provider, model in candidates.items():
+            if not model:
+                continue
+            key = f"{provider}/{model}"
+            windows.setdefault(key, default_window)
 
     def _build_provider_metadata(self) -> dict[str, ProviderMetadata]:
         """Build provider metadata registry from clients and config."""
@@ -160,7 +184,7 @@ class ProviderOrchestrator:
         chain = ["googleai", "deepseek", "openrouter", "blockrun"]
         if self.is_available("vision_litellm"):
             chain.append("vision_litellm")
-        elif self.is_available("litellm"):
+        if self.is_available("litellm"):
             chain.append("litellm")
         return chain
 
@@ -318,16 +342,26 @@ class ProviderOrchestrator:
         Returns:
             InvocationResult with response
         """
+        vision = self._providers.get("vision_litellm")
+        vision_available = vision is not None and vision.is_available()
+
         if effective_provider == "all":
-            vision = self._providers.get("vision_litellm")
-            if vision is not None and vision.is_available():
-                vision_model = model or vision.default_model
-                self.logger.info("Using dedicated vision LiteLLM (model: %s)", vision_model)
-                return await self._invoke_litellm(
-                    vision, messages, vision_model, chart=True, chart_image=chart_image
-                )
+            chain = self._all_chart_chain()
+            if vision_available:
+                chain = ["vision_litellm"] + [p for p in chain if p != "vision_litellm"]
             return await self.invoke_with_fallback(
-                self._all_chart_chain(), messages, chart=True, chart_image=chart_image, model=model
+                chain, messages, chart=True, chart_image=chart_image, model=model
+            )
+
+        if effective_provider == "litellm" and vision_available:
+            # The fork's usual provider setting: try the vision endpoint first, then
+            # the text LiteLLM client, through the budgeted/health-tracked chain.
+            return await self.invoke_with_fallback(
+                ["vision_litellm", "litellm"],
+                messages,
+                chart=True,
+                chart_image=chart_image,
+                model=model,
             )
         if effective_provider == "local":
             return InvocationResult(
