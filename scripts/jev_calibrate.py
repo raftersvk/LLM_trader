@@ -121,9 +121,19 @@ def observation_from_line(line: Dict[str, Any]) -> Optional[Observation]:
 
 
 def load_observations(path: str) -> List[Observation]:
-    """Load a JSONL observation log, skipping malformed lines."""
+    """Load a JSONL observation log, skipping malformed lines.
+
+    A missing log is not an error: the first weekly run (or a run after
+    cleanup) has zero observations and must still produce the 0.5 fallback
+    policy instead of crashing cron.
+    """
     observations: List[Observation] = []
-    with open(path, "r", encoding="utf-8") as handle:
+    try:
+        handle = open(path, "r", encoding="utf-8")
+    except FileNotFoundError:
+        logger.warning("observation log not found (%s); treating it as empty", path)
+        return []
+    with handle:
         for number, raw in enumerate(handle, start=1):
             raw = raw.strip()
             if not raw:

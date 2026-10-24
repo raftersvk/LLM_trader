@@ -428,6 +428,24 @@ def test_missing_bias_is_tradeable_but_explicit_none_is_not():
     assert explicit["net_benefit"] == 0.0
 
 
+
+def test_load_observations_missing_file_is_empty(tmp_path):
+    """A missing log is a warning, not a crash."""
+    assert jev_calibrate.load_observations(str(tmp_path / "missing.jsonl")) == []
+
+
+def test_calibrate_policy_without_observations_returns_fallback(tmp_path):
+    """The first weekly run with no log still writes a valid 0.5 policy."""
+    observations = jev_calibrate.load_observations(str(tmp_path / "missing.jsonl"))
+    policy = jev_calibrate.calibrate_policy(observations, None, NOW)
+
+    assert policy["status"] == "fallback"
+    assert policy["threshold"] == 0.5
+    assert policy["metrics"]["sample"] == 0
+    assert policy["metrics"]["label_states_used"] == 0
+    assert "0 < 200" in policy["metrics"]["reason"]
+    assert jev_calibrate.validate_policy(policy) == []
+
 def test_net_labels_apply_cost_and_direction():
     """Labels and net returns use the base direction and the cost."""
     buy_win = _obs(0.5, "BUY", 0.02)

@@ -45,6 +45,9 @@ aborted run never replaces a non-empty log with its partial states. Running the
 harness per symbol therefore accumulates a cross-pair history; no manual
 concatenation is required.
 
+A missing observation log is treated as zero states: the first weekly run (or
+one after cleanup) still writes the 0.5 fallback policy instead of failing.
+
 `cost_pct` defaults to 0.10 % for a fresh calibration run and is stored in the
 report dataset. A flag-free `--aggregate-from` carries it over (including an
 explicit zero); an explicit `--cost-pct` overrides it.
