@@ -70,8 +70,10 @@ the sum of the directional net P&L in percent for the trades that survive the
 gate.
 
 The absolute `abs(forward_h1) >= 1 %` label remains the **secondary** label in
-`docs/jev-calibration.md` and in the per-report Brier/reliability tables; it is
-not used to build the policy.
+`docs/jev-calibration.md`; it is not used to build the policy. That document no
+longer treats Brier alone as a headline: the label is rare (1-4 %), so Brier
+must be read with Brier skill scores and ranking metrics, not against a
+constant predictor alone.
 
 `--min-states` (default 200) applies to trade-labeled states, not raw
 observations. HOLD states have no trade direction and are excluded; the policy
@@ -180,6 +182,49 @@ Even if the 200-state minimum were waived, no training threshold with coverage
 -3.87 to -0.97. The positive points (0.60-0.70: +1.42/+1.46) sit at 12-19 %
 coverage. At the retained 0.5 threshold the held-out OOS net benefit is -1.21
 over 282 states.
+
+## Calibration evidence (2026-10-24 audit)
+
+The independent audit of the committed calibration reports changes how the
+policy layer must be interpreted. The evidence, reproduced from
+`runtime/jev_bench/calibration_{btc,eth}_200.json`:
+
+- **Class imbalance:** the h1 worth-trading label has BTC 2/200 (1.0 %) and ETH
+  8/200 (4.0 %) positives. A constant base-rate predictor scores Brier 0.0099
+  (BTC) / 0.0384 (ETH), which is trivially strong at that prevalence; raw noul
+  Brier is 0.2504 / 0.2271. These two numbers are **not** comparable as a
+  head-to-head model verdict.
+- **Ranking, not calibration:** noul ranks worth-trading h1 states with AUC
+  0.854 (BTC) / 0.652 (ETH), but Brier skill against both the constant and a
+  logistic baseline is strongly negative. noul is a ranking signal, not a
+  calibrated probability.
+- **No directional edge:** directional AUC (noul predicting
+  `base_direction_correct`) is 0.526 (BTC) / 0.545 (ETH) on h1, with bootstrap
+  CIs spanning 0.5. The policy must not treat noul as a direction predictor.
+- **No demonstrated edge per symbol:** over all labeled states at
+  `noul >= 0.5`, BTC has 18 trades, net **-2.87 %** at 0.10 % cost and is
+  negative at 0.0/0.5/0.65/0.8 thresholds and at 0.05/0.10/0.20 % costs. ETH
+  has 29 trades, **+1.41 %** at 0.10 % but **-1.49 %** at 0.20 %, a
+  cost-sensitive sign flip. Per the reworked report, both are "no demonstrated
+  edge".
+- **Per-symbol OOS only:** the calibration report now evaluates economics
+  separately per symbol on the last 30 % of scored states. It never pools
+  symbols and never uses the in-sample slice to claim an edge.
+
+Consequences for this policy layer:
+
+1. Keep the **0.5 fallback** and do not change the signal service in this
+   rework. No gate or threshold behavior changes.
+2. Do not promote a weekly threshold on the strength of in-sample precision or
+   a single cost assumption. Promotion must survive the existing held-out OOS
+   improvement rule, and a cost-sensitive sign flip is a rejection.
+3. Do not read `metrics.brier` / `metrics.raw_brier` in a policy as evidence of
+   skill by themselves; the policy label is the directional trade-P&L label,
+   but the sample is still small and the calibration doc's class-imbalance
+   caveat applies.
+4. A real edge would require a larger multi-regime sample, positive net OOS at
+   the highest tested cost (0.20 %), a bootstrap net CI excluding zero with a
+   stable sign across costs, and directional AUC with a CI above 0.5.
 
 ## Planned signal-service integration (not in this PR)
 

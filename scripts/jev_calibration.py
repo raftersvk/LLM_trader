@@ -21,6 +21,24 @@ the primary horizon (default 1 candle). The base decision is the rule-based
 momentum proxy already used by ``scripts/bench_jev.py``; it is NOT an LLM and
 the base-trade precision numbers must be read with that caveat.
 
+Metrics are decision-oriented rather than a single Brier headline:
+
+* per horizon and symbol: prevalence, Brier, Brier skill against a constant
+  base-rate predictor AND a one-feature logistic baseline, AUC, PR-AUC and a
+  reliability table;
+* when prevalence is below 5 %, the report carries an explicit warning that a
+  constant predictor's Brier is trivially strong and must not be compared
+  head-to-head with a model's Brier;
+* economics are per symbol (never pooled) on the chronological OOS tail only,
+  with cost sensitivity at 0.05 / 0.10 / 0.20 % and a deterministic bootstrap
+  95 % CI for net percent. A sign flip across the cost range is reported as
+  "no demonstrated edge".
+
+noul is a tradeability *ranking* signal (AUC/PR-AUC), not a calibrated
+probability and not a direction predictor; directional AUC is reported with a
+bootstrap CI. The 0.5 fallback threshold is unchanged and this script never
+modifies the service.
+
 A 429 / quota error stops the run immediately. The partial report is still
 written and marked ``aborted`` so an exhausted quota can never masquerade as a
 full calibration.
@@ -32,7 +50,9 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
+import random
 import statistics
 import sys
 import time
@@ -76,6 +96,14 @@ DEFAULT_SYMBOL = "BTC/USDT"
 DEFAULT_TIMEFRAME = "1h"
 DEFAULT_DELAY_SECONDS = 0.5
 DEFAULT_COST_PCT = 0.10
+FALLBACK_THRESHOLD = 0.5
+# Economics are always evaluated on a chronological held-out slice. The last
+# 30 % of scored states are never used to describe in-sample behaviour.
+ECONOMICS_OOS_FRACTION = 0.30
+COST_SENSITIVITY_PCT = (0.05, 0.10, 0.20)
+BOOTSTRAP_RESAMPLES = 2000
+BOOTSTRAP_SEED = 20261024
+LOW_PREVALENCE = 0.05
 
 
 @dataclass
@@ -241,6 +269,322 @@ def calibration_reliability(
             )
         result.append(entry)
     return result
+
+
+def ranking_auc(scores: Sequence[float], labels: Sequence[bool]) -> Optional[float]:
+    """Rank-based AUC with ties counted as half; None if one class is absent."""
+    if len(scores) != len(labels):
+        raise ValueError("scores and labels must have the same length")
+    positives = [float(score) for score, label in zip(scores, labels) if label]
+    negatives = [float(score) for score, label in zip(scores, labels) if not label]
+    if not positives or not negatives:
+        return None
+    wins = 0.0
+    for positive in positives:
+        for negative in negatives:
+            if positive > negative:
+                wins += 1.0
+            elif positive == negative:
+                wins += 0.5
+    return wins / (len(positives) * len(negatives))
+
+
+def average_precision(scores: Sequence[float], labels: Sequence[bool]) -> Optional[float]:
+    """PR-AUC as average precision, processing tied scores as one group."""
+    if len(scores) != len(labels):
+        raise ValueError("scores and labels must have the same length")
+    total_positives = sum(1 for label in labels if label)
+    if not scores or not total_positives:
+        return None
+    order = sorted(range(len(scores)), key=lambda index: (-float(scores[index]), index))
+    true_positives = 0
+    false_positives = 0
+    previous_recall = 0.0
+    area = 0.0
+    position = 0
+    while position < len(order):
+        score = float(scores[order[position]])
+        end = position
+        while end < len(order) and float(scores[order[end]]) == score:
+            end += 1
+        for index in order[position:end]:
+            if labels[index]:
+                true_positives += 1
+            else:
+                false_positives += 1
+        recall = true_positives / total_positives
+        precision = true_positives / (true_positives + false_positives)
+        area += (recall - previous_recall) * precision
+        previous_recall = recall
+        position = end
+    return area
+
+
+def brier_skill_score(brier: Optional[float], reference: Optional[float]) -> Optional[float]:
+    """Skill of a Brier score relative to a reference (1 = perfect, 0 = tie)."""
+    if brier is None or reference is None or reference <= 0.0:
+        return None
+    return 1.0 - float(brier) / float(reference)
+
+
+def _sigmoid(value: float) -> float:
+    """Numerically stable logistic function."""
+    if value >= 0.0:
+        return 1.0 / (1.0 + math.exp(-value))
+    exponent = math.exp(value)
+    return exponent / (1.0 + exponent)
+
+
+def fit_logistic_regression(
+    probabilities: Sequence[float],
+    labels: Sequence[bool],
+    l2: float = 1e-4,
+    iterations: int = 100,
+) -> Optional[Tuple[float, float]]:
+    """Fit a one-feature logistic baseline ``P(label) = sigmoid(a * noul + b)``.
+
+    Pure-Python Newton-Raphson with a small L2 penalty so the fit stays finite
+    when noul separates the labels. The baseline is fitted on the same scored
+    states it is scored on; it is a reference, not a cross-validated model.
+    """
+    if len(probabilities) != len(labels):
+        raise ValueError("probabilities and labels must have the same length")
+    if not probabilities or len({bool(label) for label in labels}) < 2:
+        return None
+    count = len(probabilities)
+    slope = 0.0
+    intercept = 0.0
+    for _ in range(iterations):
+        grad_slope = 0.0
+        grad_intercept = 0.0
+        hess_ss = 0.0
+        hess_si = 0.0
+        hess_ii = 0.0
+        for probability, label in zip(probabilities, labels):
+            x_value = float(probability)
+            predicted = _sigmoid(slope * x_value + intercept)
+            error = predicted - (1.0 if label else 0.0)
+            weight = max(predicted * (1.0 - predicted), 1e-12)
+            grad_slope += error * x_value
+            grad_intercept += error
+            hess_ss += weight * x_value * x_value
+            hess_si += weight * x_value
+            hess_ii += weight
+        grad_slope = grad_slope / count + l2 * slope
+        grad_intercept = grad_intercept / count + l2 * intercept
+        hess_ss = hess_ss / count + l2
+        hess_si = hess_si / count
+        hess_ii = hess_ii / count + l2
+        determinant = hess_ss * hess_ii - hess_si * hess_si
+        if abs(determinant) < 1e-12:
+            break
+        delta_slope = (hess_ii * grad_slope - hess_si * grad_intercept) / determinant
+        delta_intercept = (-hess_si * grad_slope + hess_ss * grad_intercept) / determinant
+        largest = max(abs(delta_slope), abs(delta_intercept))
+        if largest > 10.0:
+            scale = 10.0 / largest
+            delta_slope *= scale
+            delta_intercept *= scale
+        slope -= delta_slope
+        intercept -= delta_intercept
+        if abs(delta_slope) < 1e-10 and abs(delta_intercept) < 1e-10:
+            break
+    return (intercept, slope)
+
+
+def logistic_brier(probabilities: Sequence[float], labels: Sequence[bool]) -> Optional[float]:
+    """In-sample Brier score of the one-feature logistic baseline."""
+    model = fit_logistic_regression(probabilities, labels)
+    if model is None:
+        return None
+    intercept, slope = model
+    predicted = [_sigmoid(slope * float(value) + intercept) for value in probabilities]
+    return calibration_brier(predicted, labels)
+
+
+def _percentile(ordered: Sequence[float], quantile: float) -> Optional[float]:
+    """Linear-interpolation percentile over an already sorted sequence."""
+    if not ordered:
+        return None
+    if len(ordered) == 1:
+        return float(ordered[0])
+    position = (len(ordered) - 1) * quantile / 100.0
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return float(ordered[lower])
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def bootstrap_auc_ci(
+    scores: Sequence[float],
+    labels: Sequence[bool],
+    resamples: int = BOOTSTRAP_RESAMPLES,
+    seed: int = BOOTSTRAP_SEED,
+) -> Optional[Dict[str, Optional[float]]]:
+    """Deterministic bootstrap 95 % CI for the rank AUC."""
+    if len(scores) != len(labels):
+        raise ValueError("scores and labels must have the same length")
+    if ranking_auc(scores, labels) is None:
+        return None
+    generator = random.Random(seed)
+    count = len(scores)
+    values: List[float] = []
+    for _ in range(resamples):
+        indices = [generator.randrange(count) for _ in range(count)]
+        sampled_scores = [float(scores[index]) for index in indices]
+        sampled_labels = [bool(labels[index]) for index in indices]
+        value = ranking_auc(sampled_scores, sampled_labels)
+        if value is not None:
+            values.append(value)
+    if not values:
+        return None
+    values.sort()
+    return {
+        "low": _rounded(_percentile(values, 2.5)),
+        "high": _rounded(_percentile(values, 97.5)),
+        "resamples": resamples,
+    }
+
+
+def bootstrap_net_ci(
+    returns: Sequence[float],
+    resamples: int = BOOTSTRAP_RESAMPLES,
+    seed: int = BOOTSTRAP_SEED,
+) -> Optional[Dict[str, Optional[float]]]:
+    """Deterministic bootstrap 95 % CI for summed trade net percent."""
+    if len(returns) < 2:
+        return None
+    generator = random.Random(seed)
+    count = len(returns)
+    values: List[float] = []
+    for _ in range(resamples):
+        total = 0.0
+        for _ in range(count):
+            total += returns[generator.randrange(count)]
+        values.append(total)
+    values.sort()
+    return {
+        "low": _rounded(_percentile(values, 2.5)),
+        "high": _rounded(_percentile(values, 97.5)),
+        "resamples": resamples,
+    }
+
+
+def directional_auc_report(
+    records: Sequence[CalibrationRecord],
+    horizon: int,
+) -> Dict[str, Any]:
+    """AUC of noul ranking the base action's directional correctness.
+
+    This measures whether a higher noul means the momentum proxy is more often
+    right about direction. It is not a tradeability signal by itself.
+    """
+    scored = [
+        record for record in records
+        if record.noul is not None
+        and record.base_action in ("BUY", "SELL")
+        and record.base_direction_correct.get(horizon) is not None
+    ]
+    scores = [record.noul for record in scored]  # type: ignore[misc]
+    labels = [bool(record.base_direction_correct[horizon]) for record in scored]
+    return {
+        "state_count": len(scored),
+        "auc": _rounded(ranking_auc(scores, labels)),
+        "ci95": bootstrap_auc_ci(scores, labels),
+    }
+
+
+def _directional_net_return_pct(
+    record: CalibrationRecord, horizon: int, cost_pct: float
+) -> Optional[float]:
+    """Base-action forward P&L in percent, net of round-trip cost."""
+    result = record.forward_returns.get(horizon)
+    if result is None or record.base_action not in ("BUY", "SELL"):
+        return None
+    gross = result * 100.0 if record.base_action == "BUY" else -result * 100.0
+    return gross - float(cost_pct)
+
+
+def oos_split(
+    records: Sequence[CalibrationRecord],
+    horizon: int,
+    fraction: float = ECONOMICS_OOS_FRACTION,
+) -> Tuple[List[CalibrationRecord], List[CalibrationRecord]]:
+    """Chronological train/OOS split; the held-out tail is used for economics."""
+    if not 0.0 < fraction < 1.0:
+        raise ValueError("OOS fraction must be in (0, 1)")
+    scored = [
+        record for record in records
+        if record.noul is not None and horizon in record.worth_trading
+    ]
+    scored.sort(key=lambda record: (record.candle_open_time or record.as_of, record.index))
+    if len(scored) < 2:
+        return [], scored
+    cut = int(round(len(scored) * (1.0 - fraction)))
+    cut = min(max(cut, 1), len(scored) - 1)
+    return scored[:cut], scored[cut:]
+
+
+def economics_report(
+    records: Sequence[CalibrationRecord],
+    horizon: int,
+    threshold: float = FALLBACK_THRESHOLD,
+) -> Dict[str, Any]:
+    """Per-symbol OOS economics at one threshold with cost sensitivity.
+
+    Trade selection mirrors the audit that found the headline comparison
+    misleading: a base BUY/SELL whose noul clears the threshold. Only the
+    chronological held-out tail contributes. The verdict never pools symbols.
+    """
+    train, oos = oos_split(records, horizon)
+    costs: Dict[str, Any] = {}
+    nets: List[float] = []
+    for cost_pct in COST_SENSITIVITY_PCT:
+        returns = [
+            value for value in (
+                _directional_net_return_pct(record, horizon, cost_pct)
+                for record in oos
+                if record.noul is not None and record.noul >= threshold
+            )
+            if value is not None
+        ]
+        net = sum(returns)
+        nets.append(net)
+        costs[f"{cost_pct:.2f}"] = {
+            "trades": len(returns),
+            "net_pct": _rounded(net),
+            "mean_pct": _rounded(statistics.fmean(returns)) if returns else None,
+            "win_rate": _rounded(
+                sum(1 for value in returns if value > 0.0) / len(returns)
+            ) if returns else None,
+            "net_ci95": bootstrap_net_ci(returns),
+        }
+
+    sign_flip = bool(nets) and min(nets) < 0.0 < max(nets)
+    any_trades = any(entry["trades"] for entry in costs.values())
+    if not any_trades:
+        verdict = "no demonstrated edge (no OOS trades)"
+    elif sign_flip:
+        verdict = "no demonstrated edge (cost-sensitive sign flip)"
+    elif all(net > 0.0 for net in nets):
+        verdict = "positive at all tested costs"
+    else:
+        verdict = "no demonstrated edge (non-positive at all tested costs)"
+    return {
+        "evaluated_on": "oos",
+        "oos_fraction": ECONOMICS_OOS_FRACTION,
+        "threshold": threshold,
+        "trade_rule": "base_action in BUY/SELL and noul >= threshold",
+        "train_states": len(train),
+        "oos_states": len(oos),
+        "oos_first": oos[0].candle_open_time or oos[0].as_of if oos else None,
+        "oos_last": oos[-1].candle_open_time or oos[-1].as_of if oos else None,
+        "cost_pct": costs,
+        "sign_flip": sign_flip,
+        "verdict": verdict,
+    }
 
 
 def bias_direction_auc(records: Sequence[CalibrationRecord], horizon: int) -> Optional[float]:
@@ -650,23 +994,58 @@ def build_report(
     other_errors = sum(1 for record in records if record.error_kind == "other")
     assign_atr_percentiles(records)
     by_horizon: Dict[str, Any] = {}
+    warnings: List[str] = []
     for other in horizons:
         other_scored = [
             record for record in records
             if record.noul is not None and other in record.worth_trading
         ]
+        other_probabilities = [record.noul for record in other_scored]  # type: ignore[misc]
+        other_labels = [record.worth_trading[other] for record in other_scored]
+        prevalence = (
+            sum(1 for label in other_labels if label) / len(other_labels)
+            if other_labels else None
+        )
+        brier = calibration_brier(other_probabilities, other_labels)
+        # A constant predictor at the base rate scores p * (1 - p): the mean
+        # squared deviation of the label from its prevalence.
+        constant_brier = (
+            prevalence * (1.0 - prevalence)
+            if prevalence is not None else None
+        )
+        logistic_reference = logistic_brier(other_probabilities, other_labels)
+        auc = ranking_auc(other_probabilities, other_labels)
+        pr_auc = average_precision(other_probabilities, other_labels)
+        prevalence_warning = None
+        if prevalence is not None and prevalence < LOW_PREVALENCE:
+            prevalence_warning = (
+                f"prevalence {prevalence:.3f} < {LOW_PREVALENCE:.0%}: a constant "
+                "base-rate predictor's Brier is trivially strong; never compare "
+                "a model's Brier head-to-head with it"
+            )
+            warnings.append(f"h{other}: {prevalence_warning}")
         by_horizon[f"h{other}"] = {
-            "worth_rate": _worth_rate(records, other),
-            "brier": _rounded(
-                calibration_brier(
-                    [record.noul for record in other_scored],  # type: ignore[misc]
-                    [record.worth_trading[other] for record in other_scored],
-                )
+            "prevalence": _rounded(prevalence),
+            "positives": sum(1 for label in other_labels if label),
+            "scored": len(other_labels),
+            "brier": _rounded(brier),
+            "brier_constant": _rounded(constant_brier),
+            "brier_skill_vs_constant": _rounded(
+                brier_skill_score(brier, constant_brier)
             ),
+            "brier_logistic": _rounded(logistic_reference),
+            "brier_skill_vs_logistic": _rounded(
+                brier_skill_score(brier, logistic_reference)
+            ),
+            "auc": _rounded(auc),
+            "pr_auc": _rounded(pr_auc),
+            "directional_auc": directional_auc_report(records, other),
+            "prevalence_warning": prevalence_warning,
             "reliability": calibration_reliability(
-                [record.noul for record in other_scored],  # type: ignore[misc]
-                [record.worth_trading[other] for record in other_scored],
+                other_probabilities,
+                other_labels,
             ),
+            "economics": economics_report(records, other),
             "threshold_curve": threshold_curve(
                 records, args.thresholds, other, args.move_threshold_pct
             ),
@@ -675,9 +1054,18 @@ def build_report(
     return {
         "generated_at": started_at,
         "kind": "jev-tradeability-calibration",
+        "metrics_version": 2,
         "real_benchmark": True,
         "aborted": aborted,
         "abort_reason": abort_reason,
+        "warnings": warnings,
+        "interpretation": {
+            "noul_role": "tradeability ranking signal (AUC/PR-AUC), not a calibrated probability",
+            "direction_predicted": False,
+            "joint_threshold_recommendation": None,
+            "runtime_fallback_threshold": FALLBACK_THRESHOLD,
+            "economics_scope": "per-symbol OOS tail only; symbols never pooled",
+        },
         "dataset": {
             "source": args.candles,
             "symbol": args.symbol,
@@ -972,12 +1360,21 @@ def _print_summary(report: Dict[str, Any]) -> None:
           f"aborted={report['aborted']}")
     noul = report["noul"]
     print(f"noul: min={noul['min']} median={noul['median']} mean={noul['mean']} max={noul['max']}")
-    print(f"brier={report['brier']}")
-    print("threshold  coverage  trades  base_precision  false_hold  auc")
-    for row in report["threshold_curve"]:
-        print(f"{row['threshold']:<10} {row['coverage']!s:<9} {row['trade_count']:<7} "
-              f"{row['base_trade_precision']!s:<15} {row['false_hold_rate']!s:<11} "
-              f"{row['directional_auc']}")
+    print("horizon  prevalence  brier   bss_const  bss_logit  auc     pr_auc")
+    for name, metrics in (report.get("by_horizon") or {}).items():
+        print(f"{name:<8} {metrics['prevalence']!s:<11} {metrics['brier']!s:<7} "
+              f"{metrics['brier_skill_vs_constant']!s:<10} "
+              f"{metrics['brier_skill_vs_logistic']!s:<10} "
+              f"{metrics['auc']!s:<7} {metrics['pr_auc']}")
+        directional = metrics.get("directional_auc") or {}
+        print(f"  directional auc={directional.get('auc')} ci95={directional.get('ci95')}")
+        economics = metrics.get("economics") or {}
+        print(f"  OOS economics @ {economics.get('threshold')}: {economics.get('verdict')}")
+        for cost, row in (economics.get("cost_pct") or {}).items():
+            print(f"    cost {cost}%: trades={row['trades']} net={row['net_pct']} "
+                  f"mean={row['mean_pct']} win={row['win_rate']} ci95={row['net_ci95']}")
+    for warning in report.get("warnings") or []:
+        print(f"WARNING: {warning}")
     if report["aborted"]:
         print(f"ABORTED: {report['abort_reason']}")
 

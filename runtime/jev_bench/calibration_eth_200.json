@@ -1,9 +1,20 @@
 {
   "generated_at": "2026-10-24T19:36:17+00:00",
   "kind": "jev-tradeability-calibration",
+  "metrics_version": 2,
   "real_benchmark": true,
   "aborted": false,
   "abort_reason": null,
+  "warnings": [
+    "h1: prevalence 0.040 < 5%: a constant base-rate predictor's Brier is trivially strong; never compare a model's Brier head-to-head with it"
+  ],
+  "interpretation": {
+    "noul_role": "tradeability ranking signal (AUC/PR-AUC), not a calibrated probability",
+    "direction_predicted": false,
+    "joint_threshold_recommendation": null,
+    "runtime_fallback_threshold": 0.5,
+    "economics_scope": "per-symbol OOS tail only; symbols never pooled"
+  },
   "dataset": {
     "source": "/home/djelinux/TradingBots/trading-stack/runtime/jev_bench/ETH_USDT_1h.csv",
     "symbol": "ETH/USDT",
@@ -264,8 +275,26 @@
   ],
   "by_horizon": {
     "h1": {
-      "worth_rate": 0.04,
+      "prevalence": 0.04,
+      "positives": 8,
+      "scored": 200,
       "brier": 0.2271,
+      "brier_constant": 0.0384,
+      "brier_skill_vs_constant": -4.9147,
+      "brier_logistic": 0.0377,
+      "brier_skill_vs_logistic": -5.0256,
+      "auc": 0.6517,
+      "pr_auc": 0.2837,
+      "directional_auc": {
+        "state_count": 50,
+        "auc": 0.5449,
+        "ci95": {
+          "low": 0.3766,
+          "high": 0.7046,
+          "resamples": 2000
+        }
+      },
+      "prevalence_warning": "prevalence 0.040 < 5%: a constant base-rate predictor's Brier is trivially strong; never compare a model's Brier head-to-head with it",
       "reliability": [
         {
           "bin": "0.0-0.2",
@@ -298,6 +327,53 @@
           "observed_worth_rate": 0.125
         }
       ],
+      "economics": {
+        "evaluated_on": "oos",
+        "oos_fraction": 0.3,
+        "threshold": 0.5,
+        "trade_rule": "base_action in BUY/SELL and noul >= threshold",
+        "train_states": 140,
+        "oos_states": 60,
+        "oos_first": "2026-10-21T05:00:00Z",
+        "oos_last": "2026-10-23T16:00:00Z",
+        "cost_pct": {
+          "0.05": {
+            "trades": 7,
+            "net_pct": -0.1104,
+            "mean_pct": -0.0158,
+            "win_rate": 0.4286,
+            "net_ci95": {
+              "low": -2.2748,
+              "high": 1.9786,
+              "resamples": 2000
+            }
+          },
+          "0.10": {
+            "trades": 7,
+            "net_pct": -0.4604,
+            "mean_pct": -0.0658,
+            "win_rate": 0.4286,
+            "net_ci95": {
+              "low": -2.6248,
+              "high": 1.6286,
+              "resamples": 2000
+            }
+          },
+          "0.20": {
+            "trades": 7,
+            "net_pct": -1.1604,
+            "mean_pct": -0.1658,
+            "win_rate": 0.4286,
+            "net_ci95": {
+              "low": -3.3248,
+              "high": 0.9286,
+              "resamples": 2000
+            }
+          }
+        },
+        "sign_flip": false,
+        "verdict": "no demonstrated edge (non-positive at all tested costs)"
+      },
       "threshold_curve": [
         {
           "threshold": 0.2,
@@ -412,8 +488,26 @@
       ]
     },
     "h2": {
-      "worth_rate": 0.115,
+      "prevalence": 0.115,
+      "positives": 23,
+      "scored": 200,
       "brier": 0.2495,
+      "brier_constant": 0.1018,
+      "brier_skill_vs_constant": -1.4518,
+      "brier_logistic": 0.1017,
+      "brier_skill_vs_logistic": -1.4527,
+      "auc": 0.5372,
+      "pr_auc": 0.1492,
+      "directional_auc": {
+        "state_count": 50,
+        "auc": 0.6092,
+        "ci95": {
+          "low": 0.4448,
+          "high": 0.7683,
+          "resamples": 2000
+        }
+      },
+      "prevalence_warning": null,
       "reliability": [
         {
           "bin": "0.0-0.2",
@@ -446,6 +540,53 @@
           "observed_worth_rate": 0.125
         }
       ],
+      "economics": {
+        "evaluated_on": "oos",
+        "oos_fraction": 0.3,
+        "threshold": 0.5,
+        "trade_rule": "base_action in BUY/SELL and noul >= threshold",
+        "train_states": 140,
+        "oos_states": 60,
+        "oos_first": "2026-10-21T05:00:00Z",
+        "oos_last": "2026-10-23T16:00:00Z",
+        "cost_pct": {
+          "0.05": {
+            "trades": 7,
+            "net_pct": -1.5532,
+            "mean_pct": -0.2219,
+            "win_rate": 0.5714,
+            "net_ci95": {
+              "low": -4.2526,
+              "high": 1.1206,
+              "resamples": 2000
+            }
+          },
+          "0.10": {
+            "trades": 7,
+            "net_pct": -1.9032,
+            "mean_pct": -0.2719,
+            "win_rate": 0.2857,
+            "net_ci95": {
+              "low": -4.6026,
+              "high": 0.7706,
+              "resamples": 2000
+            }
+          },
+          "0.20": {
+            "trades": 7,
+            "net_pct": -2.6032,
+            "mean_pct": -0.3719,
+            "win_rate": 0.2857,
+            "net_ci95": {
+              "low": -5.3026,
+              "high": 0.0706,
+              "resamples": 2000
+            }
+          }
+        },
+        "sign_flip": false,
+        "verdict": "no demonstrated edge (non-positive at all tested costs)"
+      },
       "threshold_curve": [
         {
           "threshold": 0.2,
@@ -560,8 +701,26 @@
       ]
     },
     "h3": {
-      "worth_rate": 0.195,
+      "prevalence": 0.195,
+      "positives": 39,
+      "scored": 200,
       "brier": 0.2676,
+      "brier_constant": 0.157,
+      "brier_skill_vs_constant": -0.7049,
+      "brier_logistic": 0.157,
+      "brier_skill_vs_logistic": -0.7049,
+      "auc": 0.51,
+      "pr_auc": 0.2214,
+      "directional_auc": {
+        "state_count": 50,
+        "auc": 0.57,
+        "ci95": {
+          "low": 0.4102,
+          "high": 0.7292,
+          "resamples": 2000
+        }
+      },
+      "prevalence_warning": null,
       "reliability": [
         {
           "bin": "0.0-0.2",
@@ -594,6 +753,53 @@
           "observed_worth_rate": 0.2083
         }
       ],
+      "economics": {
+        "evaluated_on": "oos",
+        "oos_fraction": 0.3,
+        "threshold": 0.5,
+        "trade_rule": "base_action in BUY/SELL and noul >= threshold",
+        "train_states": 140,
+        "oos_states": 60,
+        "oos_first": "2026-10-21T05:00:00Z",
+        "oos_last": "2026-10-23T16:00:00Z",
+        "cost_pct": {
+          "0.05": {
+            "trades": 7,
+            "net_pct": -1.6747,
+            "mean_pct": -0.2392,
+            "win_rate": 0.4286,
+            "net_ci95": {
+              "low": -4.3644,
+              "high": 1.3481,
+              "resamples": 2000
+            }
+          },
+          "0.10": {
+            "trades": 7,
+            "net_pct": -2.0247,
+            "mean_pct": -0.2892,
+            "win_rate": 0.4286,
+            "net_ci95": {
+              "low": -4.7144,
+              "high": 0.9981,
+              "resamples": 2000
+            }
+          },
+          "0.20": {
+            "trades": 7,
+            "net_pct": -2.7247,
+            "mean_pct": -0.3892,
+            "win_rate": 0.2857,
+            "net_ci95": {
+              "low": -5.4144,
+              "high": 0.2981,
+              "resamples": 2000
+            }
+          }
+        },
+        "sign_flip": false,
+        "verdict": "no demonstrated edge (non-positive at all tested costs)"
+      },
       "threshold_curve": [
         {
           "threshold": 0.2,
@@ -708,8 +914,26 @@
       ]
     },
     "h4": {
-      "worth_rate": 0.24,
+      "prevalence": 0.24,
+      "positives": 48,
+      "scored": 200,
       "brier": 0.2663,
+      "brier_constant": 0.1824,
+      "brier_skill_vs_constant": -0.4601,
+      "brier_logistic": 0.182,
+      "brier_skill_vs_logistic": -0.4636,
+      "auc": 0.5296,
+      "pr_auc": 0.3218,
+      "directional_auc": {
+        "state_count": 50,
+        "auc": 0.6055,
+        "ci95": {
+          "low": 0.4375,
+          "high": 0.7585,
+          "resamples": 2000
+        }
+      },
+      "prevalence_warning": null,
       "reliability": [
         {
           "bin": "0.0-0.2",
@@ -742,6 +966,53 @@
           "observed_worth_rate": 0.3333
         }
       ],
+      "economics": {
+        "evaluated_on": "oos",
+        "oos_fraction": 0.3,
+        "threshold": 0.5,
+        "trade_rule": "base_action in BUY/SELL and noul >= threshold",
+        "train_states": 140,
+        "oos_states": 60,
+        "oos_first": "2026-10-21T05:00:00Z",
+        "oos_last": "2026-10-23T16:00:00Z",
+        "cost_pct": {
+          "0.05": {
+            "trades": 7,
+            "net_pct": -1.7301,
+            "mean_pct": -0.2472,
+            "win_rate": 0.2857,
+            "net_ci95": {
+              "low": -3.9764,
+              "high": 0.7845,
+              "resamples": 2000
+            }
+          },
+          "0.10": {
+            "trades": 7,
+            "net_pct": -2.0801,
+            "mean_pct": -0.2972,
+            "win_rate": 0.2857,
+            "net_ci95": {
+              "low": -4.3264,
+              "high": 0.4345,
+              "resamples": 2000
+            }
+          },
+          "0.20": {
+            "trades": 7,
+            "net_pct": -2.7801,
+            "mean_pct": -0.3972,
+            "win_rate": 0.2857,
+            "net_ci95": {
+              "low": -5.0264,
+              "high": -0.2655,
+              "resamples": 2000
+            }
+          }
+        },
+        "sign_flip": false,
+        "verdict": "no demonstrated edge (non-positive at all tested costs)"
+      },
       "threshold_curve": [
         {
           "threshold": 0.2,
