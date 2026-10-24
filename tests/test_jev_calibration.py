@@ -193,6 +193,31 @@ def test_records_from_payload_round_trip():
     assert rebuilt.base_direction_correct == {1: True}
 
 
+def test_write_observations_emits_one_line_per_scored_state(tmp_path):
+    """Observations use the required keys and skip failed JEV calls."""
+    scored = _record(0.4, "long", "BUY", 0.02)
+    scored.candle_open_time = "2026-10-15T09:00:00Z"
+    scored.atr_pct = 0.01
+    failed = CalibrationRecord(index=1, as_of="2026-10-15T10:00:00Z", noul=None)
+    report = {
+        "dataset": {"symbol": "BTC/USDT"},
+        "states": [scored.to_payload(), failed.to_payload()],
+    }
+    path = tmp_path / "observations.jsonl"
+
+    written = jev_calibration.write_observations(report, str(path))
+
+    assert written == 1
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    payload = __import__("json").loads(lines[0])
+    assert payload["pair"] == "BTC/USDT"
+    assert payload["noul"] == 0.4
+    assert payload["candle_open_time"] == "2026-10-15T09:00:00Z"
+    assert payload["forward_1h"] == 0.02
+    assert payload["cost_pct"] == 0.1
+
+
 def test_record_payload_is_json_friendly():
     """Serialized records keep labels and omit raw prompts."""
     payload = _record(0.42, "long", "BUY", 0.015).to_payload()

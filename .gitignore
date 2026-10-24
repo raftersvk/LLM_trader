@@ -24,6 +24,9 @@ pyrightconfig.json
 # Runtime data (only categories.json is tracked)
 /data/*
 !/data/categories.json
+# JEV calibration observations and generated weekly policy (local runtime state)
+/runtime/jev_bench/observations.jsonl
+/runtime/jev_calibration/
 /cache/
 /logs/
 /research_papers/

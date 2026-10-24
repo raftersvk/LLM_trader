@@ -12,7 +12,9 @@ is calibrated, using the production no-look-ahead state and the production
 - Worth-trading label: `abs(forward_return_h1) >= 1.0 %`.
 - Base decision: rule-based 4-candle momentum proxy, **not an LLM**.
 - Repro: `scripts/jev_calibration.py`; machine reports in
-  `runtime/jev_bench/calibration_{btc,eth}_200.json`.
+  `runtime/jev_bench/calibration_{btc,eth}_200.json`, observation log via
+  `--observations runtime/jev_bench/observations.jsonl`.
+- Weekly policy layer: see [`jev-policy.md`](jev-policy.md).
 
 ## noul distribution
 

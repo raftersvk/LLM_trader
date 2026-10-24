@@ -60,6 +60,7 @@ from src.signal_service.jev_client import (  # noqa: E402
     JevError,
     JevRateLimitError,
 )
+from src.signal_service.contract import iso_z  # noqa: E402
 from src.signal_service.jev_gate import (  # noqa: E402
     build_questions,
     parse_jev_signal,
@@ -79,13 +80,17 @@ class CalibrationRecord:
     index: int
     as_of: str
     noul: Optional[float]
+    candle_open_time: str = ""
     bias: Optional[str] = None
     regime: Optional[str] = None
+    atr_pct: Optional[float] = None
+    atr_percentile: Optional[float] = None
     confidence: Optional[float] = None
     score_raw: Optional[float] = None
     latency_ms: Optional[int] = None
     error: Optional[str] = None
     error_kind: Optional[str] = None
+    cost_pct: float = 0.10
     forward_returns: Dict[int, float] = field(default_factory=dict)
     worth_trading: Dict[int, bool] = field(default_factory=dict)
     base_action: str = "HOLD"
@@ -96,12 +101,16 @@ class CalibrationRecord:
         return {
             "index": self.index,
             "as_of": self.as_of,
+            "candle_open_time": self.candle_open_time,
             "noul": _rounded(self.noul),
             "bias": self.bias,
             "regime": self.regime,
+            "atr_pct": _rounded(self.atr_pct),
+            "atr_percentile": _rounded(self.atr_percentile),
             "confidence": _rounded(self.confidence),
             "score_raw": _rounded(self.score_raw),
             "latency_ms": self.latency_ms,
+            "cost_pct": self.cost_pct,
             "error": self.error,
             "error_kind": self.error_kind,
             "forward_returns": {
@@ -334,6 +343,54 @@ def _worth_rate(records: Sequence[CalibrationRecord], horizon: int) -> Optional[
     return _rounded(sum(1 for label in labels if label) / len(labels) if labels else None)
 
 
+def assign_atr_percentiles(records: Sequence[CalibrationRecord]) -> None:
+    """Fill ``atr_percentile`` within the report (0 = lowest ATR)."""
+    scored = [record for record in records if record.atr_pct is not None]
+    ordered = sorted(scored, key=lambda record: record.atr_pct)  # type: ignore[arg-type,return-value]
+    if len(ordered) < 2:
+        for record in scored:
+            record.atr_percentile = 0.0
+        return
+    last = len(ordered) - 1
+    for rank, record in enumerate(ordered):
+        record.atr_percentile = round(100.0 * rank / last, 2)
+
+
+def observation_line(record: CalibrationRecord, pair: str) -> Dict[str, Any]:
+    """Return one JSONL observation for a scored state."""
+    line: Dict[str, Any] = {
+        "candle_open_time": record.candle_open_time or record.as_of,
+        "pair": pair,
+        "noul": _rounded(record.noul),
+        "bias": record.bias,
+        "regime": record.regime,
+        "atr_pct": _rounded(record.atr_pct),
+        "atr_percentile": _rounded(record.atr_percentile),
+        "base_action": record.base_action,
+        "cost_pct": record.cost_pct,
+    }
+    for horizon, value in sorted(record.forward_returns.items()):
+        line[f"forward_{horizon}h"] = _rounded(value)
+    return line
+
+
+def write_observations(report: Dict[str, Any], path: str) -> int:
+    """Write one JSONL line per scored state; return the line count."""
+    pair = str(report.get("dataset", {}).get("symbol") or "")
+    payloads = [
+        payload for payload in report.get("states") or []
+        if payload.get("noul") is not None
+    ]
+    records = records_from_payload(payloads)
+    assign_atr_percentiles(records)
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(observation_line(record, pair)) + "\n")
+    return len(records)
+
+
 def records_from_payload(payloads: Sequence[Dict[str, Any]]) -> List[CalibrationRecord]:
     """Rebuild records from a saved report so metrics regenerate offline."""
     records: List[CalibrationRecord] = []
@@ -343,11 +400,15 @@ def records_from_payload(payloads: Sequence[Dict[str, Any]]) -> List[Calibration
                 index=int(payload["index"]),
                 as_of=str(payload.get("as_of") or ""),
                 noul=payload.get("noul"),
+                candle_open_time=str(payload.get("candle_open_time") or ""),
                 bias=payload.get("bias"),
                 regime=payload.get("regime"),
+                atr_pct=payload.get("atr_pct"),
+                atr_percentile=payload.get("atr_percentile"),
                 confidence=payload.get("confidence"),
                 score_raw=payload.get("score_raw"),
                 latency_ms=payload.get("latency_ms"),
+                cost_pct=float(payload.get("cost_pct") or 0.10),
                 error=payload.get("error"),
                 error_kind=payload.get("error_kind"),
                 forward_returns={
@@ -399,6 +460,7 @@ def build_report(
     rate_limit_errors = sum(1 for record in records if record.error_kind == "rate_limit")
     auth_errors = sum(1 for record in records if record.error_kind == "auth")
     other_errors = sum(1 for record in records if record.error_kind == "other")
+    assign_atr_percentiles(records)
     by_horizon: Dict[str, Any] = {}
     for other in horizons:
         other_scored = [
@@ -486,6 +548,20 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
             existing = json.load(handle)
         records = records_from_payload(existing.get("states") or [])
         args.candle_count = existing.get("dataset", {}).get("candles")
+        if args.candles:
+            # Older reports do not carry candle time or ATR: rebuild the same
+            # no-look-ahead samples from the source candles and enrich by index.
+            candles = load_candles_csv(args.candles)
+            args.candle_count = len(candles)
+            samples = build_samples(candles, args.symbol, args.timeframe, horizons=horizons)
+            enrichment = {
+                index: (iso_z(candles[index].open_at), state.get("atr_pct"))
+                for index, state, _future in samples
+            }
+            for record in records:
+                if record.index in enrichment:
+                    record.candle_open_time, record.atr_pct = enrichment[record.index]
+                record.cost_pct = args.cost_pct
         scoring = existing.get("scoring") or {}
         return build_report(
             records,
@@ -527,6 +603,9 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
                 index=index,
                 as_of=state.get("as_of") or "",
                 noul=None,
+                candle_open_time=iso_z(candles[index].open_at),
+                atr_pct=state.get("atr_pct"),
+                cost_pct=args.cost_pct,
                 base_action=decision.action,
                 forward_returns={horizon: future[horizon] for horizon in horizons},
             )
@@ -625,6 +704,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Pause before each real JEV call to respect rate limits",
     )
     parser.add_argument(
+        "--cost-pct", type=float, default=0.10,
+        help="Round-trip trading cost in percent, stored in every observation",
+    )
+    parser.add_argument(
+        "--observations", default=None,
+        help="Optional JSONL path; one line per scored state is written there",
+    )
+    parser.add_argument(
         "--min-threshold", type=float, default=0.20,
         help="First tradeability threshold in the curve",
     )
@@ -676,6 +763,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     with open(output, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
         handle.write("\n")
+    if args.observations:
+        written = write_observations(report, args.observations)
+        print(f"observations: {os.path.abspath(args.observations)} ({written} lines)")
     _print_summary(report)
     print(f"report: {output}")
     return 2 if report["aborted"] else 0
