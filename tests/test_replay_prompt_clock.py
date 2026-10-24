@@ -15,9 +15,11 @@ import numpy as np
 import pytest
 
 from src.analyzer.analysis_context import AnalysisContext
+from src.analyzer.analysis_engine import AnalysisEngine
 from src.analyzer.prompts.prompt_builder import PromptBuilder
 from src.analyzer.prompts.template_manager import TemplateManager
 from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
+from src.utils.timeframe_validator import TimeframeValidator
 
 AS_OF = datetime(2026, 10, 21, 0, 0, 0, tzinfo=timezone.utc)
 AS_OF_TEXT = "2026-10-21 00:00:00"
@@ -149,6 +151,82 @@ class _ClockEngine:
         self.article_urls = dict(getattr(self.data_collector, "article_urls", {}) or {})
         self.article_urls.update(self.rag_engine.get_latest_article_urls_snapshot())
         return {}
+
+
+def _engine_config() -> MagicMock:
+    config = MagicMock()
+    config.TIMEFRAME = "1h"
+    config.CANDLE_LIMIT = 200
+    config.PROMPT_MAX_TOKENS = 200000
+    config.MODEL_VERBOSITY = "low"
+    config.STOP_LOSS_TYPE = "soft"
+    config.TAKE_PROFIT_TYPE = "soft"
+    config.STOP_LOSS_CHECK_INTERVAL = "1m"
+    config.TAKE_PROFIT_CHECK_INTERVAL = "1m"
+    return config
+
+
+def _real_prompt_builder(config: MagicMock) -> PromptBuilder:
+    """Real PromptBuilder/TemplateManager; only dumb formatters are stubbed."""
+    template_manager = TemplateManager(
+        config=config, logger=MagicMock(), timeframe_validator=TimeframeValidator,
+    )
+    builder = PromptBuilder(
+        timeframe="1h",
+        format_utils=MagicMock(),
+        template_manager=template_manager,
+        overview_formatter=MagicMock(),
+        long_term_formatter=MagicMock(),
+        technical_formatter=MagicMock(),
+        market_formatter=MagicMock(),
+        config=config,
+        timeframe_validator=TimeframeValidator,
+    )
+    builder.technical_analysis_formatter.format_technical_analysis.return_value = ""
+    return builder
+
+
+@pytest.mark.asyncio
+async def test_real_analysis_engine_prompt_uses_injected_clock():
+    """The real engine seam must carry analysis_as_of into both prompt sections.
+
+    Removing the assignment in AnalysisEngine._generate_ai_analysis (or the
+    analysis_as_of kwarg in PromptBuilder.build_system_prompt) would make this
+    test fall back to the wall clock and fail.
+    """
+    config = _engine_config()
+    builder = _real_prompt_builder(config)
+    engine = AnalysisEngine(
+        MagicMock(), MagicMock(), MagicMock(), MagicMock(), config, prompt_builder=builder,
+    )
+    engine.token_counter = SimpleNamespace(count_tokens=lambda text: len(text) // 4)
+    engine.symbol = "BTC/USDT"
+    engine.context = AnalysisContext(symbol="BTC/USDT", timeframe="1h")
+    engine.model_manager.describe_provider_and_model.return_value = ("provider", "model")
+    engine.set_analysis_as_of(AS_OF)
+
+    captured: dict[str, str] = {}
+
+    async def fake_execute(system_prompt, prompt, provider, model, chart_image=None):
+        captured["system"] = system_prompt
+        captured["user"] = prompt
+        _ = (provider, model, chart_image)
+        return {}
+
+    engine._execute_ai_request = fake_execute  # type: ignore[method-assign]
+
+    await engine._generate_ai_analysis(
+        provider=None,
+        model=None,
+        previous_response="prior analysis",
+        precomputed_chart=(None, False),
+    )
+
+    assert AS_OF_TEXT in captured["user"]
+    assert "### DETERMINISTIC TIME CHECK" in captured["system"]
+    assert AS_OF_TEXT in captured["system"]
+    assert _today() not in captured["user"]
+    assert _today() not in captured["system"]
 
 
 @pytest.mark.asyncio
