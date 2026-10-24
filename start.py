@@ -322,6 +322,11 @@ class CompositionRoot(ProvisioningMixin):
         deps = {
             "exchange_manager": infra["exchange_manager"],
             "market_analyzer": analyzer["engine"],
+            # Signal service and multi-pair callers ask for a fresh, symbol-scoped
+            # engine; the caller binds the pair via initialize_for_symbol().
+            "market_analyzer_factory": lambda _symbol: self.build_analyzer_engine(
+                infra, apis, utils, rag, models
+            ),
             "trading_strategy": trading["strategy"],
             "discord_notifier": notifiers["notifier"],
             "discord_task": notifiers["task"],
@@ -391,6 +396,8 @@ class CompositionRoot(ProvisioningMixin):
 
         dashboard_server = dependencies.pop("dashboard_server", None)
         force_analysis_event = dependencies.pop("force_analysis_event", None)
+        # Signal-service only: BotServices has no per-pair engine factory field.
+        dependencies.pop("market_analyzer_factory", None)
 
         def _create_position_monitor(bot: CryptoTradingBot) -> PositionStatusMonitor:
             try:
