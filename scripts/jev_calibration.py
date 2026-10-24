@@ -1053,6 +1053,7 @@ def build_report(
                 brier_skill_score(brier, logistic_reference)
             ),
             "auc": _rounded(auc),
+            "auc_ci95": bootstrap_auc_ci(other_probabilities, other_labels),
             "pr_auc": _rounded(pr_auc),
             "directional_auc": directional_auc_report(records, other),
             "prevalence_warning": prevalence_warning,
@@ -1381,6 +1382,7 @@ def _print_summary(report: Dict[str, Any]) -> None:
               f"{metrics['brier_skill_vs_constant']!s:<10} "
               f"{metrics['brier_skill_vs_logistic']!s:<10} "
               f"{metrics['auc']!s:<7} {metrics['pr_auc']}")
+        print(f"  auc ci95={metrics.get('auc_ci95')}")
         directional = metrics.get("directional_auc") or {}
         print(f"  directional auc={directional.get('auc')} ci95={directional.get('ci95')}")
         economics = metrics.get("economics") or {}

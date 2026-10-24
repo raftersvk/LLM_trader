@@ -195,9 +195,10 @@ policy layer must be interpreted. The evidence, reproduced from
   Brier is 0.2504 / 0.2271. These two numbers are **not** comparable as a
   head-to-head model verdict.
 - **Ranking, not calibration:** noul ranks worth-trading h1 states with AUC
-  0.854 (BTC) / 0.652 (ETH), but Brier skill against both the constant and a
-  logistic baseline is strongly negative. noul is a ranking signal, not a
-  calibrated probability.
+  0.854 (BTC, 95 % CI 0.704-0.980) / 0.652 (ETH, 95 % CI 0.424-0.870). The BTC
+  CI excludes chance; the ETH CI includes 0.5, so its ranking advantage is not
+  demonstrated. Brier skill against both the constant and a logistic baseline
+  is strongly negative. noul is a ranking signal, not a calibrated probability.
 - **No directional edge:** directional AUC (noul predicting
   `base_direction_correct`) is 0.526 (BTC) / 0.545 (ETH) on h1, with bootstrap
   CIs spanning 0.5. The policy must not treat noul as a direction predictor.

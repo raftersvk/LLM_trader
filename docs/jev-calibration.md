@@ -88,28 +88,31 @@ model ties the reference, negative means it is worse. The constant reference is
 
 ### BTC/USDT
 
-| Horizon | Positives | Prevalence | Brier | Constant Brier | BSS const | Logistic Brier | BSS logistic | AUC | PR-AUC | Directional AUC (95 % CI) |
+| Horizon | Positives | Prevalence | Brier | Constant Brier | BSS const | Logistic Brier | BSS logistic | AUC (95 % CI) | PR-AUC | Directional AUC (95 % CI) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| h1 | 2/200 | 0.0100 | 0.2504 | 0.0099 | -24.29 | 0.0097 | -24.76 | 0.8535 | 0.0814 | 0.5255 (0.292-0.761) |
-| h2 | 7/200 | 0.0350 | 0.2572 | 0.0338 | -6.62 | 0.0338 | -6.62 | 0.6018 | 0.0473 | 0.5677 (0.323-0.791) |
-| h3 | 16/200 | 0.0800 | 0.2741 | 0.0736 | -2.72 | 0.0734 | -2.73 | 0.4677 | 0.0744 | 0.4792 (0.255-0.703) |
-| h4 | 27/200 | 0.1350 | 0.2692 | 0.1168 | -1.31 | 0.1167 | -1.31 | 0.5237 | 0.1605 | 0.3904 (0.181-0.615) |
+| h1 | 2/200 | 0.0100 | 0.2504 | 0.0099 | -24.29 | 0.0097 | -24.76 | 0.8535 (0.704-0.980) | 0.0814 | 0.5255 (0.292-0.761) |
+| h2 | 7/200 | 0.0350 | 0.2572 | 0.0338 | -6.62 | 0.0338 | -6.62 | 0.6018 (0.449-0.737) | 0.0473 | 0.5677 (0.323-0.791) |
+| h3 | 16/200 | 0.0800 | 0.2741 | 0.0736 | -2.72 | 0.0734 | -2.73 | 0.4677 (0.340-0.597) | 0.0744 | 0.4792 (0.255-0.703) |
+| h4 | 27/200 | 0.1350 | 0.2692 | 0.1168 | -1.31 | 0.1167 | -1.31 | 0.5237 (0.406-0.643) | 0.1605 | 0.3904 (0.181-0.615) |
 
 ### ETH/USDT
 
-| Horizon | Positives | Prevalence | Brier | Constant Brier | BSS const | Logistic Brier | BSS logistic | AUC | PR-AUC | Directional AUC (95 % CI) |
+| Horizon | Positives | Prevalence | Brier | Constant Brier | BSS const | Logistic Brier | BSS logistic | AUC (95 % CI) | PR-AUC | Directional AUC (95 % CI) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| h1 | 8/200 | 0.0400 | 0.2271 | 0.0384 | -4.91 | 0.0377 | -5.03 | 0.6517 | 0.2837 | 0.5449 (0.377-0.705) |
-| h2 | 23/200 | 0.1150 | 0.2495 | 0.1018 | -1.45 | 0.1017 | -1.45 | 0.5372 | 0.1492 | 0.6092 (0.445-0.768) |
-| h3 | 39/200 | 0.1950 | 0.2676 | 0.1570 | -0.70 | 0.1570 | -0.70 | 0.5100 | 0.2214 | 0.5700 (0.410-0.729) |
-| h4 | 48/200 | 0.2400 | 0.2663 | 0.1824 | -0.46 | 0.1820 | -0.46 | 0.5296 | 0.3218 | 0.6055 (0.438-0.759) |
+| h1 | 8/200 | 0.0400 | 0.2271 | 0.0384 | -4.91 | 0.0377 | -5.03 | 0.6517 (0.424-0.870) | 0.2837 | 0.5449 (0.377-0.705) |
+| h2 | 23/200 | 0.1150 | 0.2495 | 0.1018 | -1.45 | 0.1017 | -1.45 | 0.5372 (0.414-0.653) | 0.1492 | 0.6092 (0.445-0.768) |
+| h3 | 39/200 | 0.1950 | 0.2676 | 0.1570 | -0.70 | 0.1570 | -0.70 | 0.5100 (0.407-0.606) | 0.2214 | 0.5700 (0.410-0.729) |
+| h4 | 48/200 | 0.2400 | 0.2663 | 0.1824 | -0.46 | 0.1820 | -0.46 | 0.5296 (0.434-0.624) | 0.3218 | 0.6055 (0.438-0.759) |
 
 Interpretation:
 
-- **Ranking is the only demonstrated signal.** On h1, `noul` ranks
-  worth-trading states well above chance: AUC **0.854 BTC**, **0.652 ETH**.
-  PR-AUC is low in absolute terms (0.081 / 0.284) because positives are rare,
-  but it is far above the 1 % / 4 % prevalence floor.
+- **Ranking is the only candidate signal, and only BTC h1 survives its CI.**
+  BTC h1 AUC is **0.854 (95 % CI 0.704-0.980)**, which excludes chance. ETH h1
+  AUC is **0.652 (95 % CI 0.424-0.870)**, and because that CI includes 0.5 the
+  ETH ranking advantage is **not demonstrated at 95 %**. PR-AUC is low in
+  absolute terms (0.081 / 0.284) because positives are rare, but it is above
+  the 1 % / 4 % prevalence floor for both symbols. No other horizon has a
+  tradeability AUC CI that excludes 0.5.
 - **noul is not calibrated as a probability.** Brier skill is deeply negative
   against both references, and the reliability table below shows predicted
   rates far above observed rates.

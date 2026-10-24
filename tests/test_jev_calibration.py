@@ -757,3 +757,34 @@ def test_economics_positive_verdict_requires_ci_excluding_zero():
     assert economics["ci_excludes_zero"] is True
     assert economics["demonstrated_edge"] is True
     assert economics["verdict"] == "positive at all tested costs (CI excludes zero)"
+
+
+def test_report_emits_tradeability_auc_ci():
+    """Every horizon reports a deterministic AUC CI next to the point estimate."""
+    forwards = [0.02, -0.005, 0.02, -0.005, 0.02, -0.005, 0.02, -0.005]
+    records = []
+    for index, forward in enumerate(forwards):
+        record = _record(0.1 + index * 0.1, "long", "BUY" if index % 2 == 0 else "HOLD", forward)
+        record.index = index
+        record.candle_open_time = f"2026-10-15T{index:02d}:00:00Z"
+        records.append(record)
+
+    report = jev_calibration.build_report(
+        records, _source_args(horizon=1), (1,),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    metrics = report["by_horizon"]["h1"]
+    expected = jev_calibration.bootstrap_auc_ci(
+        [record.noul for record in records],
+        [record.worth_trading[1] for record in records],
+    )
+
+    assert metrics["auc_ci95"] == expected
+    assert metrics["auc_ci95"] is not None
+    assert metrics["auc_ci95"]["low"] <= metrics["auc_ci95"]["high"]
+    rebuilt = jev_calibration.build_report(
+        jev_calibration.records_from_payload(report["states"]),
+        _source_args(horizon=1), (1,),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert rebuilt["by_horizon"]["h1"]["auc_ci95"] == metrics["auc_ci95"]

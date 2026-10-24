@@ -284,6 +284,11 @@
       "brier_logistic": 0.0377,
       "brier_skill_vs_logistic": -5.0256,
       "auc": 0.6517,
+      "auc_ci95": {
+        "low": 0.4238,
+        "high": 0.8703,
+        "resamples": 2000
+      },
       "pr_auc": 0.2837,
       "directional_auc": {
         "state_count": 50,
@@ -500,6 +505,11 @@
       "brier_logistic": 0.1017,
       "brier_skill_vs_logistic": -1.4527,
       "auc": 0.5372,
+      "auc_ci95": {
+        "low": 0.4141,
+        "high": 0.6526,
+        "resamples": 2000
+      },
       "pr_auc": 0.1492,
       "directional_auc": {
         "state_count": 50,
@@ -716,6 +726,11 @@
       "brier_logistic": 0.157,
       "brier_skill_vs_logistic": -0.7049,
       "auc": 0.51,
+      "auc_ci95": {
+        "low": 0.4072,
+        "high": 0.6058,
+        "resamples": 2000
+      },
       "pr_auc": 0.2214,
       "directional_auc": {
         "state_count": 50,
@@ -932,6 +947,11 @@
       "brier_logistic": 0.182,
       "brier_skill_vs_logistic": -0.4636,
       "auc": 0.5296,
+      "auc_ci95": {
+        "low": 0.4336,
+        "high": 0.6243,
+        "resamples": 2000
+      },
       "pr_auc": 0.3218,
       "directional_auc": {
         "state_count": 50,
