@@ -47,6 +47,7 @@ for _path in (_REPO_ROOT, _SCRIPTS_DIR):
         sys.path.insert(0, _path)
 
 from bench_jev import (  # noqa: E402  (path setup must run first)
+    DEFAULT_HORIZONS,
     DEFAULT_MOVE_THRESHOLD_PCT,
     MomentumBaseline,
     _build_real_client,
@@ -71,6 +72,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_THRESHOLDS = tuple(round(0.20 + 0.05 * step, 2) for step in range(11))  # 0.20 .. 0.70
 HISTOGRAM_BINS = 10
 RELIABILITY_BINS = 5
+DEFAULT_SYMBOL = "BTC/USDT"
+DEFAULT_TIMEFRAME = "1h"
+DEFAULT_DELAY_SECONDS = 0.5
 
 
 @dataclass
@@ -436,6 +440,93 @@ def records_from_payload(payloads: Sequence[Dict[str, Any]]) -> List[Calibration
     return records
 
 
+def validate_calibration_report(report: Any) -> List[str]:
+    """Return schema problems for a saved calibration report (empty = valid)."""
+    problems: List[str] = []
+    if not isinstance(report, dict):
+        return ["report must be a JSON object"]
+    for key in ("dataset", "states"):
+        if key not in report:
+            problems.append(f"missing {key}")
+    if problems:
+        return problems
+    dataset = report["dataset"]
+    if not isinstance(dataset, dict):
+        problems.append("dataset must be an object")
+    else:
+        for key in ("symbol", "timeframe", "horizons", "move_threshold_pct"):
+            if key not in dataset:
+                problems.append(f"dataset missing {key}")
+        horizons = dataset.get("horizons")
+        if horizons is not None and not isinstance(horizons, (list, tuple)):
+            problems.append("dataset.horizons must be a list")
+        if dataset.get("candles") is not None and not isinstance(dataset["candles"], int):
+            problems.append("dataset.candles must be an int")
+    states = report["states"]
+    if not isinstance(states, list) or not states:
+        problems.append("states must be a non-empty list")
+        return problems
+    required_state = ("index", "noul", "forward_returns", "worth_trading", "base_action")
+    for position, state in enumerate(states):
+        if not isinstance(state, dict):
+            problems.append(f"state {position} must be an object")
+            continue
+        missing = [key for key in required_state if key not in state]
+        if missing:
+            problems.append(f"state {position} missing {', '.join(missing)}")
+        noul = state.get("noul")
+        if noul is not None and (not isinstance(noul, (int, float)) or not 0.0 <= float(noul) <= 1.0):
+            problems.append(f"state {position} noul must be in [0, 1]")
+        if not isinstance(state.get("forward_returns"), dict):
+            problems.append(f"state {position} forward_returns must be an object")
+    return problems
+
+
+def _parse_horizons(value: Any, default: Sequence[int] = DEFAULT_HORIZONS) -> Tuple[int, ...]:
+    """Parse a CLI horizons value or fall back to the report's horizons."""
+    if value is None:
+        return tuple(int(horizon) for horizon in default)
+    if isinstance(value, (list, tuple)):
+        return tuple(int(horizon) for horizon in value)
+    parts = [part.strip() for part in str(value).split(",") if part.strip()]
+    if not parts:
+        raise SystemExit("--horizons must contain at least one horizon")
+    return tuple(int(part) for part in parts)
+
+
+def _carry_aggregate_dataset(
+    args: argparse.Namespace, dataset: Dict[str, Any]
+) -> None:
+    """Fill aggregate-from fields from the report unless the CLI overrode them.
+
+    ``None`` means the option was not given (all provenance options default to
+    ``None``), so a rebuild without flags preserves the original dataset.
+    """
+    if args.symbol is None:
+        args.symbol = dataset.get("symbol") or DEFAULT_SYMBOL
+    if args.timeframe is None:
+        args.timeframe = dataset.get("timeframe") or DEFAULT_TIMEFRAME
+    if args.move_threshold_pct is None:
+        args.move_threshold_pct = dataset.get("move_threshold_pct", DEFAULT_MOVE_THRESHOLD_PCT)
+    if args.delay_seconds is None:
+        args.delay_seconds = dataset.get("delay_seconds", DEFAULT_DELAY_SECONDS)
+    if args.candles is None:
+        source = dataset.get("source")
+        args.candles = source if isinstance(source, str) and source else None
+
+
+def _apply_run_defaults(args: argparse.Namespace) -> None:
+    """Resolve CLI defaults for a fresh calibration run."""
+    if args.symbol is None:
+        args.symbol = DEFAULT_SYMBOL
+    if args.timeframe is None:
+        args.timeframe = DEFAULT_TIMEFRAME
+    if args.move_threshold_pct is None:
+        args.move_threshold_pct = DEFAULT_MOVE_THRESHOLD_PCT
+    if args.delay_seconds is None:
+        args.delay_seconds = DEFAULT_DELAY_SECONDS
+
+
 def build_report(
     records: Sequence[CalibrationRecord],
     args: argparse.Namespace,
@@ -546,29 +637,47 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
     """Call JEV once per state and build the calibration report."""
     started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     started = time.monotonic()
-    horizons = tuple(int(value) for value in args.horizons.split(","))
-    if args.horizon not in horizons:
-        raise SystemExit(f"--horizon {args.horizon} must be one of {horizons}")
 
     if args.aggregate_from:
         with open(args.aggregate_from, "r", encoding="utf-8") as handle:
             existing = json.load(handle)
-        records = records_from_payload(existing.get("states") or [])
-        args.candle_count = existing.get("dataset", {}).get("candles")
-        if args.candles:
+        problems = validate_calibration_report(existing)
+        if problems:
+            raise SystemExit(
+                f"invalid calibration report {args.aggregate_from}: {'; '.join(problems)}"
+            )
+        dataset = existing["dataset"]
+        _carry_aggregate_dataset(args, dataset)
+        horizons = _parse_horizons(
+            args.horizons, dataset.get("horizons") or DEFAULT_HORIZONS
+        )
+        if args.horizon is None:
+            args.horizon = int(dataset.get("horizon") or horizons[0])
+        if args.horizon not in horizons:
+            raise SystemExit(f"--horizon {args.horizon} must be one of {horizons}")
+
+        records = records_from_payload(existing["states"])
+        args.candle_count = dataset.get("candles")
+        if args.candles and os.path.exists(args.candles):
             # Older reports do not carry candle time or ATR: rebuild the same
             # no-look-ahead samples from the source candles and enrich by index.
-            candles = load_candles_csv(args.candles)
-            args.candle_count = len(candles)
-            samples = build_samples(candles, args.symbol, args.timeframe, horizons=horizons)
-            enrichment = {
-                index: (iso_z(candles[index].open_at), state.get("atr_pct"))
-                for index, state, _future in samples
-            }
-            for record in records:
-                if record.index in enrichment:
-                    record.candle_open_time, record.atr_pct = enrichment[record.index]
-                record.cost_pct = args.cost_pct
+            try:
+                candles = load_candles_csv(args.candles)
+            except (OSError, ValueError) as exc:
+                logger.warning("cannot enrich from %s: %s", args.candles, exc)
+                candles = []
+            if candles:
+                args.candle_count = len(candles)
+                samples = build_samples(candles, args.symbol, args.timeframe, horizons=horizons)
+                enrichment = {
+                    index: (iso_z(candles[index].open_at), state.get("atr_pct"))
+                    for index, state, _future in samples
+                }
+                for record in records:
+                    if record.index in enrichment:
+                        record.candle_open_time, record.atr_pct = enrichment[record.index]
+        for record in records:
+            record.cost_pct = args.cost_pct
         scoring = existing.get("scoring") or {}
         return build_report(
             records,
@@ -578,10 +687,16 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
             scoring.get("duration_seconds") or 0.0,
             bool(existing.get("aborted")),
             existing.get("abort_reason"),
-            existing.get("dataset", {}).get("model") or "unknown",
+            dataset.get("model") or "unknown",
             scoring.get("base_duration_seconds"),
         )
 
+    _apply_run_defaults(args)
+    horizons = _parse_horizons(args.horizons)
+    if args.horizon is None:
+        args.horizon = horizons[0]
+    if args.horizon not in horizons:
+        raise SystemExit(f"--horizon {args.horizon} must be one of {horizons}")
     if not args.candles:
         raise SystemExit("--candles is required unless --aggregate-from is given")
     candles = load_candles_csv(args.candles)
@@ -697,18 +812,30 @@ def _build_parser() -> argparse.ArgumentParser:
         "--aggregate-from", default=None,
         help="Rebuild metrics from a saved report's states (no JEV calls)",
     )
-    parser.add_argument("--symbol", default="BTC/USDT")
-    parser.add_argument("--timeframe", default="1h")
-    parser.add_argument("--limit", type=int, default=200, help="Most recent states to evaluate (0 = all)")
-    parser.add_argument("--horizons", default="1,2,3,4")
-    parser.add_argument("--horizon", type=int, default=1, help="Primary horizon for labels and precision")
     parser.add_argument(
-        "--move-threshold-pct", type=float, default=DEFAULT_MOVE_THRESHOLD_PCT,
-        help="Absolute forward move that makes a state worth trading (percent)",
+        "--symbol", default=None,
+        help="Trading pair (default BTC/USDT, or the report's symbol with --aggregate-from)",
     )
     parser.add_argument(
-        "--delay-seconds", type=float, default=0.5,
-        help="Pause before each real JEV call to respect rate limits",
+        "--timeframe", default=None,
+        help="Candle timeframe (default 1h, or the report's timeframe with --aggregate-from)",
+    )
+    parser.add_argument("--limit", type=int, default=200, help="Most recent states to evaluate (0 = all)")
+    parser.add_argument(
+        "--horizons", default=None,
+        help="Comma-separated horizons (default 1,2,3,4, or the report's horizons)",
+    )
+    parser.add_argument(
+        "--horizon", type=int, default=None,
+        help="Primary horizon for labels and precision (default 1, or the report's horizon)",
+    )
+    parser.add_argument(
+        "--move-threshold-pct", type=float, default=None,
+        help="Absolute forward move that makes a state worth trading (percent; default 1.0)",
+    )
+    parser.add_argument(
+        "--delay-seconds", type=float, default=None,
+        help="Pause before each real JEV call (default 0.5; carried from the report on rebuild)",
     )
     parser.add_argument(
         "--cost-pct", type=float, default=0.10,

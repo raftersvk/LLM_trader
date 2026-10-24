@@ -6,6 +6,7 @@ No network and no JEV call: every test uses synthetic records and labels.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -289,6 +290,122 @@ def test_aggregate_from_payload_reproduces_embedded_metrics():
     # The exact 0.45 boundary state and the tiny positive return survive.
     assert first["states"][2]["noul"] == 0.45000000001
     assert first["states"][0]["forward_returns"]["1"] == 1e-9
+
+
+def _full_record(index: int, noul: float) -> Any:
+    """Record carrying every horizon so report validation succeeds."""
+    forward = 0.01 * (index + 1)
+    return CalibrationRecord(
+        index=index,
+        as_of="2026-10-15T09:00:00Z",
+        noul=noul,
+        candle_open_time="2026-10-15T09:00:00Z",
+        bias="long",
+        regime="trend",
+        atr_pct=0.01,
+        forward_returns={1: forward, 2: forward, 3: forward, 4: forward},
+        worth_trading={horizon: False for horizon in (1, 2, 3, 4)},
+        base_action="BUY",
+        base_direction_correct={1: True, 2: True, 3: True, 4: True},
+    )
+
+
+def _source_args(**overrides: Any) -> Namespace:
+    """Report-producing args with non-default provenance fields."""
+    values = {
+        "candles": "/tmp/does-not-exist-candles.csv",
+        "symbol": "ETH/USDT",
+        "timeframe": "4h",
+        "candle_count": 600,
+        "move_threshold_pct": 2.0,
+        "delay_seconds": 0.25,
+        "horizon": 2,
+        "thresholds": (0.2, 0.5),
+    }
+    values.update(overrides)
+    return Namespace(**values)
+
+
+def test_validate_calibration_report_accepts_and_rejects():
+    """Validation requires a dataset, a non-empty states list and state keys."""
+    report = jev_calibration.build_report(
+        [_full_record(0, 0.4), _full_record(1, 0.6)], _source_args(), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert jev_calibration.validate_calibration_report(report) == []
+
+    assert "missing dataset" in jev_calibration.validate_calibration_report({})
+    empty = jev_calibration.validate_calibration_report({"dataset": {}, "states": []})
+    assert "dataset missing symbol" in empty
+    assert "states must be a non-empty list" in empty
+    bad_state = jev_calibration.validate_calibration_report(
+        {"dataset": {"symbol": "BTC/USDT", "timeframe": "1h",
+                     "horizons": [1], "move_threshold_pct": 1.0},
+         "states": [{"index": 0}]}
+    )
+    assert any("state 0 missing" in problem for problem in bad_state)
+
+
+@pytest.mark.asyncio
+async def test_aggregate_from_carries_dataset_provenance(tmp_path):
+    """A flag-free rebuild keeps the source report's dataset fields."""
+    report = jev_calibration.build_report(
+        [_full_record(0, 0.4), _full_record(1, 0.6)], _source_args(), (2, 3),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    path = tmp_path / "calibration_eth.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    args = jev_calibration._parse_args(["--aggregate-from", str(path)])
+    rebuilt = await jev_calibration.run_calibration(args)
+
+    dataset = rebuilt["dataset"]
+    assert dataset["source"] == "/tmp/does-not-exist-candles.csv"
+    assert dataset["symbol"] == "ETH/USDT"
+    assert dataset["timeframe"] == "4h"
+    assert dataset["move_threshold_pct"] == 2.0
+    assert dataset["delay_seconds"] == 0.25
+    assert dataset["candles"] == 600
+    assert dataset["horizons"] == [2, 3]
+    assert set(rebuilt["worth_rate"]) == {"h2", "h3"}
+
+
+@pytest.mark.asyncio
+async def test_aggregate_from_explicit_flags_override_provenance(tmp_path):
+    """Explicit CLI options win over the loaded report's dataset."""
+    report = jev_calibration.build_report(
+        [_full_record(0, 0.4), _full_record(1, 0.6)], _source_args(), (2, 3),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    path = tmp_path / "calibration_eth.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    args = jev_calibration._parse_args([
+        "--aggregate-from", str(path),
+        "--symbol", "SOL/USDT", "--timeframe", "15m",
+        "--move-threshold-pct", "0.5", "--delay-seconds", "1.5",
+        "--horizons", "1,4", "--horizon", "4",
+    ])
+    rebuilt = await jev_calibration.run_calibration(args)
+
+    dataset = rebuilt["dataset"]
+    assert dataset["symbol"] == "SOL/USDT"
+    assert dataset["timeframe"] == "15m"
+    assert dataset["move_threshold_pct"] == 0.5
+    assert dataset["delay_seconds"] == 1.5
+    assert dataset["horizons"] == [1, 4]
+    assert set(rebuilt["worth_rate"]) == {"h1", "h4"}
+
+
+@pytest.mark.asyncio
+async def test_aggregate_from_rejects_invalid_payload(tmp_path):
+    """A malformed saved report must stop before any rebuild."""
+    path = tmp_path / "broken.json"
+    path.write_text(json.dumps({"dataset": {}, "states": []}), encoding="utf-8")
+    args = jev_calibration._parse_args(["--aggregate-from", str(path)])
+
+    with pytest.raises(SystemExit, match="invalid calibration report"):
+        await jev_calibration.run_calibration(args)
 
 
 def test_record_payload_is_json_friendly():
