@@ -524,8 +524,12 @@ class CompositionRoot(ProvisioningMixin):
             # Run shutdown in its own task: bot.shutdown (a registered callback)
             # cancels the bot's active tasks, which includes this listener; awaiting
             # shutdown here would let that cancellation abort the callback chain.
+            # start_shutdown() is tracked, so the supervisor can await the drain tail.
             if self.shutdown_manager is not None:
-                asyncio.create_task(self.shutdown_manager.shutdown_gracefully())
+                if hasattr(self.shutdown_manager, "start_shutdown"):
+                    self.shutdown_manager.start_shutdown()
+                else:
+                    asyncio.create_task(self.shutdown_manager.shutdown_gracefully())
 
         keyboard_handler.register_command("q", _quit_multi_pair, "Quit the application")
         if self.shutdown_manager is not None:

@@ -30,7 +30,6 @@ class _FakeShutdownManager:
         return self._shutdown_task
 
     async def shutdown_gracefully(self) -> None:
-        self._shutdown_task = asyncio.current_task()
         self._shutting_down = True
         for callback in self.callbacks:
             await callback()
@@ -120,6 +119,7 @@ async def test_multi_pair_registers_quit_and_starts_keyboard_listener():
     keyboard.start_listening.assert_awaited_once()
 
     await commands["q"]()
+    assert shutdown.shutdown_task is not None
     await asyncio.wait_for(task, timeout=1.0)
 
 
@@ -170,7 +170,7 @@ async def test_supervisor_returns_when_callbacks_abort_after_shutdown_started():
     supervisor = asyncio.create_task(root._supervise_multi_pair(manager))
     await asyncio.sleep(0)
 
-    runner = asyncio.create_task(shutdown.shutdown_gracefully())
+    runner = shutdown.start_shutdown()
     with pytest.raises(asyncio.CancelledError):
         await runner
 
@@ -189,7 +189,6 @@ async def test_supervisor_waits_for_the_shutdown_task_to_finish_cleanup():
 
     class _SlowCleanupManager(_FakeShutdownManager):
         async def shutdown_gracefully(self) -> None:
-            self._shutdown_task = asyncio.current_task()
             self._shutting_down = True
             for callback in self.callbacks:
                 await callback()
