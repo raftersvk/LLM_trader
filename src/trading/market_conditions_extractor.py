@@ -19,6 +19,7 @@ from src.utils.indicator_classifier import (
     classify_volume_state,
     resolve_scalar,
 )
+from src.utils.market_calendar import is_weekend as market_is_weekend
 
 from .data_models import MarketConditions, Position
 
@@ -149,7 +150,7 @@ class MarketConditionsExtractor:
             conditions["market_sentiment"] = classify_market_sentiment(sentiment_data)
             conditions["fear_greed_index"] = sentiment_data.get("fear_greed_index", 50) if sentiment_data else 50
             conditions["order_book_bias"] = classify_order_book_bias(microstructure_data)
-            conditions["is_weekend"] = datetime.now(timezone.utc).weekday() >= 5
+            conditions["is_weekend"] = market_is_weekend(datetime.now(timezone.utc))
 
             reddit_assessment = analysis.get("reddit_sentiment")
             conditions["social_sentiment_reddit"] = reddit_assessment["outlook"] if reddit_assessment else ""

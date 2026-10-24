@@ -21,6 +21,8 @@ from src.dashboard.decision_presenter import (
     extract_market_status,
     read_json_file,
 )
+from src.utils.market_calendar import is_weekend as market_is_weekend
+
 # Backwards-compatible helpers used by the fork's dashboard tests/integrations.
 _read_json_file = read_json_file
 _distance_pct_or_fallback = distance_pct_or_fallback
@@ -91,7 +93,7 @@ def _build_current_market_context(config, logger, unified_parser=None, symbol=No
             "technical_data": technical_data,
             "current_price": current_price,
             "sentiment_data": data.get("sentiment"),
-            "is_weekend": datetime.now().weekday() >= 5,
+            "is_weekend": market_is_weekend(datetime.now()),
         }
         return (
             build_context_string_from_technical_data(**shared_kwargs),

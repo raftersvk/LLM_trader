@@ -25,6 +25,7 @@ from src.utils.indicator_classifier import (
     classify_volume_state,
     resolve_scalar,
 )
+from src.utils.market_calendar import is_weekend as market_is_weekend
 from src.utils.pattern_recency import filter_recent_patterns
 from src.utils.profiler import profile_performance
 from src.utils.timeframe_validator import TimeframeValidator
@@ -779,7 +780,7 @@ class AnalysisEngine:
         assert self.context is not None
         bb_position = classify_bb_position(technical_data, self.context.current_price)
 
-        is_weekend = datetime.now(timezone.utc).weekday() >= 5
+        is_weekend = market_is_weekend(datetime.now(timezone.utc))
 
         market_sentiment = classify_market_sentiment(self.context.sentiment)
 
