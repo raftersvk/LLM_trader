@@ -273,7 +273,10 @@ def _heartbeat_files(directory: Path) -> List[Path]:
             sorted(
                 path
                 for path in directory.glob("heartbeat_*.json")
-                if path.is_file()
+                # heartbeat_summary.json (aggregated pair map) shares the
+                # prefix but is not a per-pair heartbeat: only accept the
+                # heartbeat_<SYMBOL>_<TF>.json shape.
+                if path.is_file() and _HEARTBEAT_RE.match(path.name)
             )
         )
         legacy = directory / "heartbeat.json"

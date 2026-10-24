@@ -236,6 +236,50 @@ def test_heartbeat_fresh_vs_stale_and_default_two_times_timeframe(tmp_path):
         assert all(row["stale"] is True for row in rows)
 
 
+def test_heartbeat_summary_is_not_reported_as_a_heartbeat(tmp_path):
+    now = datetime.now(timezone.utc)
+    _write_json(
+        tmp_path,
+        "heartbeat_BTC_USDT_1h.json",
+        {
+            "symbol": "BTC/USDT",
+            "timeframe": "1h",
+            "candle_open_time": _iso(now - timedelta(minutes=5)),
+            "heartbeat_at": _iso(now - timedelta(seconds=10)),
+        },
+    )
+    # Written every cycle by SignalService.write_heartbeat_summary; it has no
+    # symbol/timeframe/heartbeat_at and must never surface as a phantom entry.
+    _write_json(
+        tmp_path,
+        "heartbeat_summary.json",
+        {
+            "updated_at": _iso(now),
+            "pairs": {"BTC/USDT:1h": _iso(now - timedelta(seconds=10))},
+        },
+    )
+
+    with _client(tmp_path) as client:
+        rows = client.get("/api/heartbeats").json()
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "BTC/USDT"
+        assert rows[0]["file"] == "heartbeat_BTC_USDT_1h.json"
+
+        health = client.get("/api/health").json()
+        assert health["counts"]["heartbeat_files"] == 1
+        assert health["counts"]["heartbeats"] == 1
+
+    summary_only = tmp_path / "summary-only"
+    summary_only.mkdir()
+    _write_json(summary_only, "heartbeat_summary.json", {"updated_at": _iso(now), "pairs": {}})
+
+    with _client(summary_only) as client:
+        assert client.get("/api/heartbeats").json() == []
+        health = client.get("/api/health").json()
+        assert health["counts"]["heartbeat_files"] == 0
+        assert health["counts"]["heartbeats"] == 0
+
+
 def test_legacy_shared_heartbeat_is_labelled_legacy(tmp_path):
     now = datetime.now(timezone.utc)
     _write_json(
