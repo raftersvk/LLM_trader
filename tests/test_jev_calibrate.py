@@ -75,10 +75,23 @@ def test_isotonic_is_monotonic_and_pools_violations():
     rates = [rate for _x, rate in model]
     assert rates == sorted(rates)
     assert jev_calibrate.isotonic_predict(model, 0.1) == 0.0
+    assert jev_calibrate.isotonic_predict(model, 0.2) == pytest.approx(0.5)
     assert jev_calibrate.isotonic_predict(model, 0.3) == pytest.approx(0.5)
     assert jev_calibrate.isotonic_predict(model, 0.9) == 1.0
     assert jev_calibrate.fit_isotonic([], []) == []
 
+
+
+def test_isotonic_pooled_block_covers_points_below_its_mean():
+    """A training point below a pooled block's mean still gets the block rate."""
+    model = jev_calibrate.fit_isotonic(
+        [0.1, 0.2, 0.3, 0.4], [False, True, False, True]
+    )
+
+    assert jev_calibrate.isotonic_predict(model, 0.1) == 0.0
+    assert jev_calibrate.isotonic_predict(model, 0.2) == pytest.approx(0.5)
+    assert jev_calibrate.isotonic_predict(model, 0.3) == pytest.approx(0.5)
+    assert jev_calibrate.isotonic_predict(model, 0.4) == 1.0
 
 def test_brier_score_known_value():
     """Brier is the mean squared error of the calibrated probability."""
@@ -267,6 +280,7 @@ def test_calibrate_policy_schema_and_weekly_cap():
     assert abs(policy["threshold"] - 0.5) <= 0.05
     assert policy["expire_at"]
     assert "threshold_curve" in policy["metrics"]
+    assert policy["metrics"]["brier"] <= policy["metrics"]["raw_brier"] + 1e-12
     assert set(policy["offset_rules"]) == {"high_vol", "low_vol"}
 
 

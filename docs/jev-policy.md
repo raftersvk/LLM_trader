@@ -148,7 +148,7 @@ correctly keeps 0.5. The OOS slice is not used for any fit.
                  "atr_cutoff": {"BTC/USDT": 0.002768, "ETH/USDT": 0.004118}}
   },
   "metrics": {
-    "brier": 0.3019,
+    "brier": 0.2101,
     "raw_brier": 0.2818,
     "coverage": 0.2627,
     "net_benefit": -0.7721,
@@ -170,10 +170,10 @@ trades):
 
 | Horizon | States used | Brier | Net benefit | Mean net % | Win rate |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| h1 | 21 | 0.3019 | -0.77 | -0.077 | 0.400 |
-| h2 | 21 | 0.2103 | -0.55 | -0.055 | 0.600 |
-| h3 | 21 | 0.2103 | +1.06 | +0.106 | 0.600 |
-| h4 | 21 | 0.1946 | +0.99 | +0.099 | 0.600 |
+| h1 | 21 | 0.2101 | -0.77 | -0.077 | 0.400 |
+| h2 | 21 | 0.1508 | -0.55 | -0.055 | 0.600 |
+| h3 | 21 | 0.1508 | +1.06 | +0.106 | 0.600 |
+| h4 | 21 | 0.1440 | +0.99 | +0.099 | 0.600 |
 
 Even if the 200-state minimum were waived, no training threshold with coverage
 >= 40 % has a positive trade-P&L net benefit: at 0.30-0.40 the net benefit is

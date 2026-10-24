@@ -201,8 +201,11 @@ def split_train_oos(
 def fit_isotonic(probabilities: Sequence[float], labels: Sequence[bool]) -> List[Tuple[float, float]]:
     """Fit a monotone map with pool-adjacent-violators.
 
-    Returns ordered ``(mean_probability, observed_rate)`` blocks. An empty
-    sample returns an empty model.
+    Returns ordered ``(block_max_probability, observed_rate)`` blocks. The
+    first tuple member is the largest input probability in the block, not its
+    weighted mean: a prediction must cover every training point that was
+    pooled into the block, including points below the mean. An empty sample
+    returns an empty model.
     """
     if len(probabilities) != len(labels):
         raise ValueError("probabilities and labels must have the same length")
@@ -211,25 +214,27 @@ def fit_isotonic(probabilities: Sequence[float], labels: Sequence[bool]) -> List
         counts = grouped.setdefault(float(probability), [0, 0])
         counts[0] += 1 if label else 0
         counts[1] += 1
+    # [weighted_mean_x, rate, weight, max_x]
     blocks: List[List[float]] = []
     for probability in sorted(grouped):
         positives, total = grouped[probability]
-        blocks.append([probability, positives / total, float(total)])
+        blocks.append([probability, positives / total, float(total), probability])
         while len(blocks) >= 2 and blocks[-2][1] > blocks[-1][1]:
             left = blocks[-2]
             right = blocks.pop()
             left[1] = (left[1] * left[2] + right[1] * right[2]) / (left[2] + right[2])
             left[2] += right[2]
             left[0] = (left[0] * (left[2] - right[2]) + right[0] * right[2]) / left[2]
-    return [(round(block[0], 6), round(block[1], 6)) for block in blocks]
+            left[3] = right[3]
+    return [(block[3], round(block[1], 6)) for block in blocks]
 
 
 def isotonic_predict(model: Sequence[Tuple[float, float]], value: float) -> float:
-    """Predict with the piecewise-constant isotonic model."""
+    """Predict with the fitted step function using its block upper bounds."""
     if not model:
         return FALLBACK_THRESHOLD
     xs = [point[0] for point in model]
-    index = bisect.bisect_right(xs, float(value)) - 1
+    index = bisect.bisect_left(xs, float(value))
     index = max(0, min(len(model) - 1, index))
     return model[index][1]
 
