@@ -41,6 +41,10 @@ def _base_dependencies() -> dict:
         "sentiment_analyst": MagicMock(),
         "executor_handler": MagicMock(),
         "dashboard_state": MagicMock(),
+        "guard_pipeline": MagicMock(),
+        "post_mortem_service": MagicMock(),
+        "tightening_policy": MagicMock(),
+        "post_mortem_repo": MagicMock(),
     }
 
 
@@ -66,3 +70,14 @@ async def test_create_bot_for_pair_wires_the_pair_strategy(tmp_path, monkeypatch
 
     # Each pair owns an isolated persistence directory.
     assert "pair_ETH_USDT" in str(bot.persistence.data_dir)
+
+    # Regression: the 9th positional argument is conditions_extractor, not the
+    # position factory. A mis-wired strategy blows up on the first analysis.
+    strategy = bot.trading_strategy
+    assert strategy._conditions is not strategy.position_factory
+    assert strategy._conditions.__class__.__name__ == "MarketConditionsExtractor"
+    assert strategy.guard_pipeline is factory.base_dependencies["guard_pipeline"]
+    assert strategy.post_mortem_service is factory.base_dependencies["post_mortem_service"]
+    assert strategy.dashboard_state is factory.base_dependencies["dashboard_state"]
+    conditions = strategy._conditions.extract_market_conditions({"price": 100.0})
+    assert conditions is not None

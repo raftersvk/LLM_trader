@@ -281,6 +281,10 @@ class CompositionRoot(ProvisioningMixin):
                     "ev_formatter": analyzer["ev_formatter"],
                     "parser": utils["parser"],
                     "dashboard_state": None,
+                    "post_mortem_repo": trading.get("post_mortem_repo"),
+                    "guard_pipeline": trading.get("guard_pipeline"),
+                    "post_mortem_service": trading.get("post_mortem_service"),
+                    "tightening_policy": trading.get("tightening_policy"),
                 }
                 factory = BotDependencyFactory(
                     base_dependencies=base_dependencies,

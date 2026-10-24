@@ -227,12 +227,25 @@ class BotDependencyFactory:
 
         from src.trading.position_extractor import PositionExtractor
         from src.factories.position_factory import PositionFactory
+        from src.trading.market_conditions_extractor import MarketConditionsExtractor
         from src.trading.trading_strategy import TradingStrategy
         parser = self.base_dependencies.get('parser')
         strategy = TradingStrategy(
-            self.logger, persistence, brain_service, statistics_service, memory_service,
-            risk_manager, self.config, PositionExtractor(self.logger, parser), PositionFactory(self.logger),
-            portfolio_capital_service=self.portfolio_capital_service
+            logger=self.logger,
+            persistence=persistence,
+            brain_service=brain_service,
+            statistics_service=statistics_service,
+            memory_service=memory_service,
+            risk_manager=risk_manager,
+            config=self.config,
+            position_extractor=PositionExtractor(self.logger, parser),
+            position_factory=PositionFactory(self.logger),
+            conditions_extractor=MarketConditionsExtractor(self.logger),
+            tightening_policy=self.base_dependencies.get("tightening_policy"),
+            guard_pipeline=self.base_dependencies.get("guard_pipeline"),
+            post_mortem_service=self.base_dependencies.get("post_mortem_service"),
+            dashboard_state=self.base_dependencies.get("dashboard_state"),
+            portfolio_capital_service=self.portfolio_capital_service,
         )
 
         return {

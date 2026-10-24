@@ -617,6 +617,10 @@ class ProvisioningMixin:
             "statistics_service": statistics_service,
             "exit_monitor": exit_monitor,
             "post_mortem_repo": post_mortem_repo,
+            # Shared with per-pair strategies by the multi-pair factory.
+            "guard_pipeline": guard_pipeline,
+            "post_mortem_service": post_mortem_service,
+            "tightening_policy": tightening_policy,
         }
 
     async def _provision_notifiers(self, utils: dict) -> dict:
