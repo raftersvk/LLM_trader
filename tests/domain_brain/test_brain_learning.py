@@ -530,6 +530,24 @@ def test_update_from_closed_trade_stores_exit_profile_and_entry_snapshot():
     assert brain.vector_memory.store_semantic_rule.called is False
 
 
+def test_closed_trade_normalizes_legacy_weekend_flag():
+    """A legacy true flag must be rewritten before it reaches memory."""
+    brain = learning_brain(exit_execution_context=HARD_15M)
+
+    brain.update_from_closed_trade(
+        position=make_position(**EXIT_HARD_SOFT),
+        close_price=52000.0,
+        close_reason="take_profit",
+        entry_decision=ENTRY_DECISION,
+        market_conditions=make_market_conditions(is_weekend=True, volatility="HIGH"),
+        evidence=proven_exit(),
+    )
+
+    stored = brain.vector_memory.store_experience.call_args.kwargs
+    assert stored["metadata"]["is_weekend"] is False
+    assert "Weekend" not in stored["market_context"]
+
+
 def test_update_from_closed_trade_without_entry_decision_falls_back_to_position():
     brain = learning_brain(exit_execution_context=HARD_15M)
 

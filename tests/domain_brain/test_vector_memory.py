@@ -677,18 +677,18 @@ def test_empty_collection_returns_empty_context_and_stats():
     assert service.compute_adx_performance() == {}
 
 
-def test_weekend_bucket_stays_empty_for_current_records():
-    """New records always carry is_weekend=False from the neutral calendar helper.
+def test_weekend_bucket_ignores_legacy_true_metadata():
+    """A stored is_weekend=True row must not create a weekend bucket.
 
-    Legacy metadata may still contain the key; it is tolerated and, for records
-    written by current code, the weekend bucket stays empty.
+    Legacy records may still contain the key, but the read path uses the
+    constant neutral helper instead of the stored value.
     """
     service = make_service()
     service._collection.get.return_value = {
         "ids": ["1", "2"],
         "metadatas": [
-            {"outcome": "WIN", "pnl_pct": 2.0, "is_weekend": False},
-            {"outcome": "LOSS", "pnl_pct": -1.0, "is_weekend": False},
+            {"outcome": "WIN", "pnl_pct": 2.0, "is_weekend": True},
+            {"outcome": "LOSS", "pnl_pct": -1.0, "is_weekend": True},
         ],
     }
 
@@ -855,6 +855,21 @@ def test_match_factors_flag_volatility_scale_drift():
     assert "different volatility scale" in drift
     assert "⚠️" not in same
     assert "ATR%=0.7%" in same
+
+
+def test_match_factors_ignore_stored_weekend_flag():
+    """Legacy is_weekend=True metadata must not add a Weekend flag."""
+    service = make_service()
+    line = service._build_match_factors(
+        {
+            "outcome": "LOSS",
+            "is_weekend": True,
+            "volatility_level": "HIGH",
+        },
+        "BULLISH + HIGH Volatility",
+    )
+
+    assert "Weekend" not in line
 
 
 def test_match_factors_include_stored_entry_fields():

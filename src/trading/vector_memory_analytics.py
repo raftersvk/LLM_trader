@@ -4,6 +4,8 @@ import math
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
+from src.utils.market_calendar import is_weekend as market_is_weekend
+
 from .data_models import VectorSearchResult
 
 
@@ -371,8 +373,7 @@ class VectorMemoryAnalyticsMixin:
         }
 
         for meta in metas:
-            is_weekend = bool(meta.get("is_weekend", False))
-            key = "weekend" if is_weekend else "weekday"
+            key = "weekend" if market_is_weekend() else "weekday"
             pnl = meta.get("pnl_pct", 0)
             is_win = meta.get("outcome") == "WIN"
 
