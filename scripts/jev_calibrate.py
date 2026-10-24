@@ -58,6 +58,7 @@ OOS_DAYS = 7
 POLICY_MAX_AGE_DAYS = 14
 HIGH_VOL_OFFSET = 0.05
 LOW_VOL_OFFSET = -0.05
+TRADE_HORIZONS = (1, 2, 3, 4)
 
 
 # ------------------------------------------------------------------ observations
@@ -203,22 +204,35 @@ def brier_score(probabilities: Sequence[float], labels: Sequence[bool]) -> Optio
 
 
 # ---------------------------------------------------------------------- labels
-def net_label(observation: Observation, horizon: int = 1) -> Optional[bool]:
-    """True when the base trade beats its cost on this horizon."""
+def _trade_cost(observation: Observation, cost_pct: Optional[float]) -> float:
+    """Return the explicit cost override, else the observation's stored cost."""
+    return observation.cost_pct if cost_pct is None else float(cost_pct)
+
+
+def net_label(
+    observation: Observation, horizon: int = 1, cost_pct: Optional[float] = None
+) -> Optional[bool]:
+    """Trade-P&L label: the base trade beats costs on this horizon.
+
+    Directional states only (BUY/SELL). HOLD states have no trade direction and
+    return None so they are excluded from the trade-P&L label sample.
+    """
     result = observation.forward.get(horizon)
     if result is None or not observation.is_directional:
         return None
     gross = result * 100.0 if observation.base_action == "BUY" else -result * 100.0
-    return gross - observation.cost_pct > 0.0
+    return gross - _trade_cost(observation, cost_pct) > 0.0
 
 
-def net_return_pct(observation: Observation, horizon: int = 1) -> Optional[float]:
-    """Directional net return in percent, after the configured cost."""
+def net_return_pct(
+    observation: Observation, horizon: int = 1, cost_pct: Optional[float] = None
+) -> Optional[float]:
+    """Directional trade P&L in percent, net of the configured cost."""
     result = observation.forward.get(horizon)
     if result is None or not observation.is_directional:
         return None
     gross = result * 100.0 if observation.base_action == "BUY" else -result * 100.0
-    return gross - observation.cost_pct
+    return gross - _trade_cost(observation, cost_pct)
 
 
 # ------------------------------------------------------------------- vol rules
@@ -328,8 +342,9 @@ def evaluate_threshold(
     threshold: float,
     rules: Optional[Dict[str, Any]] = None,
     horizon: int = 1,
+    cost_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Coverage, trades and realised net benefit at one base threshold."""
+    """Coverage, trades and realised trade P&L at one base threshold."""
     scored = [observation for observation in observations if observation.forward.get(horizon) is not None]
     covered = [
         observation for observation in scored
@@ -341,7 +356,7 @@ def evaluate_threshold(
         and observation.bias not in (None, "none")
         and not _bias_conflict(observation)
     ]
-    returns = [value for value in (net_return_pct(observation, horizon) for observation in taken)
+    returns = [value for value in (net_return_pct(observation, horizon, cost_pct) for observation in taken)
                if value is not None]
     return {
         "threshold": round(float(threshold), 4),
@@ -361,9 +376,14 @@ def threshold_curve(
     observations: Sequence[Observation],
     thresholds: Sequence[float] = THRESHOLD_GRID,
     rules: Optional[Dict[str, Any]] = None,
+    horizon: int = 1,
+    cost_pct: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Evaluate every candidate threshold."""
-    return [evaluate_threshold(observations, threshold, rules) for threshold in thresholds]
+    return [
+        evaluate_threshold(observations, threshold, rules, horizon, cost_pct)
+        for threshold in thresholds
+    ]
 
 
 def select_candidate(
@@ -472,7 +492,7 @@ def validate_policy(policy: Dict[str, Any]) -> List[str]:
     """Return a list of schema problems; empty means valid."""
     problems: List[str] = []
     required = ("version", "generated_at", "window_days", "min_states", "threshold",
-                "offset_rules", "metrics", "fallback", "expire_at")
+                "offset_rules", "label", "metrics", "fallback", "expire_at")
     for key in required:
         if key not in policy:
             problems.append(f"missing {key}")
@@ -492,6 +512,17 @@ def validate_policy(policy: Dict[str, Any]) -> List[str]:
         problems.append("fallback must be in (0, 1)")
     if not isinstance(policy["offset_rules"], dict):
         problems.append("offset_rules must be an object")
+    label = policy["label"]
+    if not isinstance(label, dict):
+        problems.append("label must be an object")
+    else:
+        if label.get("type") != "trade_pnl_directional":
+            problems.append("label.type must be trade_pnl_directional")
+        if not isinstance(label.get("horizon"), int) or label["horizon"] < 1:
+            problems.append("label.horizon must be a positive int")
+        cost = _as_float(label.get("cost_pct"))
+        if cost is None or cost < 0:
+            problems.append("label.cost_pct must be >= 0")
     if not isinstance(policy["metrics"], dict):
         problems.append("metrics must be an object")
     for key in ("generated_at", "expire_at"):
@@ -520,22 +551,97 @@ def _iso(value: datetime) -> str:
     return iso_z(value.astimezone(timezone.utc))
 
 
+def _label_block(trade_horizon: int, cost_pct: float, horizons: Sequence[int]) -> Dict[str, Any]:
+    """Describe the trade-P&L label stored with every policy."""
+    return {
+        "type": "trade_pnl_directional",
+        "horizon": trade_horizon,
+        "horizons_evaluated": list(horizons),
+        "cost_pct": round(float(cost_pct), 4),
+        "description": (
+            "forward return in the base action direction over the horizon, "
+            "net of round-trip cost; HOLD states are excluded"
+        ),
+    }
+
+
+def _trade_sample(
+    observations: Sequence[Observation], horizon: int, cost_pct: float
+) -> Dict[str, Any]:
+    """Isotonic fit and Brier scores for the trade-P&L label."""
+    labels = [net_label(observation, horizon, cost_pct) for observation in observations]
+    usable = [
+        (observation.noul, bool(label))
+        for observation, label in zip(observations, labels)
+        if label is not None
+    ]
+    probabilities = [probability for probability, _ in usable]
+    targets = [label for _, label in usable]
+    model = fit_isotonic(probabilities, targets)
+    calibrated = [isotonic_predict(model, probability) for probability in probabilities]
+    return {
+        "states_used": len(usable),
+        "states_excluded": len(observations) - len(usable),
+        "brier": brier_score(calibrated, targets),
+        "raw_brier": brier_score(probabilities, targets),
+    }
+
+
+def _by_horizon_metrics(
+    observations: Sequence[Observation],
+    threshold: float,
+    rules: Optional[Dict[str, Any]],
+    horizons: Sequence[int],
+    cost_pct: float,
+) -> Dict[str, Any]:
+    """Trade-P&L label count, Brier and net benefit for every horizon."""
+    result: Dict[str, Any] = {}
+    for horizon in horizons:
+        sample = _trade_sample(observations, horizon, cost_pct)
+        evaluated = evaluate_threshold(observations, threshold, rules, horizon, cost_pct)
+        result[f"h{horizon}"] = {
+            "states_used": sample["states_used"],
+            "states_excluded": sample["states_excluded"],
+            "brier": _round_optional(sample["brier"]),
+            "raw_brier": _round_optional(sample["raw_brier"]),
+            "coverage": evaluated["coverage"],
+            "trades": evaluated["trades"],
+            "net_benefit": evaluated["net_benefit"],
+            "mean_net_pct": evaluated["mean_net_pct"],
+            "win_rate": evaluated["win_rate"],
+        }
+    return result
+
+
+def _round_optional(value: Optional[float]) -> Optional[float]:
+    """Round an optional float for JSON stability."""
+    return None if value is None else round(float(value), 4)
+
+
 def _fallback_policy(
     previous: Optional[Dict[str, Any]],
     now: datetime,
-    sample: int,
+    window: Sequence[Observation],
     reason: str,
     min_states: int,
     window_days: int,
+    rules: Dict[str, Any],
+    label: Dict[str, Any],
+    trade_horizon: int,
+    cost_pct: float,
+    horizons: Sequence[int],
 ) -> Dict[str, Any]:
-    """Policy used when there is not enough fresh data."""
+    """Policy used when there are not enough trade-labeled states."""
     threshold = FALLBACK_THRESHOLD
-    offset_rules: Dict[str, Any] = {}
+    offset_rules = rules
     version = 1
     if previous and not policy_is_stale(previous, now):
         threshold = resolve_threshold(previous, now)
-        offset_rules = previous.get("offset_rules") or {}
+        offset_rules = previous.get("offset_rules") or rules
         version = int(previous.get("version") or 1) + 1
+    sample = _trade_sample(window, trade_horizon, cost_pct)
+    evaluated = evaluate_threshold(window, threshold, offset_rules, trade_horizon, cost_pct)
+    curve = threshold_curve(window, THRESHOLD_GRID, offset_rules, trade_horizon, cost_pct)
     return {
         "version": version,
         "generated_at": _iso(now),
@@ -545,13 +651,23 @@ def _fallback_policy(
         "fallback": FALLBACK_THRESHOLD,
         "expire_at": _iso(now + timedelta(days=POLICY_MAX_AGE_DAYS)),
         "offset_rules": offset_rules,
+        "label": label,
         "metrics": {
-            "brier": None,
-            "coverage": None,
-            "net_benefit": None,
-            "sample": sample,
-            "trades": None,
+            "brier": _round_optional(sample["brier"]),
+            "raw_brier": _round_optional(sample["raw_brier"]),
+            "coverage": evaluated["coverage"],
+            "net_benefit": evaluated["net_benefit"],
+            "mean_net_pct": evaluated["mean_net_pct"],
+            "win_rate": evaluated["win_rate"],
+            "trades": evaluated["trades"],
+            "sample": len(window),
+            "label_states_used": sample["states_used"],
+            "label_states_excluded": sample["states_excluded"],
             "reason": reason,
+            "threshold_curve": curve,
+            "trade_pnl_by_horizon": _by_horizon_metrics(
+                window, threshold, offset_rules, horizons, cost_pct
+            ),
         },
         "status": "fallback",
     }
@@ -567,43 +683,42 @@ def calibrate_policy(
     min_trades: int = MIN_TRADES,
     min_improvement: float = MIN_IMPROVEMENT,
     max_delta: float = MAX_WEEKLY_DELTA,
+    cost_pct: float = DEFAULT_COST_PCT,
+    trade_horizon: int = 1,
+    horizons: Sequence[int] = TRADE_HORIZONS,
 ) -> Dict[str, Any]:
-    """Build the weekly policy from observations and the previous policy."""
+    """Build the weekly policy from the trade-P&L label.
+
+    ``min_states`` applies to trade-labeled states (directional base actions),
+    not to the raw observation count: HOLD states carry no trade P&L and are
+    excluded.
+    """
     window = filter_window(observations, now, window_days)
-    if len(window) < min_states:
+    rules = build_offset_rules(window)
+    label = _label_block(trade_horizon, cost_pct, horizons)
+    sample = _trade_sample(window, trade_horizon, cost_pct)
+    if sample["states_used"] < min_states:
         return _fallback_policy(
-            previous, now, len(window), f"insufficient states: {len(window)} < {min_states}",
-            min_states, window_days,
+            previous, now, window,
+            f"insufficient trade-labeled states: {sample['states_used']} < {min_states}",
+            min_states, window_days, rules, label, trade_horizon, cost_pct, horizons,
         )
     if previous and policy_is_stale(previous, now):
         logger.info("previous policy is stale; current threshold falls back to %.2f", FALLBACK_THRESHOLD)
         previous = None
 
-    rules = build_offset_rules(window)
-    curve = threshold_curve(window, THRESHOLD_GRID, rules)
+    curve = threshold_curve(window, THRESHOLD_GRID, rules, trade_horizon, cost_pct)
     candidate = select_candidate(curve, min_coverage, min_trades)
     current = resolve_threshold(previous, now) if previous else FALLBACK_THRESHOLD
 
-    labels = [net_label(observation) for observation in window]
-    usable = [
-        (observation.noul, bool(label))
-        for observation, label in zip(window, labels)
-        if label is not None
-    ]
-    model = fit_isotonic([probability for probability, _ in usable], [label for _, label in usable])
-    calibrated = [isotonic_predict(model, probability) for probability, _ in usable]
-    calibrated_brier = brier_score(calibrated, [label for _, label in usable])
-    raw_brier = brier_score([probability for probability, _ in usable],
-                            [label for _, label in usable])
-
     oos = last_days(window, now, OOS_DAYS)
-    oos_current = evaluate_threshold(oos, current, rules)
+    oos_current = evaluate_threshold(oos, current, rules, trade_horizon, cost_pct)
     promoted = False
     final = current
     if candidate is not None:
         smoothed = smooth_threshold(current, candidate["threshold"])
         proposed = limit_delta(current, smoothed, max_delta)
-        oos_proposed = evaluate_threshold(oos, proposed, rules)
+        oos_proposed = evaluate_threshold(oos, proposed, rules, trade_horizon, cost_pct)
         if should_promote(oos_current["net_benefit"], oos_proposed["net_benefit"], min_improvement):
             final = proposed
             promoted = True
@@ -615,8 +730,8 @@ def calibrate_policy(
     else:
         logger.info("no feasible candidate; keeping current threshold %.2f", current)
 
-    metrics = evaluate_threshold(window, final, rules)
-    oos_final = evaluate_threshold(oos, final, rules)
+    metrics = evaluate_threshold(window, final, rules, trade_horizon, cost_pct)
+    oos_final = evaluate_threshold(oos, final, rules, trade_horizon, cost_pct)
     version = int((previous or {}).get("version") or 0) + 1
     policy = {
         "version": version,
@@ -627,21 +742,27 @@ def calibrate_policy(
         "fallback": FALLBACK_THRESHOLD,
         "expire_at": _iso(now + timedelta(days=POLICY_MAX_AGE_DAYS)),
         "offset_rules": rules,
+        "label": label,
         "metrics": {
-            "brier": round(calibrated_brier, 4) if calibrated_brier is not None else None,
-            "raw_brier": round(raw_brier, 4) if raw_brier is not None else None,
+            "brier": _round_optional(sample["brier"]),
+            "raw_brier": _round_optional(sample["raw_brier"]),
             "coverage": metrics["coverage"],
             "net_benefit": metrics["net_benefit"],
             "mean_net_pct": metrics["mean_net_pct"],
             "win_rate": metrics["win_rate"],
             "trades": metrics["trades"],
             "sample": metrics["sample"],
+            "label_states_used": sample["states_used"],
+            "label_states_excluded": sample["states_excluded"],
             "candidate_threshold": candidate["threshold"] if candidate else None,
             "promoted": promoted,
             "oos_net_benefit": oos_final["net_benefit"],
             "oos_net_benefit_current": oos_current["net_benefit"],
             "oos_sample": oos_current["sample"],
             "threshold_curve": curve,
+            "trade_pnl_by_horizon": _by_horizon_metrics(
+                window, final, rules, horizons, cost_pct
+            ),
         },
         "status": "active",
     }
@@ -677,6 +798,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-improvement", type=float, default=MIN_IMPROVEMENT)
     parser.add_argument("--max-delta", type=float, default=MAX_WEEKLY_DELTA)
     parser.add_argument(
+        "--cost-pct", type=float, default=DEFAULT_COST_PCT,
+        help="Round-trip trading cost in percent applied to the trade-P&L label",
+    )
+    parser.add_argument(
+        "--trade-horizon", type=int, default=1,
+        help="Horizon (candles) used for the policy label and net benefit",
+    )
+    parser.add_argument(
         "--now",
         default=None,
         help="Reference time (ISO-8601) for reproducible weekly runs; defaults to now UTC",
@@ -689,6 +818,11 @@ def _print_summary(policy: Dict[str, Any], path: str) -> None:
     print(f"policy: {path}")
     print(f"status={policy['status']} version={policy['version']} threshold={policy['threshold']} "
           f"expire_at={policy['expire_at']}")
+    label = policy.get("label") or {}
+    print(f"label={label.get('type')} horizon={label.get('horizon')} "
+          f"cost_pct={label.get('cost_pct')} "
+          f"states_used={metrics.get('label_states_used')} "
+          f"states_excluded={metrics.get('label_states_excluded')}")
     print(f"sample={metrics.get('sample')} coverage={metrics.get('coverage')} "
           f"trades={metrics.get('trades')} net_benefit={metrics.get('net_benefit')} "
           f"brier={metrics.get('brier')}")
@@ -720,6 +854,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         min_trades=args.min_trades,
         min_improvement=args.min_improvement,
         max_delta=args.max_delta,
+        cost_pct=args.cost_pct,
+        trade_horizon=args.trade_horizon,
     )
     problems = validate_policy(policy)
     if problems:

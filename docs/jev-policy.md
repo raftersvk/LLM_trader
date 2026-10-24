@@ -2,8 +2,8 @@
 
 A conservative weekly layer on top of the raw `noul` threshold. It never
 changes the signal service by itself: the service still uses 0.5 in this PR.
-This document records the observation format, the calibration rules and the
-planned (not yet wired) integration.
+This document records the observation format, the trade-P&L label, the
+calibration rules and the planned (not yet wired) integration.
 
 ## Files
 
@@ -39,15 +39,38 @@ Both runtime paths are configurable through `--observations` / `--policy`.
 Forward returns are fractions; `cost_pct` is a round-trip percentage (default
 0.10 %). Observations are written only for states with a real `noul` answer.
 
+## Trade-P&L label
+
+The policy uses the label that matches the actual trade, not the absolute
+move label from the calibration report:
+
+```text
+BUY  label(h) = forward_h * 100 - cost_pct > 0
+SELL label(h) = -forward_h * 100 - cost_pct > 0
+HOLD label    = none (excluded)
+```
+
+Horizons 1-4 are all evaluated and stored in
+`metrics.trade_pnl_by_horizon`. The policy threshold and net benefit use
+`--trade-horizon` (default 1) and `--cost-pct` (default 0.10). Net benefit is
+the sum of the directional net P&L in percent for the trades that survive the
+gate.
+
+The absolute `abs(forward_h1) >= 1 %` label remains the **secondary** label in
+`docs/jev-calibration.md` and in the per-report Brier/reliability tables; it is
+not used to build the policy.
+
+`--min-states` (default 200) applies to trade-labeled states, not raw
+observations. HOLD states have no trade direction and are excluded; the policy
+metrics report both `label_states_used` and `label_states_excluded`.
+
 ## Weekly rules
 
 1. Keep the last 60 days of observations (`--window-days`).
-2. Require at least 200 states (`--min-states`). Otherwise preserve the
-   previous policy, or fall back to 0.5 when there is none.
-3. Fit isotonic regression `noul -> P(base trade is profitable after costs)`
-   with pool-adjacent-violators. The label is the base action's direction
-   (`BUY`: `forward_1h`, `SELL`: `-forward_1h`) minus `cost_pct`; HOLD states
-   have no label.
+2. Require at least 200 trade-labeled states (`--min-states`). Otherwise
+   preserve the previous policy, or fall back to 0.5 when there is none.
+3. Fit isotonic regression `noul -> P(trade is profitable net of cost)` with
+   pool-adjacent-violators on the selected horizon.
 4. Evaluate thresholds 0.30-0.70 by 0.05 with the volatility offset applied
    per state. A candidate must have coverage >= 40 %, >= 20 trades and a
    positive net benefit.
@@ -65,16 +88,22 @@ Volatility offsets:
 Per-pair ATR cutoffs are stored in the policy so the runtime does not need to
 recompute percentiles.
 
-## Initial policy (2026-10-24, 400 states)
+## Initial policy (2026-10-24, 400 observations)
 
-Produced from the 200 BTC + 200 ETH calibration states. Command:
+Command:
 
 ```bash
 python scripts/jev_calibrate.py \
   --observations runtime/jev_bench/observations.jsonl \
   --policy runtime/jev_calibration/policy.json \
-  --now 2026-10-24T20:00:00Z
+  --now 2026-10-24T20:00:00Z \
+  --cost-pct 0.1 --trade-horizon 1
 ```
+
+**Status: fallback, threshold 0.5.** The 400 observations contain only **78
+trade-labeled states** (28 BTC + 50 ETH) with a directional base action; the
+other **322 are HOLD** and are excluded. 78 < 200, so the data cannot support a
+trade-P&L threshold yet and the policy correctly keeps 0.5.
 
 ```json
 {
@@ -85,6 +114,12 @@ python scripts/jev_calibrate.py \
   "threshold": 0.5,
   "fallback": 0.5,
   "expire_at": "2026-11-07T20:00:00Z",
+  "label": {
+    "type": "trade_pnl_directional",
+    "horizon": 1,
+    "horizons_evaluated": [1, 2, 3, 4],
+    "cost_pct": 0.1
+  },
   "offset_rules": {
     "high_vol": {"offset": 0.05, "regimes": ["high_vol"],
                  "atr_cutoff": {"BTC/USDT": 0.0056, "ETH/USDT": 0.00842}},
@@ -98,17 +133,26 @@ python scripts/jev_calibrate.py \
     "net_benefit": -1.89,
     "trades": 41,
     "sample": 400,
-    "candidate_threshold": null,
-    "promoted": false
+    "label_states_used": 78,
+    "label_states_excluded": 322,
+    "reason": "insufficient trade-labeled states: 78 < 200"
   },
-  "status": "active"
+  "status": "fallback"
 }
 ```
 
-At the initial window, every threshold with coverage >= 40 % had a negative
-net benefit (0.30: -6.07, 0.35: -3.01, 0.40: -2.90). The only positive points
-(0.65 / 0.70: +0.35) sat at ~20 % coverage. No feasible candidate existed, so
-the policy keeps 0.5.
+Diagnostic per-horizon trade P&L on the same window (41 surviving trades):
+
+| Horizon | States used | Brier | Net benefit | Mean net % | Win rate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| h1 | 78 | 0.2391 | -1.89 | -0.046 | 0.415 |
+| h2 | 78 | 0.3093 | -3.34 | -0.082 | 0.488 |
+| h3 | 78 | 0.2992 | -1.24 | -0.030 | 0.537 |
+| h4 | 78 | 0.3141 | -1.43 | -0.035 | 0.561 |
+
+Even if the 200-state minimum were waived, no threshold with coverage >= 40 %
+has a positive trade-P&L net benefit: at 0.30-0.40 the net benefit is -6.07 to
+-2.90. The only positive points (0.65/0.70: +0.35) sit at ~20 % coverage.
 
 ## Planned signal-service integration (not in this PR)
 

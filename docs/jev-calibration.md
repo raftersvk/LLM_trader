@@ -14,7 +14,9 @@ is calibrated, using the production no-look-ahead state and the production
 - Repro: `scripts/jev_calibration.py`; machine reports in
   `runtime/jev_bench/calibration_{btc,eth}_200.json`, observation log via
   `--observations runtime/jev_bench/observations.jsonl`.
-- Weekly policy layer: see [`jev-policy.md`](jev-policy.md).
+- Weekly policy layer: see [`jev-policy.md`](jev-policy.md). The policy uses a
+  trade-P&L label (base direction, net of cost) over h1-h4; the absolute label
+  and its Brier/reliability below are kept as the secondary diagnostic.
 
 ## noul distribution
 

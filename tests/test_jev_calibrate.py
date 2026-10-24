@@ -151,14 +151,57 @@ def test_build_offset_rules_uses_pair_percentiles():
 
 
 def test_fallback_below_min_states():
-    """Fewer than 200 observations keeps 0.5 and marks the policy fallback."""
+    """Fewer than 200 trade-labeled states keeps 0.5 and marks the fallback."""
     policy = jev_calibrate.calibrate_policy(
         [_obs(0.5) for _ in range(199)], None, NOW,
     )
     assert policy["status"] == "fallback"
     assert policy["threshold"] == 0.5
     assert policy["metrics"]["sample"] == 199
+    assert policy["metrics"]["label_states_used"] == 199
+    assert policy["metrics"]["label_states_excluded"] == 0
+    assert "insufficient trade-labeled states" in policy["metrics"]["reason"]
+    assert policy["label"]["type"] == "trade_pnl_directional"
     assert jev_calibrate.validate_policy(policy) == []
+
+
+def test_hold_states_are_excluded_from_the_trade_label():
+    """HOLD states carry no trade direction and must not count toward min_states."""
+    observations = [_obs(0.5, base_action="HOLD", forward=0.05) for _ in range(250)]
+    policy = jev_calibrate.calibrate_policy(observations, None, NOW)
+
+    assert policy["status"] == "fallback"
+    assert policy["metrics"]["label_states_used"] == 0
+    assert policy["metrics"]["label_states_excluded"] == 250
+    assert "0 < 200" in policy["metrics"]["reason"]
+
+
+def test_trade_label_uses_base_direction_over_each_horizon():
+    """BUY uses +forward, SELL uses -forward, on every 1-4 horizon."""
+    buy = Observation(
+        candle_open_time=NOW - timedelta(hours=1), pair="BTC/USDT", noul=0.6,
+        base_action="BUY", forward={1: -0.01, 2: 0.005, 3: 0.02, 4: 0.03},
+        bias="long", regime="trend", atr_pct=0.01, cost_pct=0.1,
+    )
+    sell = Observation(
+        candle_open_time=NOW - timedelta(hours=2), pair="BTC/USDT", noul=0.4,
+        base_action="SELL", forward={1: 0.01, 2: -0.005, 3: -0.02, 4: -0.03},
+        bias="short", regime="trend", atr_pct=0.01, cost_pct=0.1,
+    )
+    assert jev_calibrate.net_label(buy, 1) is False
+    assert jev_calibrate.net_label(buy, 4) is True
+    assert jev_calibrate.net_label(sell, 1) is False
+    assert jev_calibrate.net_label(sell, 4) is True
+    assert jev_calibrate.net_return_pct(buy, 4) == pytest.approx(2.9)
+    assert jev_calibrate.net_return_pct(sell, 4) == pytest.approx(2.9)
+
+
+def test_cost_pct_override_changes_the_label_enabled_by_cli():
+    """A higher explicit cost can flip a marginal trade to a loss."""
+    observation = _obs(0.5, "BUY", 0.01)  # 1.0 % gross against a 0.1 % cost
+    assert jev_calibrate.net_label(observation, 1, cost_pct=0.1) is True
+    assert jev_calibrate.net_label(observation, 1, cost_pct=1.2) is False
+    assert jev_calibrate.net_return_pct(observation, 1, cost_pct=1.2) == pytest.approx(-0.2)
 
 
 def test_fallback_below_min_states_preserves_previous_threshold():
@@ -218,11 +261,48 @@ def test_calibrate_policy_schema_and_weekly_cap():
     assert set(policy["offset_rules"]) == {"high_vol", "low_vol"}
 
 
-def test_validate_policy_reports_missing_fields():
-    """Schema validation lists every missing required key."""
+def test_policy_reports_trade_pnl_by_horizon_and_horizon_choice():
+    """The policy records the selected horizon and all four horizon metrics."""
+    observations = [
+        Observation(
+            candle_open_time=NOW - timedelta(hours=index),
+            pair="BTC/USDT",
+            noul=0.2 + (index % 6) * 0.1,
+            base_action="BUY",
+            forward={1: -0.005, 2: 0.005, 3: 0.015, 4: 0.025},
+            bias="long",
+            regime="trend",
+            atr_pct=0.01,
+            cost_pct=0.1,
+        )
+        for index in range(240)
+    ]
+    policy = jev_calibrate.calibrate_policy(
+        observations, None, NOW, cost_pct=0.1, trade_horizon=4
+    )
+
+    assert policy["label"]["horizon"] == 4
+    assert policy["label"]["horizons_evaluated"] == [1, 2, 3, 4]
+    assert policy["label"]["cost_pct"] == pytest.approx(0.1)
+    assert set(policy["metrics"]["trade_pnl_by_horizon"]) == {"h1", "h2", "h3", "h4"}
+    assert policy["metrics"]["trade_pnl_by_horizon"]["h4"]["states_used"] == 240
+    assert policy["metrics"]["label_states_used"] == 240
+
+
+def test_validate_policy_reports_missing_fields_and_bad_label():
+    """Schema validation lists missing keys and rejects a non-trade label."""
     problems = jev_calibrate.validate_policy({})
     assert "missing version" in problems
     assert "missing threshold" in problems
+    assert "missing label" in problems
+
+    policy = jev_calibrate.calibrate_policy([_obs(0.5) for _ in range(250)], None, NOW)
+    policy = dict(policy)
+    policy["label"] = {"type": "absolute_move", "horizon": 0, "cost_pct": -1}
+    problems = jev_calibrate.validate_policy(policy)
+    assert "label.type must be trade_pnl_directional" in problems
+    assert "label.horizon must be a positive int" in problems
+    assert "label.cost_pct must be >= 0" in problems
 
 
 def test_load_observations_skips_malformed_lines(tmp_path):
