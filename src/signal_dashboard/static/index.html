@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Trader · Signal Chain (read-only)</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e1116;
+    --panel: #151a21;
+    --panel-2: #1a2029;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --border: #27303b;
+    --buy: #2ea043;
+    --sell: #da3633;
+    --hold: #6e7681;
+    --warn: #d29922;
+    --bad: #f85149;
+    --ok: #3fb950;
+    --link: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+      Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: baseline;
+    padding: 18px 20px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  h1 { font-size: 19px; margin: 0; font-weight: 650; }
+  h2 { font-size: 15px; margin: 0 0 10px; font-weight: 600; }
+  .tag {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .tag.readonly { color: var(--ok); border-color: var(--ok); }
+  .meta { color: var(--muted); font-size: 12px; }
+  .meta code { color: var(--text); }
+  main { padding: 16px 20px 40px; display: grid; gap: 22px; }
+  section { min-width: 0; }
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+  }
+  table { width: 100%; border-collapse: collapse; min-width: 860px; }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    position: sticky;
+    top: 0;
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: rgba(255, 255, 255, .025); }
+  .muted { color: var(--muted); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .nowrap { white-space: nowrap; }
+  .badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .03em;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .badge.buy { background: rgba(46, 160, 67, .16); color: var(--buy); border-color: var(--buy); }
+  .badge.sell { background: rgba(218, 54, 51, .16); color: var(--sell); border-color: var(--sell); }
+  .badge.hold { background: rgba(110, 118, 129, .18); color: #afb8c1; border-color: var(--hold); }
+  .badge.stale { background: rgba(248, 81, 73, .14); color: var(--bad); border-color: var(--bad); }
+  .badge.fresh { background: rgba(63, 185, 80, .12); color: var(--ok); border-color: var(--ok); }
+  .badge.expired { background: rgba(210, 153, 34, .14); color: var(--warn); border-color: var(--warn); }
+  .badge.veto { background: rgba(248, 81, 73, .14); color: var(--bad); border-color: var(--bad); }
+  .badge.legacy { background: rgba(88, 166, 255, .12); color: var(--link); border-color: var(--link); }
+  .badge.cleared { background: rgba(63, 185, 80, .12); color: var(--ok); border-color: var(--ok); }
+  .reasoning {
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    color: #c7d1db;
+  }
+  .reasoning.expanded { white-space: pre-wrap; max-width: 460px; }
+  .stack { display: grid; gap: 1px; }
+  .small { font-size: 12px; }
+  #banner {
+    margin: 0 20px;
+    padding: 9px 12px;
+    border: 1px solid var(--bad);
+    border-radius: 8px;
+    background: rgba(248, 81, 73, .1);
+    color: var(--bad);
+    font-size: 13px;
+  }
+  footer {
+    padding: 0 20px 24px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .empty { padding: 16px; color: var(--muted); text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LLM Trader · Signal Chain</h1>
+  <span class="tag readonly">READ-ONLY</span>
+  <span class="meta" id="dir">signals dir: …</span>
+  <span class="meta" id="counts"></span>
+</header>
+<div id="banner" hidden></div>
+<main>
+  <section>
+    <h2>Pair freshness</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Timeframe</th>
+            <th>Last candle</th>
+            <th>Heartbeat age</th>
+            <th>Freshness</th>
+            <th>Last action</th>
+            <th>Confidence</th>
+          </tr>
+        </thead>
+        <tbody id="pairs-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Latest signals</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Created (UTC)</th>
+            <th>Symbol</th>
+            <th>TF</th>
+            <th>Action</th>
+            <th>Conf.</th>
+            <th>SL / TP</th>
+            <th>Model / provider</th>
+            <th>JEV</th>
+            <th>Reasoning</th>
+            <th>Age</th>
+            <th>Expired</th>
+          </tr>
+        </thead>
+        <tbody id="signals-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<footer>Auto-refresh every 10 s · <span id="updated">waiting…</span></footer>
+
+<script>
+(function () {
+  "use strict";
+  var REFRESH_MS = 10000;
+  var banner = document.getElementById("banner");
+  var dirEl = document.getElementById("dir");
+  var countsEl = document.getElementById("counts");
+  var updatedEl = document.getElementById("updated");
+  var pairsBody = document.getElementById("pairs-body");
+  var signalsBody = document.getElementById("signals-body");
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) { node.className = className; }
+    if (text !== undefined && text !== null) { node.textContent = String(text); }
+    return node;
+  }
+
+  function cell(child) {
+    var td = el("td");
+    if (child !== undefined && child !== null) {
+      if (typeof child === "string" || typeof child === "number") {
+        td.textContent = String(child);
+      } else {
+        td.appendChild(child);
+      }
+    }
+    return td;
+  }
+
+  function dash(value) {
+    return value === undefined || value === null || value === "" ? "—" : value;
+  }
+
+  function fmtUtc(value) {
+    if (!value) { return "—"; }
+    var date = new Date(value);
+    if (isNaN(date.getTime())) { return String(value); }
+    return date.toISOString().replace("T", " ").replace(".000Z", "Z");
+  }
+
+  function fmtAge(seconds) {
+    if (seconds === undefined || seconds === null) { return "—"; }
+    var s = Math.max(0, Math.round(Number(seconds)));
+    if (s < 60) { return s + "s"; }
+    var m = Math.floor(s / 60);
+    if (m < 60) { return m + "m " + (s % 60) + "s"; }
+    var h = Math.floor(m / 60);
+    if (h < 24) { return h + "h " + (m % 60) + "m"; }
+    var d = Math.floor(h / 24);
+    return d + "d " + (h % 24) + "h";
+  }
+
+  function fmtConfidence(value) {
+    if (value === undefined || value === null) { return "—"; }
+    var number = Number(value);
+    if (isNaN(number)) { return String(value); }
+    return Math.round(number * 100) + "%";
+  }
+
+  function fmtPrice(value) {
+    if (value === undefined || value === null) { return "—"; }
+    var number = Number(value);
+    if (isNaN(number)) { return String(value); }
+    return number.toLocaleString(undefined, { maximumFractionDigits: 8 });
+  }
+
+  function actionBadge(action) {
+    var text = action ? String(action).toUpperCase() : "—";
+    var kind = text === "BUY" ? "buy" : text === "SELL" ? "sell" : "hold";
+    return el("span", "badge " + kind, text);
+  }
+
+  function staleBadge(stale, present) {
+    if (!present) { return el("span", "badge stale", "NO HEARTBEAT"); }
+    return stale
+      ? el("span", "badge stale", "STALE")
+      : el("span", "badge fresh", "FRESH");
+  }
+
+  function jevCell(signal) {
+    if (!signal.jev) { return el("span", "muted", "—"); }
+    var wrap = el("div", "stack");
+    var veto = signal.jev_veto;
+    if (veto === true) {
+      wrap.appendChild(el("span", "badge veto", "VETO"));
+    } else if (veto === false) {
+      wrap.appendChild(el("span", "badge cleared", "CLEARED"));
+    } else {
+      wrap.appendChild(el("span", "muted small", "PRESENT"));
+    }
+    var reason = signal.jev_reason;
+    if (reason) {
+      var reasonEl = el("span", "small muted", reason);
+      reasonEl.title = reason;
+      reasonEl.style.maxWidth = "180px";
+      reasonEl.style.overflow = "hidden";
+      reasonEl.style.textOverflow = "ellipsis";
+      reasonEl.style.whiteSpace = "nowrap";
+      reasonEl.style.display = "block";
+      wrap.appendChild(reasonEl);
+    }
+    return wrap;
+  }
+
+  function reasoningCell(text) {
+    var value = text === undefined || text === null || text === "" ? "—" : String(text);
+    var node = el("div", "reasoning", value);
+    node.title = value;
+    node.addEventListener("click", function () {
+      node.classList.toggle("expanded");
+    });
+    return node;
+  }
+
+  function emptyRow(tbody, columns, message) {
+    tbody.textContent = "";
+    var tr = el("tr");
+    var td = el("td", "empty", message);
+    td.colSpan = columns;
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
+
+  function renderPairs(pairs) {
+    pairsBody.textContent = "";
+    if (!pairs.length) {
+      emptyRow(pairsBody, 7, "No pairs yet (no signals or heartbeats).");
+      return;
+    }
+    pairs.forEach(function (pair) {
+      var tr = el("tr");
+      tr.appendChild(cell(el("span", "mono", dash(pair.symbol))));
+      tr.appendChild(cell(el("span", "mono", dash(pair.timeframe))));
+      tr.appendChild(cell(el("span", "mono small", fmtUtc(pair.last_candle_open_time))));
+      tr.appendChild(cell(el("span", "nowrap", fmtAge(pair.heartbeat_age_seconds))));
+      var freshness = cell(staleBadge(pair.stale, pair.heartbeat_present));
+      if (pair.heartbeat_legacy) {
+        freshness.appendChild(document.createTextNode(" "));
+        freshness.appendChild(el("span", "badge legacy", "LEGACY"));
+      }
+      tr.appendChild(freshness);
+      tr.appendChild(cell(pair.last_action ? actionBadge(pair.last_action) : el("span", "muted", "—")));
+      tr.appendChild(cell(fmtConfidence(pair.last_confidence)));
+      pairsBody.appendChild(tr);
+    });
+  }
+
+  function renderSignals(signals) {
+    signalsBody.textContent = "";
+    if (!signals.length) {
+      emptyRow(signalsBody, 11, "No signals found.");
+      return;
+    }
+    signals.forEach(function (signal) {
+      var tr = el("tr");
+      if (signal.decision_id) { tr.title = "decision_id: " + signal.decision_id; }
+
+      var created = el("div", "stack");
+      created.appendChild(el("span", "mono small", fmtUtc(signal.created_at)));
+      created.appendChild(el("span", "muted small", "candle " + fmtUtc(signal.candle_open_time)));
+      tr.appendChild(cell(created));
+
+      tr.appendChild(cell(el("span", "mono", dash(signal.symbol))));
+      tr.appendChild(cell(el("span", "mono", dash(signal.timeframe))));
+      tr.appendChild(cell(actionBadge(signal.action)));
+      tr.appendChild(cell(fmtConfidence(signal.confidence)));
+
+      var sltp = el("div", "stack mono small");
+      sltp.appendChild(el("span", null, "SL " + fmtPrice(signal.sl)));
+      sltp.appendChild(el("span", null, "TP " + fmtPrice(signal.tp)));
+      var size = signal.position_size_pct;
+      if (size !== undefined && size !== null) {
+        sltp.appendChild(el("span", "muted", "size " + fmtConfidence(size)));
+      }
+      tr.appendChild(cell(sltp));
+
+      var model = el("div", "stack small");
+      model.appendChild(el("span", null, dash(signal.model)));
+      model.appendChild(el("span", "muted", dash(signal.provider)));
+      if (signal.latency_ms !== undefined && signal.latency_ms !== null) {
+        model.appendChild(el("span", "muted", signal.latency_ms + " ms"));
+      }
+      tr.appendChild(cell(model));
+
+      tr.appendChild(cell(jevCell(signal)));
+      tr.appendChild(cell(reasoningCell(signal.reasoning)));
+      tr.appendChild(cell(el("span", "nowrap", fmtAge(signal.age_seconds))));
+
+      var expired = cell(
+        signal.expired
+          ? el("span", "badge expired", "EXPIRED")
+          : el("span", "badge fresh", "LIVE")
+      );
+      if (signal.risk_approved === false) {
+        expired.appendChild(document.createTextNode(" "));
+        expired.appendChild(el("span", "badge stale", "RISK BLOCKED"));
+      }
+      tr.appendChild(expired);
+
+      signalsBody.appendChild(tr);
+    });
+  }
+
+  async function getJson(url) {
+    var response = await fetch(url, { cache: "no-store", headers: { Accept: "application/json" } });
+    if (!response.ok) {
+      throw new Error(url + " -> HTTP " + response.status);
+    }
+    return response.json();
+  }
+
+  async function refresh() {
+    try {
+      var results = await Promise.all([
+        getJson("/api/health"),
+        getJson("/api/pairs"),
+        getJson("/api/signals"),
+        getJson("/api/heartbeats")
+      ]);
+      var health = results[0];
+      var pairs = results[1];
+      var signals = results[2];
+      var heartbeats = results[3];
+
+      dirEl.textContent = "signals dir: " + health.signals_dir;
+      var counts = health.counts || {};
+      countsEl.textContent =
+        "signals " + dash(counts.signals) +
+        " · heartbeat files " + dash(counts.heartbeat_files) +
+        " · skipped lines " + dash(counts.skipped_lines) +
+        " · status " + dash(health.status);
+
+      renderPairs(pairs);
+      renderSignals(signals);
+      updatedEl.textContent =
+        "updated " + new Date().toISOString().replace("T", " ").replace(".000Z", "Z") +
+        " · " + heartbeats.length + " heartbeat file(s)";
+
+      if (health.status === "missing") {
+        banner.hidden = false;
+        banner.textContent = "Signals directory not found: " + health.signals_dir;
+      } else {
+        banner.hidden = true;
+      }
+    } catch (error) {
+      banner.hidden = false;
+      banner.textContent = "Refresh failed: " + error.message +
+        " — showing the last successful data.";
+      updatedEl.textContent = "last refresh failed";
+    }
+  }
+
+  refresh();
+  window.setInterval(refresh, REFRESH_MS);
+})();
+</script>
+</body>
+</html>
