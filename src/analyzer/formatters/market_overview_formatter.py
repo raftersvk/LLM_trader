@@ -2,8 +2,8 @@
 Market Overview Formatter - Formats global market overview data.
 Handles market overview, top coins, and DeFi statistics.
 """
-from typing import Optional, TYPE_CHECKING
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from src.logger.logger import Logger
 
@@ -14,67 +14,56 @@ if TYPE_CHECKING:
 class MarketOverviewFormatter:
     """Formatter for market overview data including global metrics, top coins, and DeFi."""
 
-    def __init__(self, logger: Optional[Logger] = None, format_utils: "FormatUtils" = None):
-        """Initialize the market overview formatter.
-
-        Args:
-            logger: Optional logger instance
-            format_utils: Format utilities for value formatting (required)
-        """
+    def __init__(self, logger: Logger | None = None, format_utils: "FormatUtils | None" = None):
+        """Initialize the market overview formatter."""
         self.logger = logger
         if format_utils is None:
             raise ValueError("format_utils is required for MarketOverviewFormatter")
         self.format_utils = format_utils
 
-    def format_market_overview(self, market_overview: dict, analyzed_symbol: str = None) -> str:
+    def format_market_overview(self, market_overview: dict, analyzed_symbol: str | None = None) -> str:
         """
         Format market overview data with top coins and DeFi metrics.
-
-        Args:
-            market_overview: Market overview data from CoinGecko
-            analyzed_symbol: Trading pair being analyzed (e.g., "BTC/USDT")
-                           Used to provide comparison context and exclude from top coins list
-
         Returns:
             Formatted market overview string
         """
         if not market_overview:
             return ""
 
-        # Extract base symbol from trading pair (BTC/USDT -> BTC)
         analyzed_coin_symbol = None
         if analyzed_symbol:
-            analyzed_coin_symbol = analyzed_symbol.split('/')[0].lower()
+            analyzed_coin_symbol = analyzed_symbol.split("/")[0].lower()
 
         sections = []
 
-        # Market cap and dominance
+        source_updated_at = market_overview.get("source_updated_at")
+        if source_updated_at:
+            sections.append(f"Market data source updated: {source_updated_at}")
+
         market_cap_data = market_overview.get("market_cap", {})
-        if 'total_usd' in market_cap_data:
-            market_cap = market_cap_data['total_usd']
+        if "total_usd" in market_cap_data:
+            market_cap = market_cap_data["total_usd"]
             sections.append(f"Total Market Cap: ${self.format_utils.fmt(market_cap)}")
 
         dominance_data = market_overview.get("dominance", {})
-        if 'btc' in dominance_data:
-            btc_dom = dominance_data['btc']
+        if "btc" in dominance_data:
+            btc_dom = dominance_data["btc"]
             sections.append(f"Bitcoin Dominance: {self.format_utils.fmt(btc_dom)}%")
 
-        if 'eth' in dominance_data:
-            eth_dom = dominance_data['eth']
+        if "eth" in dominance_data:
+            eth_dom = dominance_data["eth"]
             sections.append(f"Ethereum Dominance: {self.format_utils.fmt(eth_dom)}%")
 
-        # Market metrics
         volume_data = market_overview.get("volume", {})
-        total_volume = volume_data.get('total_usd', 0)
+        total_volume = volume_data.get("total_usd", 0)
         if total_volume:
             sections.append(f"Total Market 24h Volume: ${self.format_utils.fmt(total_volume)}")
 
-        if 'change_24h' in market_cap_data:
-            change = market_cap_data['change_24h']
+        if "change_24h" in market_cap_data:
+            change = market_cap_data["change_24h"]
             direction = "UP" if change >= 0 else "DOWN"
             sections.append(f"Total Market Cap Change 24h ({direction}): {self.format_utils.fmt(change)}%")
 
-        # Find analyzed coin in top_coins if present
         top_coins = market_overview.get("top_coins", [])
         analyzed_coin_data = None
         other_top_coins = []
@@ -88,17 +77,15 @@ class MarketOverviewFormatter:
         else:
             other_top_coins = top_coins
 
-        # Show analyzed coin position if it's in top coins
         if analyzed_coin_data:
             position_summary = self._format_analyzed_coin_position(
                 analyzed_coin_data,
-                market_cap_data.get('total_usd', 0),
+                market_cap_data.get("total_usd", 0),
                 total_volume
             )
             if position_summary:
                 sections.append(position_summary)
 
-        # Top coins summary (excluding analyzed coin) — skip for major coins (BTC/ETH)
         if other_top_coins and analyzed_coin_symbol not in ("btc", "eth"):
             top_coins_summary = self._format_top_coins_summary(
                 other_top_coins[:5],
@@ -107,15 +94,13 @@ class MarketOverviewFormatter:
             if top_coins_summary:
                 sections.append(top_coins_summary)
 
-        # DeFi metrics — skip for major coins (BTC/ETH) to save tokens
         defi_data = market_overview.get("defi", {})
         if defi_data and analyzed_coin_symbol not in ("btc", "eth"):
-            total_market_cap = market_cap_data.get('total_usd', 0)
+            total_market_cap = market_cap_data.get("total_usd", 0)
             defi_summary = self._format_defi_summary(defi_data, total_market_cap)
             if defi_summary:
                 sections.append(defi_summary)
 
-        # Format on-chain fundamentals if available
         fundamentals = market_overview.get("fundamentals")
         if fundamentals:
             fundamentals_summary = self._format_onchain_fundamentals(fundamentals)
@@ -137,7 +122,6 @@ class MarketOverviewFormatter:
 
         lines = ["## On-Chain Fundamentals (DefiLlama):"]
 
-        # Macro Data (TVL & Stablecoins)
         macro = fundamentals.get("macro", {})
         if macro:
             tvl = macro.get("total_tvl", 0)
@@ -149,7 +133,6 @@ class MarketOverviewFormatter:
             if stables:
                 lines.append(f"  • Dry Powder (Stablecoins): ${self.format_utils.fmt(stables)} ({stable_change:+.1f}%)")
 
-        # Activity (DEX & Fees)
         activity_lines = []
         dex_data = fundamentals.get("dex_volumes", {})
         if dex_data and dex_data.get("total_24h"):
@@ -162,7 +145,6 @@ class MarketOverviewFormatter:
         fees_data = fundamentals.get("fees", {})
         if fees_data and fees_data.get("total_24h_fees"):
             fees = fees_data.get("total_24h_fees", 0)
-            # Only show top earner if we have valid fee data
             top_earner = fees_data.get("top_earners", [])
             top_earner_str = f" (Top: {top_earner[0].get('name')} ${self.format_utils.fmt(top_earner[0].get('total24h', 0))})" if top_earner else ""
             activity_lines.append(f"    - Protocol Fees: ${self.format_utils.fmt(fees)}{top_earner_str}")
@@ -171,9 +153,7 @@ class MarketOverviewFormatter:
             lines.append("  • Activity (24h):")
             lines.extend(activity_lines)
 
-        # Options (Smart Money)
         options_data = fundamentals.get("options", {})
-        # Only show section if we have non-zero notional volume
         if options_data and options_data.get("notional_volume_24h", 0) > 0:
             notional = options_data.get("notional_volume_24h", 0)
             premium = options_data.get("premium_volume_24h", 0)
@@ -202,17 +182,14 @@ class MarketOverviewFormatter:
 
         lines = [f"## {symbol} ({name}) Market Position:"]
 
-        # Rank and market share
         if rank and market_cap and total_market_cap:
             market_share = (market_cap / total_market_cap * 100) if total_market_cap > 0 else 0
             lines.append(f"  • Rank: #{rank} | Market Cap: ${self.format_utils.fmt(market_cap)} ({market_share:.2f}% of total)")
 
-        # Volume share and liquidity
         if coin_volume and total_volume:
             volume_share = (coin_volume / total_volume * 100) if total_volume > 0 else 0
             lines.append(f"  • 24h Volume: ${self.format_utils.fmt(coin_volume)} ({volume_share:.2f}% of total market volume)")
 
-        # Supply metrics
         if circ_supply:
             if max_supply:
                 supply_pct = (circ_supply / max_supply * 100)
@@ -220,7 +197,6 @@ class MarketOverviewFormatter:
             else:
                 lines.append(f"  • Circulating Supply: {self.format_utils.fmt(circ_supply)} (no max supply)")
 
-        # Market cap change
         mcap_change_24h = coin_data.get("market_cap_change_percentage_24h", 0)
         if mcap_change_24h:
             direction = "UP" if mcap_change_24h >= 0 else "DOWN"
@@ -250,19 +226,16 @@ class MarketOverviewFormatter:
             ath_date = coin.get("ath_date", "")
             coin_volume = coin.get("total_volume", 0)
 
-            # Parse ATH date if available
             ath_date_str = ""
             if ath_date:
                 try:
-                    dt = datetime.fromisoformat(ath_date.replace('Z', '+00:00'))
+                    dt = datetime.fromisoformat(ath_date.replace("Z", "+00:00"))
                     ath_date_str = dt.strftime("%b %d, %Y")
                 except (ValueError, TypeError):
                     pass
 
-            # Format: Rank #X Symbol (Name): $price (momentum data) | volume | ATH context
             line_parts = [f"  • #{rank} {symbol} ({name}): ${price:,.2f}"]
 
-            # Momentum: 1h, 24h, 7d
             momentum_parts = []
             if change_1h:
                 momentum_parts.append(f"{change_1h:+.1f}% 1h")
@@ -274,12 +247,10 @@ class MarketOverviewFormatter:
             if momentum_parts:
                 line_parts.append(f"({', '.join(momentum_parts)})")
 
-            # Volume share (if total volume provided)
             if coin_volume and total_volume:
                 volume_share = (coin_volume / total_volume * 100)
                 line_parts.append(f"| Vol: {volume_share:.1f}% of market")
 
-            # ATH context
             if ath and ath_pct:
                 ath_info = f"| ATH: ${ath:,.2f}"
                 if ath_date_str:

@@ -2,12 +2,19 @@
 Console Notifier - Fallback notification service when Discord is disabled.
 Prints AI trading analysis to console with colored and formatted output.
 """
-from typing import Optional, List, Dict, Any, TYPE_CHECKING
+import io
+from typing import TYPE_CHECKING, Any
 
-from .base_notifier import BaseNotifier
+from src.trading.executor_reconciliation import (
+    VERIFICATION_EXCHANGE_VERIFIED,
+    VERIFICATION_EXECUTOR_REPORTED,
+    VERIFICATION_UNVERIFIED,
+)
+
+from .base_notifier import BaseNotifier, format_commission
 
 if TYPE_CHECKING:
-    from src.config.protocol import ConfigProtocol
+    from src.config.loader import Config
     from src.parsing.unified_parser import UnifiedParser
     from src.utils.format_utils import FormatUtils
 
@@ -16,15 +23,8 @@ if TYPE_CHECKING:
 class ConsoleNotifier(BaseNotifier):
     """Console-based notifier as fallback when Discord is disabled."""
 
-    def __init__(self, logger, config: "ConfigProtocol", unified_parser: "UnifiedParser", formatter: "FormatUtils") -> None:
-        """Initialize ConsoleNotifier.
-
-        Args:
-            logger: Logger instance
-            config: ConfigProtocol instance
-            unified_parser: UnifiedParser for JSON extraction (DRY)
-            formatter: FormatUtils instance for value formatting
-        """
+    def __init__(self, logger, config: "Config", unified_parser: "UnifiedParser", formatter: "FormatUtils") -> None:
+        """Initialize ConsoleNotifier."""
         super().__init__(logger, config, unified_parser, formatter)
         self.is_initialized = True
 
@@ -32,10 +32,6 @@ class ConsoleNotifier(BaseNotifier):
         return self
 
     async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
-        pass
-
-    async def close(self) -> None:
-        """Close notifier resources - no-op for console notifier."""
         pass
 
     async def start(self) -> None:
@@ -46,28 +42,24 @@ class ConsoleNotifier(BaseNotifier):
         """Console is always ready."""
         self.logger.debug("ConsoleNotifier: Console is always ready")
 
+    async def shutdown(self) -> None:
+        """Shutdown the console notifier (no-op for console).
+        
+        Console notifier has no resources to clean up, so this is a no-op.
+        """
+        self.logger.debug("ConsoleNotifier: Shutdown complete (no-op for console)")
+
     async def send_message(
             self,
             message: str,
-            channel_id: int = None,
-            expire_after: Optional[int] = None
+            channel_id: int | None = None,
+            expire_after: int | None = None
     ) -> None:
-        """Print a text message to console.
-
-        Args:
-            message: Message text
-            channel_id: Ignored for console output
-            expire_after: Ignored for console output
-        """
+        """Print a text message to console."""
         print(f"\n{message}")
 
-    async def send_trading_decision(self, decision: Any, channel_id: int = None) -> None:
-        """Print a trading decision to console.
-
-        Args:
-            decision: TradingDecision dataclass
-            channel_id: Ignored for console output
-        """
+    async def send_trading_decision(self, decision: Any, channel_id: int | None = None) -> None:
+        """Print a trading decision to console."""
         _, emoji = self.get_action_styling(decision.action)
 
         print("\n" + "=" * 60)
@@ -89,8 +81,8 @@ class ConsoleNotifier(BaseNotifier):
             print(f"Invested:      ${decision.quote_amount:,.2f}")
         if decision.quantity:
             print(f"Quantity:      {self.formatter.fmt(decision.quantity)}")
-        if decision.action in ['BUY', 'SELL', 'CLOSE', 'CLOSE_LONG', 'CLOSE_SHORT'] and decision.fee:
-            print(f"Fee:       ${decision.fee:.4f}")
+        if decision.action in ["BUY", "SELL", "CLOSE", "CLOSE_LONG", "CLOSE_SHORT"]:
+            print(f"Fee:       {format_commission(decision.fee)}")
 
         print(f"\nReasoning: {decision.reasoning}")
         print("=" * 60 + "\n")
@@ -100,23 +92,21 @@ class ConsoleNotifier(BaseNotifier):
             result: dict,
             symbol: str,
             timeframe: str,
-            channel_id: int = None
+            channel_id: int | None = None,
+            chart_image: io.BytesIO | None = None,
+            execution_note: str | None = None
     ) -> None:
         """Print full analysis notification with reasoning and JSON data.
 
-        Args:
-            result: Analysis result dict with corrected analysis and raw_response
-            symbol: Trading symbol
-            timeframe: Trading timeframe
-            channel_id: Ignored for console output
+        ``execution_note`` marks a recommendation the bot did NOT execute; it is
+        printed before the analysis so the console never shows a bare signal that
+        reads as a performed action.
         """
         try:
-            # Get the corrected analysis dict (has R/R correction and other validations applied)
             analysis = result.get("analysis")
             if not analysis:
                 return
 
-            # Get reasoning text from raw_response (narrative text, not data)
             raw_response = result.get("raw_response", "")
             reasoning = self.unified_parser.extract_text_before_json(raw_response) if raw_response else ""
 
@@ -124,26 +114,29 @@ class ConsoleNotifier(BaseNotifier):
             print(f"📊 ANALYSIS: {symbol} ({timeframe})")
             print("=" * 60)
 
+            if execution_note:
+                print(f"🚫 RECOMMENDATION NOT EXECUTED: {execution_note}")
+
             if reasoning:
                 print(f"\n{reasoning}")
 
-            # Use the corrected analysis dict (not re-parsed raw JSON)
             self._print_analysis_data(analysis, timeframe)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Error printing analysis notification: %s", e)
 
     async def send_position_status(
             self,
             position: Any,
             current_price: float,
-            channel_id: int = None
+            channel_id: int | None = None,
+            *,
+            verification: str = VERIFICATION_UNVERIFIED,
+            verified_at: Any = None,
+            verification_detail: str | None = None
     ) -> None:
         """Print current open position status.
 
-        Args:
-            position: Current Position object
-            current_price: Current market price
-            channel_id: Ignored for console output
+        ``verification`` mirrors the Discord card's venue, tracker-only or unknown state.
         """
         try:
             pnl_pct, pnl_quote = self.calculate_position_pnl(position, current_price)
@@ -152,9 +145,28 @@ class ConsoleNotifier(BaseNotifier):
 
             _, emoji = self.get_pnl_styling(pnl_pct)
 
+            exchange_verified = verification == VERIFICATION_EXCHANGE_VERIFIED
+            reported = verification == VERIFICATION_EXECUTOR_REPORTED
+            if exchange_verified:
+                header = f"{emoji} OPEN {position.direction} POSITION - {position.symbol}"
+                position_state = f"Exchange-verified ({verified_at or 'unknown'}) — protection active"
+            elif reported:
+                header = (
+                    f"{emoji} OPEN {position.direction} POSITION (executor-reported, NOT "
+                    f"exchange-verified) - {position.symbol}"
+                )
+                position_state = (
+                    f"executor-reported ({verified_at or 'unknown'}) — NOT exchange-verified"
+                )
+            else:
+                header = f"⚠️ POSITION STATUS UNVERIFIED - {position.symbol}"
+                position_state = (
+                    f"UNVERIFIED — {verification_detail or 'no exchange verification performed yet'}"
+                )
             print("\n" + "=" * 60)
-            print(f"{emoji} OPEN {position.direction} POSITION - {position.symbol}")
+            print(header)
             print("=" * 60)
+            print(f"Position State:  {position_state}")
             print(f"Entry Price:     ${position.entry_price:,.2f}")
             print(f"Current Price:   ${current_price:,.2f}")
             print(f"Quantity:        {self.formatter.fmt(position.size)}")
@@ -171,26 +183,21 @@ class ConsoleNotifier(BaseNotifier):
             print("-" * 40)
             print(f"Stop Loss:       ${position.stop_loss:,.2f} ({stop_distance_pct:+.2f}%)")
             print(f"Take Profit:     ${position.take_profit:,.2f} ({target_distance_pct:+.2f}%)")
-            print(f"Entry Fee:       ${position.entry_fee:.4f}")
+            print(f"Exit Monitoring: {self.format_exit_monitoring()}")
+            print(f"Entry Fee:       {format_commission(position.entry_fee)}")
             print(f"Time Held:       {hours_held:.1f}h")
             print(f"Entry Time:      {position.entry_time.strftime('%Y-%m-%d %H:%M:%S')}")
             print("=" * 60)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Error printing position status: %s", e)
 
     async def send_performance_stats(
             self,
-            trade_history: List[Dict[str, Any]],
+            trade_history: list[dict[str, Any]],
             symbol: str,
-            channel_id: int = None
+            channel_id: int | None = None
     ) -> None:
-        """Print overall performance statistics.
-
-        Args:
-            trade_history: Full trade history list
-            symbol: Trading symbol
-            channel_id: Ignored for console output
-        """
+        """Print overall performance statistics."""
         try:
             stats = self.calculate_performance_stats(trade_history)
             if not stats:
@@ -206,10 +213,27 @@ class ConsoleNotifier(BaseNotifier):
             print(f"Total P&L (%):    {stats['total_pnl_pct']:+.2f}%")
             print(f"Avg P&L/Trade:    {stats['avg_pnl_pct']:+.2f}%")
             print(f"Win Rate:         {stats['win_rate']:.1f}% ({stats['winning_trades']}/{stats['closed_trades']})")
-            print(f"Total Fees:       ${stats['total_fees']:.4f}")
+            total_fees_value = format_commission(stats["total_fees"])
+            if not stats.get("fees_complete", True):
+                total_fees_value += f" (+{stats['fees_unknown_trades']} trade(s) without fee data)"
+            print(f"Total Fees:       {total_fees_value}")
             print(f"Net P&L (USDT):   ${stats['net_pnl']:+,.2f}")
+
+            last_closed_trade = stats.get("last_closed_trade")
+            if last_closed_trade:
+                outcome = last_closed_trade.get("outcome", "UNKNOWN")
+                close_reason = last_closed_trade.get("close_reason")
+                print("-" * 40)
+                print(f"Last Outcome:     {outcome}")
+                if close_reason:
+                    print(f"Close Reason:     {close_reason}")
+                print(
+                    f"Last Trade P&L ({self.config.QUOTE_CURRENCY}): "
+                    f"${last_closed_trade['pnl_quote']:+,.2f} ({last_closed_trade['pnl_pct']:+.2f}%)"
+                )
+
             print("=" * 60)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Error printing performance stats: %s", e)
 
     def _print_analysis_data(self, analysis: dict, timeframe: str) -> None:
@@ -221,25 +245,25 @@ class ConsoleNotifier(BaseNotifier):
             print(f"Signal:          {fields['signal']}")
             print(f"Confidence:      {fields['confidence']}%")
 
-            if fields['entry_price']:
+            if fields["entry_price"]:
                 print(f"Entry:           ${fields['entry_price']:,.2f}")
-            if fields['stop_loss']:
+            if fields["stop_loss"]:
                 print(f"Stop Loss:       ${fields['stop_loss']:,.2f}")
-            if fields['take_profit']:
+            if fields["take_profit"]:
                 print(f"Take Profit:     ${fields['take_profit']:,.2f}")
-            if fields['risk_reward_ratio']:
+            if fields["risk_reward_ratio"]:
                 print(f"R:R Ratio:       {fields['risk_reward_ratio']:.2f}")
 
-            trend = fields['trend']
+            trend = fields["trend"]
             if trend:
-                direction = trend.get('direction', 'N/A')
-                strength = trend.get('strength', 0)
+                direction = trend.get("direction", "N/A")
+                strength = trend.get("strength", 0)
                 print(f"Trend:           {direction} ({strength}%)")
 
-            key_levels = fields['key_levels']
+            key_levels = fields["key_levels"]
             if key_levels:
-                supports = key_levels.get('support', [])
-                resistances = key_levels.get('resistance', [])
+                supports = key_levels.get("support", [])
+                resistances = key_levels.get("resistance", [])
                 if supports:
                     support_str = ", ".join([f"${s:,.2f}" for s in supports[:3]])
                     print(f"Support:         {support_str}")
@@ -249,5 +273,6 @@ class ConsoleNotifier(BaseNotifier):
 
             print(f"Timeframe:       {timeframe}")
             print("=" * 60)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Error formatting analysis data: %s", e)
+

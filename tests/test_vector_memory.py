@@ -1,4 +1,5 @@
 """Tests for vector_memory.py changes: classify_rsi_label integration and _adx_label."""
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -211,10 +212,14 @@ class TestRetrievalAndPromptContext:
         svc._initialized = True
         svc._collection = MagicMock()
         svc._collection.count.return_value = 2
+        now = datetime.now(timezone.utc)
         svc._collection.query.return_value = {
             "ids": [["older-better-match", "newer-slightly-weaker"]],
             "documents": [["doc-1", "doc-2"]],
-            "metadatas": [[{"timestamp": "2026-01-01T00:00:00+00:00"}, {"timestamp": "2026-03-20T00:00:00+00:00"}]],
+            "metadatas": [[
+                {"timestamp": (now - timedelta(days=10)).isoformat()},
+                {"timestamp": (now - timedelta(days=1)).isoformat()},
+            ]],
             "distances": [[0.10, 0.20]],
         }
         svc._embedding_model.encode.return_value.tolist.return_value = [0.1, 0.2]
@@ -418,7 +423,9 @@ class TestAnalyticsAndThresholds:
         assert thresholds["adx_weak_threshold"] == 22
         assert thresholds["min_rr_recommended"] == 1.5
         assert thresholds["rr_strong_setup"] == 2.0
-        assert thresholds["rr_borderline_min"] == 1.3
+        # Upstream only learns rr_borderline_min from sub-1.0 R/R evidence;
+        # every sample here is >= 1.0, so the key stays absent.
+        assert "rr_borderline_min" not in thresholds
 
     def test_compute_optimal_thresholds_ignores_update_entries_for_rr_boundary(self):
         svc = _make_service()

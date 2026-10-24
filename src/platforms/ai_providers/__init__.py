@@ -1,19 +1,29 @@
+"""AI provider clients."""
+
 from src.platforms.ai_providers.base import BaseAIClient
+from src.platforms.ai_providers.blockrun import BlockRunClient
+from src.platforms.ai_providers.deepseek import DeepSeekClient
+from src.platforms.ai_providers.google import GoogleAIClient
+from src.platforms.ai_providers.litellm_client import LitellmAIClient
+from src.platforms.ai_providers.lmstudio import LMStudioClient
+from src.platforms.ai_providers.openrouter import OpenRouterClient
 from src.platforms.ai_providers.response_models import (
     ChatResponseModel,
     ChoiceModel,
     MessageModel,
-    UsageModel
+    UsageModel,
 )
-from src.platforms.ai_providers.google import GoogleAIClient
-from src.platforms.ai_providers.litellm_client import LitellmAIClient
 
 __all__ = [
-    'BaseAIClient',
-    'ChatResponseModel',
-    'ChoiceModel',
-    'MessageModel',
-    'UsageModel',
-    'GoogleAIClient',
-    'LitellmAIClient',
+    "BaseAIClient",
+    "BlockRunClient",
+    "ChatResponseModel",
+    "ChoiceModel",
+    "DeepSeekClient",
+    "GoogleAIClient",
+    "LitellmAIClient",
+    "LMStudioClient",
+    "MessageModel",
+    "OpenRouterClient",
+    "UsageModel",
 ]

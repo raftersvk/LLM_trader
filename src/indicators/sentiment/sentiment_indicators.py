@@ -1,6 +1,10 @@
+"""Sentiment Indicators module.
+
+Provides functionality for indicators.sentiment.sentiment_indicators.py.
+"""
+import math
 from dataclasses import dataclass
 
-import math
 import numpy as np
 from numba import njit
 
@@ -18,6 +22,9 @@ class FearGreedConfig:
 @njit(cache=True)
 def _calculate_rsi_window(close, rsi_length):
     """Calculate RSI for a window of data.
+
+    A flat window (no gains and no losses) is neutral 50, matching
+    momentum_indicators.rsi_numba; 100 is reserved for windows with gains only.
 
     Performance Impact: Fixes an O(N) calculation that used np.maximum and np.sum
     allocating new arrays. Replaced with explicit single-pass element-wise loops
@@ -43,7 +50,7 @@ def _calculate_rsi_window(close, rsi_length):
     avg_loss /= rsi_length
 
     if avg_loss == 0:
-        rsi_list[rsi_length - 1] = 100
+        rsi_list[rsi_length - 1] = 50.0 if avg_gain == 0 else 100.0
     else:
         rs = avg_gain / avg_loss
         rsi_list[rsi_length - 1] = 100 - (100 / (1 + rs))
@@ -57,7 +64,7 @@ def _calculate_rsi_window(close, rsi_length):
         avg_gain = ((avg_gain * (rsi_length - 1)) + gain) / rsi_length
         avg_loss = ((avg_loss * (rsi_length - 1)) + loss) / rsi_length
         if avg_loss == 0:
-            rsi_list[i] = 100
+            rsi_list[i] = 50.0 if avg_gain == 0 else 100.0
         else:
             rs = avg_gain / avg_loss
             rsi_list[i] = 100 - (100 / (1 + rs))
@@ -68,6 +75,13 @@ def _calculate_rsi_window(close, rsi_length):
 @njit(cache=True)
 def _calculate_macd_window(close, macd_fast_length, macd_slow_length, macd_signal_length):
     """Calculate MACD for a window of data.
+
+    Warm-up is window-local: the fast/slow EMAs are seeded with the first SMA of
+    the window and the signal line starts from the first MACD value, so the
+    signal/histogram begin at slow + signal - 2 (33) instead of slow (26) in
+    momentum_indicators.macd_numba, and the first ~80 bars of a window differ.
+    Later bars agree to ~1e-13 (measured on a 400-bar series), so the two are
+    interchangeable only outside the warm-up.
 
     Performance Impact: Replaced np.mean on slices with explicit loops,
     avoiding array allocations inside Numba for ~2.5x speedup.
@@ -117,7 +131,11 @@ def _calculate_macd_window(close, macd_fast_length, macd_slow_length, macd_signa
 
 @njit(cache=True)
 def _calculate_mfi_window(high, low, close, volume, mfi_length):
-    """Calculate MFI for a window of data."""
+    """Calculate MFI for a window of data.
+
+    Mirrors volume_indicators.mfi_numba: a window with no traded volume, or with
+    no money flow at all, is NaN; 100 means inflow only.
+    """
     window_size = len(close)
     mfi_list = np.full(window_size, np.nan)
     tp = (high + low + close) / 3.0
@@ -134,31 +152,45 @@ def _calculate_mfi_window(high, low, close, volume, mfi_length):
 
     pmf_sum = 0.0
     nmf_sum = 0.0
+    active_volume_count = 0
 
     for i in range(1, mfi_length):
         if i < window_size:
             pmf_sum += daily_pmf[i]
             nmf_sum += daily_nmf[i]
+            if volume[i] > 0:
+                active_volume_count += 1
 
     for i in range(mfi_length, window_size):
         if i % 1000 == 0:
             pmf_sum = np.sum(daily_pmf[i - mfi_length + 1 : i + 1])
             nmf_sum = np.sum(daily_nmf[i - mfi_length + 1 : i + 1])
+            active_volume_count = 0
+            for j in range(i - mfi_length + 1, i + 1):
+                if volume[j] > 0:
+                    active_volume_count += 1
         else:
             pmf_sum += daily_pmf[i]
             nmf_sum += daily_nmf[i]
+            if volume[i] > 0:
+                active_volume_count += 1
 
         if np.isnan(pmf_sum) or np.isnan(nmf_sum):
             pmf_sum = np.sum(daily_pmf[i - mfi_length + 1 : i + 1])
             nmf_sum = np.sum(daily_nmf[i - mfi_length + 1 : i + 1])
+            active_volume_count = 0
+            for j in range(i - mfi_length + 1, i + 1):
+                if volume[j] > 0:
+                    active_volume_count += 1
 
-        # Ensure we don't fall below zero due to float drift
         if nmf_sum < 0:
             nmf_sum = 0.0
         if pmf_sum < 0:
             pmf_sum = 0.0
 
-        if nmf_sum == 0.0:
+        if active_volume_count == 0 or (pmf_sum <= 0.0 and nmf_sum <= 0.0):
+            mfi_list[i] = np.nan
+        elif nmf_sum <= 0.0:
             mfi_list[i] = 100.0
         else:
             mfr = pmf_sum / nmf_sum
@@ -166,6 +198,8 @@ def _calculate_mfi_window(high, low, close, volume, mfi_length):
 
         pmf_sum -= daily_pmf[i - mfi_length + 1]
         nmf_sum -= daily_nmf[i - mfi_length + 1]
+        if volume[i - mfi_length + 1] > 0:
+            active_volume_count -= 1
 
     return mfi_list
 
@@ -187,17 +221,19 @@ def _calculate_fear_greed_for_window(rsi_list, histogram_list, mfi_list, window_
     result = np.full(window_size, np.nan)
 
     for i in range(start_idx, window_size):
-        # Normalize RSI
         normalized_rsi = (rsi_list[i] - 30) / (70 - 30) * 100
         normalized_rsi = max(0, min(100, normalized_rsi))
 
-        # Normalize MACD histogram
         max_histogram = np.nanmax(histogram_list[max(0, i - window_size):i])
         min_histogram = np.nanmin(histogram_list[max(0, i - window_size):i])
         normalized_macd_histogram = _normalize_value(histogram_list[i], min_histogram, max_histogram)
 
-        # Normalize MFI
-        normalized_mfi = max(0, min(100, mfi_list[i]))
+        # A component without data (e.g. MFI on an untraded window) is neutral,
+        # never silently read as extreme greed.
+        if np.isfinite(mfi_list[i]):
+            normalized_mfi = max(0, min(100, mfi_list[i]))
+        else:
+            normalized_mfi = 50.0
 
         result[i] = (normalized_rsi + normalized_macd_histogram + normalized_mfi) / 3
 
@@ -217,18 +253,15 @@ def _fear_and_greed_index_numba(close, high, low, volume, rsi_length, macd_fast_
         window_low = low[start:end]
         window_volume = volume[start:end]
 
-        # Calculate indicators for this window
         rsi_list = _calculate_rsi_window(window_close, rsi_length)
         _, __, histogram_list = _calculate_macd_window(
             window_close, macd_fast_length, macd_slow_length, macd_signal_length)
         mfi_list = _calculate_mfi_window(window_high, window_low, window_close, window_volume, mfi_length)
 
-        # Calculate fear and greed for this window
         window_fg = _calculate_fear_greed_for_window(
             rsi_list, histogram_list, mfi_list, window_size,
             rsi_length, macd_slow_length, macd_signal_length, mfi_length)
 
-        # Copy results to main array
         for i in range(window_size):
             if not math.isnan(window_fg[i]):
                 fear_and_greed_index[start + i] = window_fg[i]
@@ -248,14 +281,6 @@ def fear_and_greed_index_numba(
     Fear and Greed Index - Simple interface using config object.
 
     Calculates a composite sentiment indicator based on RSI, MACD, and MFI.
-
-    Args:
-        close: Close prices
-        high: High prices
-        low: Low prices
-        volume: Volume data
-        config: Configuration object containing all parameters
-
     Returns:
         Fear and greed index array (0-100, where <30 is fear, >70 is greed)
     """

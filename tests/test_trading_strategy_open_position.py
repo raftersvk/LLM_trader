@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.trading.data_models import RiskAssessment
+from src.trading.data_models import MarketConditions, RiskAssessment
 from src.trading.trading_strategy import TradingStrategy
 
 
@@ -41,6 +41,10 @@ def _strategy(reserve_result: bool):
     position_factory = MagicMock()
     position_factory.create_position.side_effect = AssertionError("position must not be created")
 
+    config = MagicMock()
+    config.TIMEFRAME = "4h"
+    config.EXECUTOR_MAX_POSITION_USDC = 0
+
     strategy = TradingStrategy(
         logger=MagicMock(),
         persistence=persistence,
@@ -48,7 +52,7 @@ def _strategy(reserve_result: bool):
         statistics_service=MagicMock(),
         memory_service=MagicMock(),
         risk_manager=risk_manager,
-        config=MagicMock(),
+        config=config,
         position_factory=position_factory,
         portfolio_capital_service=portfolio,
     )
@@ -69,6 +73,7 @@ async def test_open_position_aborts_when_reservation_fails():
         current_price=100.0,
         symbol="BTC/USDT",
         reasoning="test",
+        market_conditions=MarketConditions(),
     )
 
     assert decision is None
@@ -76,3 +81,29 @@ async def test_open_position_aborts_when_reservation_fails():
     position_factory.create_position.assert_not_called()
     persistence.async_save_position.assert_not_awaited()
     persistence.async_save_trade_decision.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_open_position_releases_reservation_when_decision_write_fails():
+    """A failure after reserving capital must not leave the symbol allocated."""
+    from src.trading.data_models import MarketConditions
+
+    strategy, persistence, _ = _strategy(reserve_result=True)
+    strategy._record_trade_decision = AsyncMock(side_effect=RuntimeError("sqlite failure"))
+
+    with pytest.raises(RuntimeError):
+        await strategy._open_new_position(
+            signal="BUY",
+            confidence="HIGH",
+            stop_loss=95.0,
+            take_profit=110.0,
+            position_size=0.4,
+            current_price=100.0,
+            symbol="BTC/USDT",
+            reasoning="test",
+            market_conditions=MarketConditions(),
+        )
+
+    strategy.portfolio_capital_service.release_position.assert_called_once_with("BTC/USDT", 0.0)
+    assert strategy.current_position is None
+    persistence.async_save_position.assert_any_await(None)

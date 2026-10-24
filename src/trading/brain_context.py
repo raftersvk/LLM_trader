@@ -1,0 +1,411 @@
+"""Prompt context and threshold retrieval for the trading brain."""
+
+from collections.abc import Callable
+from time import monotonic
+from typing import Any
+
+from src.utils.indicator_classifier import (
+    build_context_string_from_classified_values,
+    build_query_document_from_classified_values,
+    classify_adx_label,
+)
+from src.utils.prompt_budget import PromptBudgetPolicy
+
+from .brain_exit_profiles import ExitProfileResolver
+from .data_models import MarketSnapshot
+from .vector_memory import VectorMemoryService
+
+
+class BrainContextProvider:
+    """Build LLM prompt context from vector memory and learned rules."""
+
+    STATS_CACHE_TTL_SECONDS = 300
+
+    def __init__(
+        self,
+        vector_memory: VectorMemoryService,
+        exit_profiles: ExitProfileResolver,
+        post_mortem_repo: Any | None = None,
+        logger: Any | None = None,
+        prompt_budget: PromptBudgetPolicy | None = None,
+    ):
+        """Initialize context provider dependencies and cache state."""
+        self.vector_memory = vector_memory
+        self.exit_profiles = exit_profiles
+        self.post_mortem_repo = post_mortem_repo
+        self.logger = logger
+        self.prompt_budget = prompt_budget
+        self._stats_cache: dict[str, Any] = {}
+        self._cache_trade_count: int = 0
+        self._stats_cache_updated_at = 0.0
+
+    def clear_stats_cache(self) -> None:
+        """Invalidate cached vector-memory statistics."""
+        self._stats_cache = {}
+
+    def get_context(self, snapshot: MarketSnapshot) -> str:
+        """Generate formatted brain context for prompt injection using vector retrieval."""
+        lines = []
+        optional_ranges = []
+        exp_count = self.vector_memory.trade_count
+        if exp_count > 0:
+            lines.extend([
+                "",
+                f"## Trading Brain ({exp_count} closed trades)",
+                "",
+                "### Confidence Calibration:",
+            ])
+            conf_stats = self.get_cached_stats(
+                "confidence", self.vector_memory.compute_confidence_stats
+            )
+            for level in ["HIGH", "MEDIUM", "LOW"]:
+                stats = conf_stats.get(level, {})
+                if stats.get("total_trades", 0) > 0:
+                    lines.append(
+                        f"- {level} Confidence: Win Rate {stats['win_rate']:.0f}% "
+                        f"({stats['winning_trades']}/{stats['total_trades']} trades) | "
+                        f"Avg P&L: {stats['avg_pnl_pct']:+.2f}%"
+                    )
+            recommendation = self.vector_memory.get_confidence_recommendation()
+            if recommendation:
+                lines.append(f"  → INSIGHT: {recommendation}")
+            direction_bias = self.vector_memory.get_direction_bias()
+            if direction_bias:
+                lines.extend([
+                    "",
+                    "### Direction Bias Check:",
+                    f"- Historical trades: {direction_bias['long_count']} LONG, {direction_bias['short_count']} SHORT",
+                ])
+                if direction_bias["short_count"] == 0:
+                    lines.append(
+                        "- ⚠️ NO SHORT TRADES IN HISTORY: Consider SHORT opportunities more carefully; "
+                        "lack of data means you may be missing valid setups."
+                    )
+        try:
+            blocked_feedback = self.vector_memory.get_blocked_trade_feedback(
+                n=5, max_age_hours=168
+            )
+            if blocked_feedback:
+                lines.extend(["", blocked_feedback])
+        except Exception as exc:  # noqa: BLE001
+            if self.logger:
+                self.logger.warning("Failed to fetch blocked trade feedback: %s", exc)
+        vector_context = self.get_vector_context(snapshot, k=3)
+        if vector_context:
+            begin = len(lines)
+            vector_context = self.exit_profiles.replace_unknown_exit_profile_text(vector_context)
+            lines.extend(["", vector_context])
+            optional_ranges.append((begin, len(lines)))
+        has_limited_data = "⚠️ LIMITED DATA" in vector_context if vector_context else False
+        if lines and not has_limited_data:
+            lines.extend([
+                "",
+                "### Apply Insights (CoT Step 6 - Historical Evidence):",
+                (
+                    '- ANTI-PATTERN / AI MISTAKE: If an AVOID or AI-mistake rule matches (>50% similarity), state '
+                    '"⚠️ ANTI-PATTERN MATCH", compare the current setup to the failed assumption, and downgrade '
+                    "confidence unless the missing confirmation is now present. State the adjustment you apply "
+                    "(stricter confluences, higher R/R, or reduced size)."
+                ),
+                (
+                    "- REGIME / EXIT MISMATCH: Treat a retrieved experience as informational only when its regime "
+                    "(ADX/volatility marked ⚠️) or its hard/soft SL/TP exit profile differs from current conditions; "
+                    "do not use it as a confidence prior without explaining the mismatch."
+                ),
+                (
+                    "- CHOPPINESS MISMATCH: If a stored trade had low snapshot.choppiness (Trending) but the current market "
+                    "shows high snapshot.choppiness (Choppy), treat this as a ⚠️ regime mismatch — a trade that worked in "
+                    "a clean trend may fail in noise. Reduce confidence accordingly."
+                ),
+                (
+                    "- VOLUME DIVERGENCE: If a stored trade entered during ACCUMULATION but current conditions "
+                    "show DISTRIBUTION, the trade thesis may not hold. Flag this explicitly in your reasoning."
+                ),
+                (
+                    "- MONEY FLOW CONTRADICTION: If CMF (Chaikin Money Flow) or MFI contradicts price direction "
+                    "(e.g., BULLISH setup with CMF < 0 or MFI < 50), state the divergence and downgrade confidence "
+                    "unless there is clear evidence of reversal building."
+                ),
+                (
+                    "- ATR SCALE AWARENESS: Compare ATR% not just raw ATR — ATR=$1,500 means 2.5% on a $60K BTC vs "
+                    "15% on a $10K BTC. Same raw ATR, very different risk. Factor this into your position sizing."
+                ),
+                "",
+            ])
+        elif lines and has_limited_data:
+            lines.extend([
+                "",
+                "NOTE: Limited historical data available. Rely on standard technical analysis for this decision.",
+                "",
+            ])
+        adx_label = classify_adx_label(snapshot.adx)
+        rule_context = f"{snapshot.trend_direction} + {adx_label} + {snapshot.volatility_level} Volatility"
+        semantic_rules = self.vector_memory.get_relevant_rules(
+            current_context=rule_context,
+            n_results=3,
+        )
+        if semantic_rules:
+            begin = len(lines)
+            lines.extend([
+                "### Learned Trading Rules (relevant to current conditions):",
+            ])
+            for rule in semantic_rules:
+                similarity = rule.get("similarity", 0)
+                meta = rule.get("metadata", {})
+                rule_type = meta.get("rule_type", "best_practice")
+                type_tags = {
+                    "anti_pattern": " [⚠️ AVOID]",
+                    "corrective": " [⚡ IMPROVE]",
+                    "ai_mistake": " [🧠 AI MISTAKE]",
+                }
+                type_tag = type_tags.get(rule_type, "")
+                rule_text = self.exit_profiles.render_rule_text(rule)
+                freshness = meta.get("freshness_label")
+                support = meta.get("support_count") or meta.get("source_trades")
+                final_score = meta.get("final_score") or rule.get("final_score")
+                evidence_bits = []
+                if freshness:
+                    evidence_bits.append(f"freshness: {freshness}")
+                if support:
+                    evidence_bits.append(f"evidence: {support} trades")
+                if final_score is not None:
+                    evidence_bits.append(f"score: {float(final_score):.0f}%")
+                evidence_text = f" ({', '.join(evidence_bits)})" if evidence_bits else ""
+                lines.append(f"- [{similarity:.0f}% match]{type_tag} {rule_text}{evidence_text}")
+                failure = meta.get("failure_reason")
+                if failure:
+                    lines.append(f"  → Why it failed: {failure}")
+                recommended = meta.get("recommended_adjustment")
+                if recommended:
+                    lines.append(f"  → Apply: {recommended}")
+            lines.append("")
+            optional_ranges.append((begin, len(lines)))
+
+        journal_context = self._build_trade_journal_context()
+        if journal_context:
+            lines.extend([
+                "",
+                "### Trade Journal (Recent Post-Mortem Lessons):",
+                journal_context,
+                "",
+            ])
+
+        risk_profile_text = self._build_regime_risk_profile_context(snapshot.choppiness, snapshot.atr_percentage)
+        if risk_profile_text:
+            lines.extend(["", risk_profile_text])
+
+        condition_text = self._build_condition_performance_context()
+        if condition_text:
+            lines.extend(["", condition_text])
+
+        assert self.prompt_budget is not None
+        return self.prompt_budget.fit_brain(lines, optional_ranges)
+
+
+    def _build_trade_journal_context(self) -> str:
+        """Build a formatted string of recent post-mortem lessons for prompt injection.
+
+        Returns:
+            Formatted multi-line string, or empty string if no post-mortems exist.
+        """
+        if not self.post_mortem_repo:
+            return ""
+        try:
+            recent = self.post_mortem_repo.get_recent_post_mortems(limit=5)
+            if not recent:
+                return ""
+            lines = []
+            for pm in recent:
+                pnl_str = f", P&L: {pm['pnl_pct']:+.1f}%" if pm.get("pnl_pct") is not None and pm["verdict"] != "excluded" else ""
+                lines.append(
+                    f"— {pm['verdict']} ({pm['created_at'][:10]}, {pm['symbol']}): {pm['lesson_learned']}{pnl_str}"
+                )
+            return "\n".join(lines)
+        except Exception as e:  # noqa: BLE001
+            if self.logger:
+                self.logger.warning("Failed to retrieve post-mortem lessons for brain context: %s", e)
+            return ""
+
+    def _build_regime_risk_profile_context(self, choppiness: float | None, atr_percentage: float) -> str:
+        """Build risk profile context using regime-driven selector + brain stats.
+
+        Combines the regime-based profile with brain-learned per-profile win rates.
+        The LLM sees both: what profile is active AND how it performed historically.
+        """
+        from .regime_risk_profile import RegimeRiskProfileSelector
+
+        selector = RegimeRiskProfileSelector()
+        profile = selector.select_profile(choppiness=choppiness, atr_percentage=atr_percentage)
+
+        reason_parts = []
+        if choppiness is not None:
+            if choppiness > 61.8:
+                reason_parts.append(f"Choppiness {choppiness:.1f} (ranging)")
+            elif choppiness < 38.2:
+                reason_parts.append(f"Choppiness {choppiness:.1f} (trending)")
+            else:
+                reason_parts.append(f"Choppiness {choppiness:.1f} (transitional)")
+        reason_parts.append(f"ATR {atr_percentage:.1f}%")
+        reason = "; ".join(reason_parts)
+
+        brain_stats: dict[str, dict[str, Any]] | None = None
+        if self.vector_memory.trade_count >= 3:
+            brain_stats = self.vector_memory.compute_per_profile_stats()
+
+        return selector.build_profile_context(profile, reason, brain_stats=brain_stats)
+
+    def _build_condition_performance_context(self) -> str:
+        """Build a 'Market Condition Performance' block from aggregated trade stats.
+
+        Shows win rate per RSI bucket, volume state, and weekend/weekday split.
+        Helps the LLM spot which entry conditions historically led to wins/losses.
+        Only includes buckets with >= 2 trades for statistical relevance.
+        """
+        if self.vector_memory.trade_count < 3:
+            return ""
+
+        rsi_stats = self.vector_memory.compute_rsi_performance()
+        vol_stats = self.vector_memory.compute_volume_performance()
+        wknd_stats = self.vector_memory.compute_weekend_performance()
+
+        if not rsi_stats and not vol_stats and not wknd_stats:
+            return ""
+
+        lines = ["### Market Condition Performance (from trade history):"]
+        MIN_TRADES = 2
+
+        rsi_lines = []
+        for label, data in rsi_stats.items():
+            total = data.get("total_trades", 0)
+            wr = data.get("win_rate")
+            if total >= MIN_TRADES and wr is not None:
+                if wr >= 65:
+                    tag = "STRONG SIGNAL"
+                elif wr <= 35:
+                    tag = "WEAK SIGNAL"
+                else:
+                    tag = "neutral"
+                rsi_lines.append(
+                    f"- RSI {data['range']} ({label}): {data['winning_trades']}/{total} wins "
+                    f"({wr:.0f}% WR) — {tag}"
+                )
+        if rsi_lines:
+            lines.extend(rsi_lines)
+
+        vol_lines = []
+        for state, data in vol_stats.items():
+            total = data.get("total_trades", 0)
+            wr = data.get("win_rate")
+            if total >= MIN_TRADES and wr is not None:
+                if wr >= 65:
+                    tag = "FAVORABLE"
+                elif wr <= 35:
+                    tag = "UNFAVORABLE"
+                else:
+                    tag = "neutral"
+                vol_lines.append(
+                    f"- {state}: {data['winning_trades']}/{total} wins "
+                    f"({wr:.0f}% WR) — {tag}"
+                )
+        if vol_lines:
+            if lines:
+                lines.append("")
+            lines.extend(vol_lines)
+
+        wknd_lines = []
+        for key in ("weekend", "weekday"):
+            data = wknd_stats.get(key, {})
+            total = data.get("total_trades", 0)
+            wr = data.get("win_rate")
+            if total >= MIN_TRADES and wr is not None:
+                if wr >= 65:
+                    tag = "FAVORABLE"
+                elif wr <= 35:
+                    tag = "UNFAVORABLE"
+                else:
+                    tag = "neutral"
+                wknd_lines.append(
+                    f"- {key.capitalize()}: {data['winning_trades']}/{total} wins "
+                    f"({wr:.0f}% WR) — {tag}"
+                )
+        if wknd_lines:
+            if lines:
+                lines.append("")
+            lines.extend(wknd_lines)
+
+        if len(lines) <= 1:
+            return ""
+
+        return "\n".join(lines)
+
+    def get_dynamic_thresholds(self) -> dict[str, Any]:
+        """Get brain-learned thresholds from vector store."""
+        thresholds = self.get_cached_stats(
+            "thresholds", self.vector_memory.compute_optimal_thresholds
+        )
+        return {
+            "adx_strong_threshold": thresholds.get("adx_strong_threshold", 25),
+            "avg_sl_pct": thresholds.get("avg_sl_pct", 2.5),
+            "min_rr_recommended": thresholds.get("min_rr_recommended", 2.0),
+            "confidence_threshold": thresholds.get("confidence_threshold", 60),
+            "safe_mae_pct": thresholds.get("safe_mae_pct", 0),
+            "safe_mae_sample_count": thresholds.get("safe_mae_sample_count", 0),
+            "adx_weak_threshold": thresholds.get("adx_weak_threshold", 20),
+            "min_confluences_weak": thresholds.get("min_confluences_weak", 2),
+            "min_confluences_standard": thresholds.get("min_confluences_standard", 2),
+            "position_reduce_mixed": thresholds.get("position_reduce_mixed", 0.20),
+            "position_reduce_divergent": thresholds.get("position_reduce_divergent", 0.35),
+            "min_position_size": thresholds.get("min_position_size", 0.02),
+            "rr_borderline_min": thresholds.get("rr_borderline_min", 0.0),
+            "rr_strong_setup": thresholds.get("rr_strong_setup", 2.5),
+            "trade_count": self.vector_memory.trade_count,
+            "learned_keys": list(thresholds.keys()),
+            "sl_tightening": thresholds.get("sl_tightening"),
+        }
+
+    @staticmethod
+    def build_rich_context_string(snapshot: MarketSnapshot) -> str:
+        """Build rich semantic context string for vector storage and retrieval."""
+        return build_context_string_from_classified_values(snapshot)
+
+    @staticmethod
+    def build_query_document(snapshot: MarketSnapshot) -> str:
+        """Build a query document that mirrors stored experience document format."""
+        return build_query_document_from_classified_values(snapshot)
+
+    def get_vector_context(self, snapshot: MarketSnapshot, k: int = 5) -> str:
+        """Get context from similar past experiences via vector retrieval."""
+        context_query = self.build_rich_context_string(snapshot)
+        query_document = self.build_query_document(snapshot)
+        vector_context = self.vector_memory.get_context_for_prompt(
+            query_document,
+            k,
+            display_context=context_query,
+            current_atr_percentage=snapshot.atr_percentage or None,
+            include_rules=False,
+        )
+        if not vector_context:
+            return ""
+        stats = self.vector_memory.get_stats_for_context(query_document, k=20)
+        if stats["total_trades"] > 0:
+            vector_context = vector_context.rstrip() + (
+                f"\n\n### Learned Stats for This Context:\n"
+                f"- Win Rate in similar conditions: {stats['win_rate']:.0f}% "
+                f"({stats['total_trades']} trades)\n"
+                f"- Avg P&L: {stats['avg_pnl']:+.2f}%\n"
+            )
+        return vector_context
+
+    def get_cached_stats(self, key: str, compute_fn: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        """Get stats from cache or compute and cache them."""
+        current_count = self.vector_memory.experience_count
+        now = monotonic()
+        if (current_count != self._cache_trade_count
+                or now - self._stats_cache_updated_at >= self.STATS_CACHE_TTL_SECONDS):
+            self._stats_cache = {}
+            self._cache_trade_count = current_count
+            self._stats_cache_updated_at = now
+        if key not in self._stats_cache:
+            self._stats_cache[key] = compute_fn()
+        return self._stats_cache[key]
+

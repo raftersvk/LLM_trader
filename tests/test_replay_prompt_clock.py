@@ -15,7 +15,6 @@ import numpy as np
 import pytest
 
 from src.analyzer.analysis_context import AnalysisContext
-from src.analyzer.prompts.context_builder import ContextBuilder
 from src.analyzer.prompts.prompt_builder import PromptBuilder
 from src.analyzer.prompts.template_manager import TemplateManager
 from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
@@ -28,28 +27,21 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _context_builder() -> ContextBuilder:
-    return ContextBuilder(
-        timeframe="1h",
-        format_utils=MagicMock(),
-        market_formatter=MagicMock(),
-        period_formatter=MagicMock(),
-        long_term_formatter=MagicMock(),
-    )
-
-
 def _prompt_builder() -> PromptBuilder:
-    builder = PromptBuilder(
+    return PromptBuilder(
         timeframe="1h",
-        technical_calculator=MagicMock(),
         format_utils=MagicMock(),
         template_manager=MagicMock(),
         overview_formatter=MagicMock(),
         long_term_formatter=MagicMock(),
         technical_formatter=MagicMock(),
         market_formatter=MagicMock(),
-        context_builder=MagicMock(),
+        config=MagicMock(),
     )
+
+
+def _blank_sections(builder: PromptBuilder) -> PromptBuilder:
+    """Stub every prompt section except the one under test."""
     for method in (
         "build_trading_context",
         "build_sentiment_section",
@@ -57,7 +49,7 @@ def _prompt_builder() -> PromptBuilder:
         "build_market_data_section",
         "build_market_period_metrics_section",
     ):
-        getattr(builder.context_builder, method).return_value = ""
+        setattr(builder, method, MagicMock(return_value=""))
     builder.technical_analysis_formatter.format_technical_analysis.return_value = ""
     return builder
 
@@ -66,7 +58,7 @@ def test_trading_context_uses_injected_as_of_not_today():
     """A historical as_of renders that date and never today's date."""
     context = SimpleNamespace(symbol="BTC/USDT", current_price=68000.0)
 
-    text = _context_builder().build_trading_context(context, now=AS_OF)
+    text = _prompt_builder().build_trading_context(context, now=AS_OF)
 
     assert AS_OF_TEXT in text
     assert "Current Day: Wednesday" in text
@@ -77,7 +69,7 @@ def test_trading_context_default_still_uses_now():
     """Omitting as_of keeps the live wall-clock behaviour."""
     context = SimpleNamespace(symbol="BTC/USDT", current_price=68000.0)
 
-    text = _context_builder().build_trading_context(context)
+    text = _prompt_builder().build_trading_context(context)
 
     assert _today() in text
 
@@ -103,13 +95,13 @@ def test_deterministic_time_check_default_still_uses_now():
 
 
 def test_prompt_builder_threads_as_of_into_trading_context():
-    builder = _prompt_builder()
+    builder = _blank_sections(_prompt_builder())
     builder.analysis_as_of = AS_OF
     context = AnalysisContext(symbol="BTC/USDT")
 
     builder.build_prompt(context)
 
-    builder.context_builder.build_trading_context.assert_called_once_with(context, now=AS_OF)
+    builder.build_trading_context.assert_called_once_with(context, now=AS_OF)
 
 
 class _ClockCollector:

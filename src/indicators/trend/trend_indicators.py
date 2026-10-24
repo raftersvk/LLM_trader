@@ -5,50 +5,52 @@ This module provides optimized implementations of various trend indicators
 including ADX, Supertrend, Ichimoku Cloud, Parabolic SAR, TRIX,
 Vortex Indicator, PFE, and TD Sequential.
 """
-from typing import Tuple
 
 import math
+
 import numpy as np
 from numba import njit
 
 from src.indicators.overlap import ema_numba
 from src.indicators.volatility import atr_numba
-from .trend_calculation_utils import (
-    calculate_directional_movement, calculate_smoothed_values,
-    calculate_directional_indicators, calculate_ichimoku_lines,
-    calculate_ichimoku_spans, calculate_band_adjustments,
-    calculate_vortex_components
-)
+
 from .sar_utils import (
-    initialize_sar_arrays, get_initial_sar_state,
-    update_bullish_sar, update_bearish_sar
+    get_initial_sar_state,
+    initialize_sar_arrays,
+    update_bearish_sar,
+    update_bullish_sar,
+)
+from .trend_calculation_utils import (
+    calculate_band_adjustments,
+    calculate_directional_indicators,
+    calculate_directional_movement,
+    calculate_ichimoku_lines,
+    calculate_ichimoku_spans,
+    calculate_smoothed_values,
+    calculate_vortex_components,
 )
 
 
 @njit(cache=True)
 def adx_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray,
-              length: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+              length: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Calculate ADX (Average Directional Index) and directional indicators.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray]: (ADX, +DI, -DI) arrays.
+        tuple[np.ndarray, np.ndarray, np.ndarray]: (ADX, +DI, -DI) arrays.
     """
     n = len(high)
 
-    # Calculate True Range
     tr = np.full(n, np.nan)
     for i in range(1, n):
         tr[i] = max(high[i] - low[i], abs(high[i] - close[i - 1]), abs(low[i] - close[i - 1]))
 
-    # Calculate directional movements
     dm_pos, dm_neg = calculate_directional_movement(high, low)
 
-    # Calculate smoothed values
     tr14 = calculate_smoothed_values(tr, length)
     dm_pos14 = calculate_smoothed_values(dm_pos, length)
     dm_neg14 = calculate_smoothed_values(dm_neg, length)
 
-    # Calculate directional indicators and DX
     pdi, ndi, dx = calculate_directional_indicators(dm_pos14, dm_neg14, tr14)
 
     adx = np.full(n, np.nan)
@@ -66,11 +68,11 @@ def adx_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray,
 
 @njit(cache=True)
 def supertrend_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray,
-                     length: int = 10, multiplier: float = 3.0) -> Tuple[np.ndarray, np.ndarray]:
+                     length: int = 10, multiplier: float = 3.0) -> tuple[np.ndarray, np.ndarray]:
     """Calculate Supertrend indicator.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray]: (Supertrend Line, Trend Direction [1/-1])
+        tuple[np.ndarray, np.ndarray]: (Supertrend Line, Trend Direction [1/-1])
     """
     n = len(close)
     atr = atr_numba(high, low, close, length)
@@ -82,14 +84,11 @@ def supertrend_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray,
     trend = np.full(n, np.nan)
     direction = np.full(n, 1)
 
-    # Initialize first values
     trend[0] = lowerband[0] if direction[0] == 1 else upperband[0]
 
     for i in range(1, n):
-        # Adjust bands based on previous close
         upperband[i], lowerband[i] = calculate_band_adjustments(close, upperband, lowerband, i)
 
-        # Determine trend direction
         if close[i] > upperband[i - 1]:
             direction[i] = 1
         elif close[i] < lowerband[i - 1]:
@@ -105,19 +104,17 @@ def supertrend_numba(high: np.ndarray, low: np.ndarray, close: np.ndarray,
 def ichimoku_cloud_numba(high: np.ndarray, low: np.ndarray,
                          conversion_length: int = 9, base_length: int = 26,
                          lagging_span2_length: int = 52,
-                         displacement: int = 26) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                         displacement: int = 26) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Calculate Ichimoku Cloud components.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
             (Conversion Line, Base Line, Leading Span A, Leading Span B)
     """
-    # Calculate conversion and base lines
     conversion_line, base_line = calculate_ichimoku_lines(
         high, low, conversion_length, base_length
     )
 
-    # Calculate leading spans
     leading_span_a, leading_span_b = calculate_ichimoku_spans(
         high, low, conversion_line, base_line, lagging_span2_length, displacement
     )
@@ -130,10 +127,8 @@ def parabolic_sar_numba(high, low, step=0.02, max_step=0.2):
     n = len(high)
     sar, ep, af = initialize_sar_arrays(n)
 
-    # Initialize state
     trend, sar[0], ep[0], af[0] = get_initial_sar_state(high, low, step)
 
-    # Calculate SAR for each period
     for i in range(1, n):
         if trend == 1:
             trend = update_bullish_sar(i, high, low, sar, ep, af, step, max_step)
@@ -169,13 +164,11 @@ def vortex_indicator_numba(high, low, close, length):
     vi_plus = np.full(n, np.nan)
     vi_minus = np.full(n, np.nan)
 
-    # Calculate components
     tr, vmp, vmm = calculate_vortex_components(high, low, close)
 
     if n <= length:
         return vi_plus, vi_minus
 
-    # Initial sums for the first window (up to length - 1)
     tr_sum = 0.0
     vmp_sum = 0.0
     vmm_sum = 0.0
@@ -185,9 +178,7 @@ def vortex_indicator_numba(high, low, close, length):
         vmp_sum += vmp[i]
         vmm_sum += vmm[i]
 
-    # Calculate rolling sums and Vortex Indicator
     for i in range(length, n):
-        # Add the newest element to the window
         tr_sum += tr[i]
         vmp_sum += vmp[i]
         vmm_sum += vmm[i]
@@ -196,7 +187,6 @@ def vortex_indicator_numba(high, low, close, length):
             vi_plus[i] = vmp_sum / tr_sum
             vi_minus[i] = vmm_sum / tr_sum
 
-        # Remove the oldest element that drops out of the window
         tr_sum -= tr[i - length + 1]
         vmp_sum -= vmp[i - length + 1]
         vmm_sum -= vmm[i - length + 1]
@@ -217,32 +207,21 @@ def pfe_numba(close, n, m):
     pfe = np.full(length, np.nan)
     p = np.full(length, np.nan)
 
-    # Need at least n+1 points to calculate n-period PFE
     if length <= n:
         return pfe
 
-    # Calculate segment lengths: Sqrt(diff^2 + 1)
-    # segment_lengths[i] = length of segment from i-1 to i
     segment_lengths = np.zeros(length)
     for i in range(1, length):
         diff = close[i] - close[i - 1]
         segment_lengths[i] = np.sqrt(diff * diff + 1.0)
 
-    # Rolling sum of segment lengths over window n
-    # We sum n segments: from i-n+1 to i
-
     current_sum = 0.0
-    # Initialize first window sum (indices 1 to n)
     for i in range(1, n + 1):
         current_sum += segment_lengths[i]
 
-    # Calculate PFE for first valid point at index n
-    # dy = close[n] - close[0] (n intervals)
     dy = close[n] - close[0]
-    # Numerator uses n intervals as dx
     numerator = np.sqrt(dy * dy + n * n)
 
-    # Sign based on trend direction
     sign = 1.0 if dy > 0 else (-1.0 if dy < 0 else 0.0)
 
     if current_sum != 0:
@@ -250,9 +229,7 @@ def pfe_numba(close, n, m):
     else:
         p[n] = 0.0
 
-    # Iterate for the rest
     for i in range(n + 1, length):
-        # Update rolling sum: add new segment (i), remove old segment (i-n)
         current_sum += segment_lengths[i] - segment_lengths[i - n]
 
         dy = close[i] - close[i - n]
@@ -264,10 +241,8 @@ def pfe_numba(close, n, m):
         else:
              p[i] = 0.0
 
-    # Calculate EMA of p values
     multiplier = 2 / (m + 1)
 
-    # Initialize EMA with first valid p
     start_idx = n
     if not math.isnan(p[start_idx]):
         pfe[start_idx] = p[start_idx]
@@ -283,47 +258,27 @@ def pfe_numba(close, n, m):
 
 
 @njit(cache=True)
-def td_sequential_numba(close, length=9):
-    """
-    Calculate TD Sequential indicator.
-    Returns the count of consecutive higher/lower closes.
-    Positive values indicate bullish counts, negative values indicate bearish counts.
-    Optimization: O(N) forward pass instead of O(N*L) backward nested loop.
+def td_setup_numba(close, length=9):
+    """TD Setup (DeMark setup phase): count of consecutive closes vs close[4].
+
+    Positive counts are bullish runs, negative bearish runs; reaching the length
+    (9) marks potential exhaustion. The DeMark countdown phase is not implemented.
     """
     n = len(close)
     td_seq = np.full(n, np.nan)
+    count = 0
 
-    # Need at least 4 periods for comparison
-    # We can iterate and build state incrementally
     for i in range(4, n):
         c = close[i]
         c4 = close[i - 4]
 
-        # Get previous state (handling start of sequence)
-        prev = td_seq[i - 1]
-        if math.isnan(prev):
-            prev = 0.0
-
         if c > c4:
-            # Bullish
-            if prev >= 0:
-                val = prev + 1
-            else:
-                val = 1
+            count = max(count, 0) + 1
         elif c < c4:
-            # Bearish
-            if prev <= 0:
-                val = prev - 1
-            else:
-                val = -1
+            count = min(count, 0) - 1
         else:
-            # Equal - reset
-            val = 0.0
+            count = 0
 
-        # Cap at length if specified
-        if abs(val) > length:
-            val = np.sign(val) * length
-
-        td_seq[i] = val
+        td_seq[i] = count if abs(count) <= length else 0
 
     return td_seq

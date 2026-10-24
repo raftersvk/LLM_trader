@@ -132,7 +132,7 @@ class TestGetDynamicThresholds:
         t = self.brain.get_dynamic_thresholds()
         assert t["adx_strong_threshold"] == 25
         assert t["min_rr_recommended"] == 2.0
-        assert t["confidence_threshold"] == 70
+        assert t["confidence_threshold"] == 60
 
 
 class TestReflectionRuleFormatting:
@@ -151,7 +151,7 @@ class TestReflectionRuleFormatting:
             for _ in range(10)
         ]
 
-        brain.vector_memory._get_trade_metadatas.return_value = win_metas
+        brain.vector_memory.get_trade_metadatas.return_value = win_metas
 
         brain._trigger_reflection()
 

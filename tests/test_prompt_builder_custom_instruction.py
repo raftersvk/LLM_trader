@@ -10,20 +10,19 @@ from unittest.mock import MagicMock
 from src.analyzer.analysis_context import AnalysisContext
 from src.analyzer.analysis_engine import _normalize_market_context
 from src.analyzer.prompts.prompt_builder import PromptBuilder
+from src.analyzer.prompts.untrusted_context import EXTERNAL_CONTEXT_HEADER
 
 
 def _build_prompt_builder() -> PromptBuilder:
     """Build a PromptBuilder whose sections are empty except custom instructions."""
     builder = PromptBuilder(
         timeframe="1h",
-        technical_calculator=MagicMock(),
         format_utils=MagicMock(),
         template_manager=MagicMock(),
         overview_formatter=MagicMock(),
         long_term_formatter=MagicMock(),
         technical_formatter=MagicMock(),
         market_formatter=MagicMock(),
-        context_builder=MagicMock(),
     )
     for method in (
         "build_trading_context",
@@ -32,7 +31,7 @@ def _build_prompt_builder() -> PromptBuilder:
         "build_market_data_section",
         "build_market_period_metrics_section",
     ):
-        getattr(builder.context_builder, method).return_value = ""
+        setattr(builder, method, MagicMock(return_value=""))
     builder.technical_analysis_formatter.format_technical_analysis.return_value = ""
     return builder
 
@@ -49,6 +48,7 @@ def test_tuple_instructions_are_flattened_without_type_error():
     prompt = builder.build_prompt(_context())
 
     assert builder.custom_instructions == ["News one", "News two"]
+    assert EXTERNAL_CONTEXT_HEADER in prompt
     assert "News one\nNews two" in prompt
 
 
@@ -82,6 +82,7 @@ def test_empty_sequence_adds_no_instructions():
     prompt = builder.build_prompt(_context())
 
     assert builder.custom_instructions == []
+    assert EXTERNAL_CONTEXT_HEADER not in prompt
     assert isinstance(prompt, str)
 
 
@@ -90,3 +91,29 @@ def test_normalize_market_context_flattens_sequence():
     assert _normalize_market_context(("line one", "line two")) == "line one\nline two"
     assert _normalize_market_context("plain context") == "plain context"
     assert _normalize_market_context("") == ""
+
+
+def test_normalize_market_context_handles_news_ablation_tuple():
+    """The ``(text, urls)`` return shape keeps the text and drops the URLs.
+
+    Covers both the news-disabled ablation stub ``("", {})`` and a populated
+    URLs mapping, which is the shape that used to reach ``PromptBuilder`` and
+    degrade the analysis to HOLD.
+    """
+    text = "News headline one\nNews headline two"
+    normalized = _normalize_market_context(
+        (text, {"article": "https://example.com", "other": "https://example.org"})
+    )
+
+    assert normalized == text
+    assert "example.com" not in normalized
+    assert "example.org" not in normalized
+    assert _normalize_market_context(("", {})) == ""
+
+
+def test_normalize_market_context_drops_non_text_values():
+    """No usable text means the analyzer must skip the custom instruction."""
+    assert _normalize_market_context(None) == ""
+    assert _normalize_market_context((None, {})) == ""
+    assert _normalize_market_context(123) == ""
+    assert _normalize_market_context({"article": "https://example.com"}) == ""

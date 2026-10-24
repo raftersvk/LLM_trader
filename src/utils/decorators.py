@@ -1,19 +1,22 @@
+"""Decorators module.
+
+Provides functionality for utils.decorators.py.
+"""
 import asyncio
 import functools
-import logging
-import traceback
+import json
+import random
 import socket
-from typing import Any, Dict
-from src.utils.protocols import HasLogger
+import traceback
+from typing import Any
 
-import ccxt
-import aiohttp
 import aiodns
-
+import aiohttp
+import ccxt
 
 _RATE_LIMIT_PHRASES = {
-    'too many requests', 'rate limit', '429', 'ratelimit',
-    'ddos protection', 'system-level rate limit exceeded'
+    "too many requests", "rate limit", "429", "ratelimit",
+    "ddos protection", "system-level rate limit exceeded"
 }
 
 _NETWORK_EXCEPTIONS = (
@@ -23,35 +26,15 @@ _NETWORK_EXCEPTIONS = (
 )
 
 
-def _log(logger, level: str, message: str):
-    """Log a message using the provided logger or fallback to logging module."""
-    if logger:
-        try:
-            log_func = getattr(logger, level)
-            try:
-                # Duck-type: If it supports stacklevel (like standard logging)
-                log_func(message, stacklevel=3)
-            except TypeError:
-                # If wrapped or doesn't support stacklevel
-                log_func(message)
-        except AttributeError:
-            pass
-    else:
-        try:
-            getattr(logging, level)(message)
-        except AttributeError:
-            pass
-
-
 def _classify_retryable_error(e: Exception) -> str:
     msg = str(e).lower()
     if isinstance(e, (ccxt.RateLimitExceeded, ccxt.DDoSProtection)) or any(p in msg for p in _RATE_LIMIT_PHRASES):
         return "Rate limit/DDoS. Retry {}"
-    if isinstance(e, (ccxt.RequestTimeout, TimeoutError, asyncio.TimeoutError)) or 'timeout' in msg:
+    if isinstance(e, (ccxt.RequestTimeout, TimeoutError, asyncio.TimeoutError)) or "timeout" in msg:
         return "Timeout. Retry {}"
     if isinstance(e, (ccxt.NetworkError, aiohttp.ClientConnectorError, aiohttp.ClientOSError, socket.gaierror, ConnectionResetError)):
         return "Network issue. Retry {}"
-    if isinstance(e, OSError) and 'network is unreachable' in msg:
+    if isinstance(e, OSError) and "network is unreachable" in msg:
         return "Network unreachable. Retry {}"
     return "Retry {}"
 
@@ -62,20 +45,13 @@ def _is_exchange_rate_limit_error(e: ccxt.ExchangeError) -> bool:
 
 
 def retry_async(max_retries: int = -1, initial_delay: float = 1, backoff_factor: float = 2, max_delay: float = 3600):
-    """Generic retry decorator for async instance methods.
-
-    Args:
-        max_retries: -1 for infinite retries, otherwise max attempts before raising.
-        initial_delay: Initial backoff delay seconds.
-        backoff_factor: Multiplier applied each retry.
-        max_delay: Upper bound for backoff delay.
-    """
+    """Generic retry decorator for async instance methods."""
     def decorator(func: Any):
         @functools.wraps(func)
         async def wrapper(self, *args: Any, **kwargs: Any):
             context = _RetryContext(self, func, args, kwargs, max_retries, initial_delay, backoff_factor, max_delay)
 
-            while True:  # Controlled exit via return or raise
+            while True:
                 try:
                     return await func(self, *args, **kwargs)
                 except _NETWORK_EXCEPTIONS as e:
@@ -94,9 +70,14 @@ def retry_async(max_retries: int = -1, initial_delay: float = 1, backoff_factor:
 class _RetryContext:
     """Helper class to manage retry logic and reduce complexity."""
 
+    @staticmethod
+    def _add_jitter(delay: float) -> float:
+        """Add ±25% random jitter to prevent thundering herd on concurrent retries."""
+        return delay * (0.75 + random.random() * 0.5)
+
     def __init__(self, instance, func, args, kwargs, max_retries, initial_delay, backoff_factor, max_delay):
-        self.logger = instance.logger if isinstance(instance, HasLogger) else None
-        self.pair = kwargs.get('pair') or (args[0] if args and isinstance(args[0], str) else None)
+        self.logger = instance.logger
+        self.pair = kwargs.get("pair") or (args[0] if args else None)
         self.class_name = instance.__class__.__name__
         self.func_name = func.__name__
         self.max_retries = max_retries
@@ -117,22 +98,22 @@ class _RetryContext:
     def _log_failure(self, error_type: str, error: Exception):
         """Log final failure after exhausting retries."""
         prefix = self._format_prefix()
-        _log(self.logger, 'error',
-             f"{prefix}Function {self.class_name}.{self.func_name} failed after {self.max_retries} retries. "
-             f"Last error: {error_type} - {error}")
+        self.logger.error(
+            f"{prefix}Function {self.class_name}.{self.func_name} failed after {self.max_retries} retries. "
+            f"Last error: {error_type} - {error}")
 
-    async def _handle_retryable_error(self, template: str, error: Exception, error_type: str = None) -> bool:
+    async def _handle_retryable_error(self, template: str, error: Exception, error_type: str | None = None) -> bool:
         """Common logic for handling retryable errors."""
         if not self._should_continue_retrying():
             self._log_failure(error_type or type(error).__name__, error)
             return False
 
         prefix = self._format_prefix()
-        _log(self.logger, 'warning',
-             f"{prefix}{template.format(self.attempt)} for {self.class_name}.{self.func_name} "
-             f"in {self.delay:.2f} seconds. Type: {type(error).__name__}, Error: {error}")
+        self.logger.warning(
+            f"{prefix}{template.format(self.attempt)} for {self.class_name}.{self.func_name} "
+            f"in {self.delay:.2f} seconds. Type: {type(error).__name__}, Error: {error}")
 
-        await asyncio.sleep(self.delay)
+        await asyncio.sleep(self._add_jitter(self.delay))
         self.delay = min(self.delay * self.backoff_factor, self.max_delay)
         return True
 
@@ -145,9 +126,9 @@ class _RetryContext:
         """Handle exchange-specific errors."""
         if not _is_exchange_rate_limit_error(error):
             prefix = self._format_prefix()
-            _log(self.logger, 'error',
-                 f"{prefix}Non-retryable ExchangeError in {self.class_name}.{self.func_name}: "
-                 f"{type(error).__name__} - {error}")
+            self.logger.error(
+                f"{prefix}Non-retryable ExchangeError in {self.class_name}.{self.func_name}: "
+                f"{type(error).__name__} - {error}")
             return False
 
         template = "Rate limit (ExchangeError). Retry {}"
@@ -156,41 +137,83 @@ class _RetryContext:
     def handle_unexpected_error(self, error: Exception):
         """Handle unexpected errors that shouldn't be retried."""
         prefix = self._format_prefix()
-        _log(self.logger, 'error',
-             f"{prefix}Unexpected error in {self.class_name}.{self.func_name}: "
-             f"{type(error).__name__} - {error}\n{traceback.format_exc()}")
+        self.logger.error(
+            f"{prefix}Unexpected error in {self.class_name}.{self.func_name}: "
+            f"{type(error).__name__} - {error}\n{traceback.format_exc()}")
 
 
 def _should_retry_api_error(error_value: Any) -> bool:
     """Check if an API error should trigger a retry."""
-    # Top-level error codes
+    if isinstance(error_value, str):
+        try:
+            error_value = json.loads(error_value)
+        except ValueError:
+            return error_value == "timeout"
     if isinstance(error_value, dict):
-        error_code = error_value.get('code')
-        if error_code in (500, 502, 503, 504):  # Server errors
+        if error_value.get("code") in (500, 502, 503, 504):
             return True
-        # Check for retryable flag from OpenRouter
-        if error_value.get('metadata', {}).get('raw', {}).get('retryable'):
+        metadata = error_value.get("metadata")
+        raw = metadata.get("raw") if isinstance(metadata, dict) else None
+        if isinstance(raw, dict) and raw.get("retryable"):
             return True
-    return error_value == 'timeout'
+    return error_value == "timeout"
 
 
-def retry_api_call(max_retries: int = 3, initial_delay: float = 1, backoff_factor: float = 2, max_delay: float = 60):
-    """Retry decorator for API call methods that return a dict possibly containing an 'error' key."""
+def _carries_no_payload(payload: dict[str, Any]) -> bool:
+    """True when a reply object holds no payload key of its own.
+
+    ``{"type": "json_object"}`` is the requested ``response_format`` coming back (live
+    2026-09-27) and ``{}`` is an empty answer — neither holds anything a parser could
+    read, so both are resent. A key naming a payload means the provider served a real
+    answer, whichever contract's prompt produced it.
+    """
+    meta_keys = {"type", "response_format", "format"}
+    return set(payload) <= meta_keys
+
+
+def retry_api_call(
+    max_retries: int = 3,
+    initial_delay: float = 1,
+    backoff_factor: float = 2,
+    max_delay: float = 60,
+    retry_on_empty: bool = False,
+):
+    """Retry decorator for API call methods that return a dict possibly containing an 'error' key.
+
+    ``retry_on_empty`` additionally retries missing choices, blank content, prose,
+    or an object that only echoes the requested format. Any usable JSON object,
+    including a post-mortem, is a served answer. Explicit errors retain their
+    own retry classification. Off by default for non-JSON providers.
+    """
     def decorator(func: Any):
         @functools.wraps(func)
         async def wrapper(self, *args: Any, **kwargs: Any):
-            context = _ApiRetryContext(self, func, args, kwargs, max_retries, initial_delay, backoff_factor, max_delay)
+            context = _ApiRetryContext(
+                self, func, args, kwargs, max_retries, initial_delay, backoff_factor, max_delay,
+                retry_on_empty,
+            )
             return await context.execute_with_retry()
         return wrapper
     return decorator
 
 
+def retry_api_call_default(func: Any) -> Any:
+    """Apply the project-wide API retry policy: 3 attempts, 1s base delay, x2 backoff, 30s cap."""
+    return retry_api_call(max_retries=3, initial_delay=1, backoff_factor=2, max_delay=30)(func)
+
+
+def retry_async_default(func: Any) -> Any:
+    """Apply the project-wide async retry policy: 3 attempts, 1s base delay, x2 backoff, 30s cap."""
+    return retry_async(max_retries=3, initial_delay=1, backoff_factor=2, max_delay=30)(func)
+
+
 class _ApiRetryContext:
     """Helper class to manage API retry logic."""
 
-    def __init__(self, instance, func, args, kwargs, max_retries, initial_delay, backoff_factor, max_delay):
-        self.logger = instance.logger if isinstance(instance, HasLogger) else logging.getLogger("Bot")
-        self.model = kwargs.get('model', args[0] if args else 'unknown')
+    def __init__(self, instance, func, args, kwargs, max_retries, initial_delay, backoff_factor, max_delay,
+                 retry_on_empty: bool = False):
+        self.logger = instance.logger
+        self.model = kwargs.get("model", args[0] if args else "unknown")
         self.func = func
         self.instance = instance
         self.args = args
@@ -199,11 +222,13 @@ class _ApiRetryContext:
         self.initial_delay = initial_delay
         self.backoff_factor = backoff_factor
         self.max_delay = max_delay
+        self.retry_on_empty = retry_on_empty
+        self.retry_reason = ""
 
-    async def execute_with_retry(self) -> Dict[str, Any] | None:
+    async def execute_with_retry(self) -> dict[str, Any] | None:
         """Execute the function with retry logic."""
         attempt = 0
-        last_response: Dict[str, Any] | None = None
+        last_response: dict[str, Any] | None = None
 
         while attempt <= self.max_retries:
             try:
@@ -217,99 +242,143 @@ class _ApiRetryContext:
                     attempt += 1
                     continue
 
-                return response  # success or non-retryable error structure
+                return response
 
             except Exception as e:
                 self._log_exception(e)
                 raise
 
-        # Exhausted retries (only reached on retryable error path)
         return last_response
 
     def _is_retryable_response(self, response: Any) -> bool:
         """Check if the response indicates a retryable error. Supports both dict and SDK Pydantic objects."""
         if response is None:
             return False
-        # Handle dict responses (legacy HTTP-based clients)
         if isinstance(response, dict):
-            return self._check_dict_response(response)
-        # Handle SDK Pydantic response objects (duck-typing)
-        return self._check_sdk_response(response)
+            return self._check_dict_response(response) or self._check_decisionless_reply(response)
+        return self._check_sdk_response(response) or self._check_decisionless_reply(response)
 
-    def _check_dict_response(self, response: Dict[str, Any]) -> bool:
+    def _check_decisionless_reply(self, response: Any) -> bool:
+        """Retry a reply that serves no usable JSON object, for opted-in providers.
+
+        DeepSeek's JSON-output mode occasionally answers without an object — empty content,
+        prose, or a degenerate object that only repeats the requested ``response_format``
+        (``{"type": "json_object"}``, seen live 2026-09-27 after the reasoning phase used the
+        whole completion budget). The parser rejects such a cycle outright, so the identical
+        request is resent.
+
+        A well-formed object from a DIFFERENT contract of the same provider is a served
+        answer, never a broken one: the post-mortem prompt asks for
+        ``verdict``/``lesson_learned`` and has no ``analysis`` payload to hand back, so
+        requiring one resent that answer three times per closed trade (2026-09-28, four
+        paid calls for one post-mortem). The reply does not say which prompt it answers —
+        the ``retry_on_empty`` opt-in means \"this provider must serve a JSON object\", not
+        \"every prompt it serves is the trading decision contract\".
+        """
+        if not self.retry_on_empty:
+            return False
+        error = response.get("error") if isinstance(response, dict) else getattr(response, "error", None)
+        if error:
+            return False
+        content = self._extract_content(response)
+        if content is None:
+            return False
+        payload = self._json_object(content)
+        if payload is not None and not _carries_no_payload(payload):
+            return False
+        self.retry_reason = "reply without a usable JSON payload"
+        self.logger.warning(
+            "Provider returned no usable JSON payload for model %s: %s", self.model, content[:120]
+        )
+        return True
+
+    @staticmethod
+    def _json_object(content: str) -> dict[str, Any] | None:
+        """First JSON object in the reply text, None when the text holds none."""
+        first_brace = content.find("{")
+        if first_brace == -1:
+            return None
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(content, first_brace)
+        except ValueError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def _extract_content(response: Any) -> str | None:
+        """Visible reply text from an SDK object or a dict payload, None when absent."""
+        choices = getattr(response, "choices", None)
+        if choices is None and isinstance(response, dict):
+            choices = response.get("choices")
+        if not choices:
+            return ""
+        first = choices[0]
+        error = first.get("error") if isinstance(first, dict) else getattr(first, "error", None)
+        if error:
+            return None
+        message = getattr(first, "message", None)
+        if message is None and isinstance(first, dict):
+            message = first.get("message")
+        if message is None:
+            return None
+        content = getattr(message, "content", None)
+        if content is None and isinstance(message, dict):
+            content = message.get("content")
+        return content if isinstance(content, str) else None
+
+    def _check_dict_response(self, response: dict[str, Any]) -> bool:
         """Check dict-based response for retryable errors."""
-        if response.get('error') and _should_retry_api_error(response['error']):
-            self.logger.warning("Retryable top-level error for model %s: %s", self.model, response['error'])
+        if response.get("error") and _should_retry_api_error(response["error"]):
+            self.logger.warning("Retryable top-level error for model %s: %s", self.model, response["error"])
             return True
-        choices = response.get('choices', [])
-        if choices and isinstance(choices, list):
+        choices = response.get("choices", [])
+        if choices:
             first_choice = choices[0]
-            if isinstance(first_choice, dict) and 'error' in first_choice:
-                choice_error = first_choice['error']
+            if "error" in first_choice:
+                choice_error = first_choice["error"]
                 if _should_retry_api_error(choice_error):
-                    error_code = choice_error.get('code', 'unknown')
-                    error_msg = choice_error.get('message', 'unknown')
-                    provider = choice_error.get('metadata', {}).get('provider_name', 'unknown')
+                    error_code = choice_error.get("code", "unknown")
+                    error_msg = choice_error.get("message", "unknown")
+                    provider = choice_error.get("metadata", {}).get("provider_name", "unknown")
                     self.logger.warning("Retryable error from %s in response choices for model %s: [%s] %s", provider, self.model, error_code, error_msg)
                     return True
         return False
 
+    @staticmethod
+    def _sdk_error_dict(error: Any) -> dict[str, Any] | None:
+        """Normalise an SDK error object into a plain dict, or None when absent."""
+        if not error:
+            return None
+        if isinstance(error, dict):
+            return error
+        try:
+            return error.model_dump()
+        except AttributeError:
+            return {"message": str(error)}
+
     def _check_sdk_response(self, response: Any) -> bool:
-        """Check SDK Pydantic response object for retryable errors using duck-typing."""
-        try:
-            error = response.error
-            if error:
-                try:
-                    error_dict = error.model_dump()
-                except AttributeError:
-                    error_dict = {'message': str(error)}
-                    
-                if _should_retry_api_error(error_dict):
-                    self.logger.warning("Retryable SDK error for model %s: %s", self.model, error)
-                    return True
-        except AttributeError:
-            pass
-            
-        try:
-            choices = response.choices
-            if choices and len(choices) > 0:
-                first_choice = choices[0]
-                try:
-                    choice_error = first_choice.error
-                    if choice_error:
-                        try:
-                            error_dict = choice_error.model_dump()
-                        except AttributeError:
-                            error_dict = {}
-                            
-                        if _should_retry_api_error(error_dict):
-                            try:
-                                error_code = choice_error.code
-                            except AttributeError:
-                                error_code = 'unknown'
-                                
-                            try:
-                                error_msg = choice_error.message
-                            except AttributeError:
-                                error_msg = 'unknown'
-                                
-                            try:
-                                metadata = choice_error.metadata
-                                try:
-                                    provider = metadata.provider_name
-                                except AttributeError:
-                                    provider = 'unknown'
-                            except AttributeError:
-                                provider = 'unknown'
-                                
-                            self.logger.warning("Retryable SDK error from %s in choices for model %s: [%s] %s", provider, self.model, error_code, error_msg)
-                            return True
-                except AttributeError:
-                    pass
-        except AttributeError:
-            pass
-            
-        return False
+        """Check an SDK response object for retryable errors using duck-typing."""
+        error = getattr(response, "error", None)
+        error_dict = self._sdk_error_dict(error)
+        if _should_retry_api_error(error) or (error_dict and _should_retry_api_error(error_dict)):
+            self.logger.warning("Retryable SDK error for model %s: %s", self.model, error)
+            return True
+
+        choices = getattr(response, "choices", None) or []
+        choice_error = getattr(choices[0], "error", None) if choices else None
+        error_dict = self._sdk_error_dict(choice_error)
+        if not (error_dict and _should_retry_api_error(error_dict)):
+            return False
+
+        metadata = getattr(choice_error, "metadata", None)
+        self.logger.warning(
+            "Retryable SDK error from %s in choices for model %s: [%s] %s",
+            getattr(metadata, "provider_name", "unknown"),
+            self.model,
+            getattr(choice_error, "code", "unknown"),
+            getattr(choice_error, "message", "unknown"),
+        )
+        return True
 
     def _should_retry(self, attempt: int) -> bool:
         """Determine if we should continue retrying."""
@@ -321,8 +390,9 @@ class _ApiRetryContext:
     async def _wait_and_increment(self, attempt: int):
         """Wait before next retry attempt."""
         wait_time = min(self.initial_delay * (self.backoff_factor ** attempt), self.max_delay)
-        self.logger.warning("API returned error for model %s. Retrying in %.2fs (%s/%s)", self.model, wait_time, attempt + 1, self.max_retries)
-        await asyncio.sleep(wait_time)
+        reason = f" ({self.retry_reason})" if self.retry_reason else ""
+        self.logger.warning("API returned error for model %s%s. Retrying in %.2fs (%s/%s)", self.model, reason, wait_time, attempt + 1, self.max_retries)
+        await asyncio.sleep(_RetryContext._add_jitter(wait_time))
 
     def _log_exception(self, e: Exception):
         """Log exception details."""

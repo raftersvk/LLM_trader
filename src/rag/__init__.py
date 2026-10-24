@@ -5,31 +5,32 @@ This package provides a well-organized RAG (Retrieval-Augmented Generation) syst
 with clear separation of concerns following the same principles as the analyzer restructure.
 """
 
-from .rag_engine import RagEngine
+from .article_processor import ArticleProcessor
+from .category_processor import CategoryProcessor
 from .context_builder import ContextBuilder
-from .market_data_manager import MarketDataManager
-from .news_manager import NewsManager
 from .file_handler import RagFileHandler
 from .index_manager import IndexManager
-from .article_processor import ArticleProcessor
-from .news_category_analyzer import NewsCategoryAnalyzer
+from .local_taxonomy import LocalTaxonomyProvider
+from .market_data_manager import MarketDataManager
+from .news_ingestion import RSSCrawl4AINewsProvider
+from .news_manager import NewsManager
+from .news_repository import NewsRepository
+from .rag_engine import RagEngine
+from .scoring_policy import ArticleScoringPolicy
 from .ticker_manager import TickerManager
-from .category_fetcher import CategoryFetcher
-from .category_processor import CategoryProcessor
 
 __all__ = [
-    # Core RAG orchestration
-    'RagEngine', 'ContextBuilder',
-
-    # Data operations
-    'MarketDataManager', 'NewsManager', 'RagFileHandler',
-
-    # Search operations
-    'IndexManager',
-
-    # Content processing
-    'ArticleProcessor', 'NewsCategoryAnalyzer',
-
-    # Management operations
-    'TickerManager', 'CategoryFetcher', 'CategoryProcessor'
+    "ArticleProcessor",
+    "ArticleScoringPolicy",
+    "CategoryProcessor",
+    "ContextBuilder",
+    "IndexManager",
+    "LocalTaxonomyProvider",
+    "MarketDataManager",
+    "NewsManager",
+    "NewsRepository",
+    "RSSCrawl4AINewsProvider",
+    "RagEngine",
+    "RagFileHandler",
+    "TickerManager",
 ]

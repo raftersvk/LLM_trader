@@ -3,92 +3,135 @@ News Management Module for RAG Engine
 
 Fetches, deduplicates, and caches cryptocurrency news articles.
 """
-from typing import List, Dict, Any, Set
+import asyncio
+from typing import Any
 
 from src.logger.logger import Logger
+
 from .file_handler import RagFileHandler
+from .news_ingestion.schema_mapper import has_news_boilerplate, strip_news_boilerplate
+from .news_repository import NewsRepository
 
 
 class NewsManager:
-    """Fetches fresh news via CryptoCompareNewsClient and maintains the local news database."""
+    """Fetches fresh news via the configured NewsProvider and maintains the local news database."""
 
     def __init__(
         self,
         logger: Logger,
         file_handler: RagFileHandler,
         news_client=None,
-        categories_api=None,
         session=None,
         article_processor=None,
+        news_repository: NewsRepository | None = None,
     ):
         self.logger = logger
         self.file_handler = file_handler
         self.news_client = news_client
-        self.categories_api = categories_api
         self.session = session
         self.article_processor = article_processor
+        self.news_repository = news_repository or NewsRepository(logger=logger, file_handler=file_handler)
 
-        self.news_database: List[Dict[str, Any]] = []
+        self.news_database: list[dict[str, Any]] = []
 
-    # ── Public API ────────────────────────────────────────────────────────────
 
     async def load_cached_news(self) -> None:
-        """Load cached news articles from disk."""
+        """Load cached news articles from disk (off the event loop)."""
         try:
-            self.news_database = self.file_handler.load_news_articles()
+            self.news_database = await asyncio.to_thread(
+                self.news_repository.load_recent_articles,
+                max_age_seconds=86400,
+            )
             for article in self.news_database:
                 if "title_lower" not in article:
                     self._normalize(article)
             self.logger.debug("Loaded %s cached news articles", len(self.news_database))
-        except Exception as e:
-            self.logger.exception("Error loading cached news: %s", e)
+        except Exception:
+            self.logger.exception("Error loading cached news")
             self.news_database = []
 
-    async def fetch_fresh_news(self, known_crypto_tickers: Set[str]) -> List[Dict[str, Any]]:
-        """Fetch fresh articles from CryptoCompare; fall back to cache on failure."""
+    async def fetch_fresh_news(self, known_crypto_tickers: set[str]) -> list[dict[str, Any]]:
+        """Fetch fresh articles from the news provider; fall back to cache on failure."""
         if self.news_client is None:
             self.logger.error("News client not initialized")
             return []
 
         try:
-            api_categories = (
-                self.categories_api.get_api_categories() if self.categories_api else None
-            )
             raw = await self.news_client.fetch_news(
                 session=self.session,
-                api_categories=api_categories,
             )
 
             if not raw:
-                self.logger.warning("No articles returned from CryptoCompare API")
+                self.logger.warning("No articles returned from news provider")
                 return self._fallback()
 
             articles = self.news_client.filter_by_age(raw, max_age_hours=72)
 
             for article in articles:
-                coins = self.article_processor.detect_coins_in_article(article, known_crypto_tickers)
+                coins = self.article_processor.detect_coins_in_article(article, known_crypto_tickers)  # type: ignore
                 if coins:
                     article["detected_coins"] = list(coins)
                     article["detected_coins_str"] = "|".join(coins)
 
-            self.logger.debug("Fetched %s recent news articles from CryptoCompare", len(articles))
+            self.logger.debug("Fetched %s recent news articles", len(articles))
             return articles
 
-        except Exception as e:
-            self.logger.error("Error fetching CryptoCompare news: %s", e)
+        except Exception as e:  # noqa: BLE001
+            self.logger.error("Error fetching news: %s", e)
             return self._fallback()
 
-    def update_news_database(self, new_articles: List[Dict[str, Any]]) -> bool:
-        """Merge new articles into the local database, deduplicate, and persist."""
+    def update_news_database(self, new_articles: list[dict[str, Any]]) -> bool:
+        """Merge new articles into the local database, deduplicate, and persist.
+
+        Deduplication is URL-first: if a canonical URL already exists in the
+        database the incoming article is skipped regardless of its ``id``, unless
+        it improves a short body or replaces detected navigation with clean text.
+        This is provider-agnostic and works for RSS/Crawl4AI sourced articles.
+        A stable ``id`` is still required for
+        downstream consumers; the new RSS provider generates a deterministic
+        SHA-256-based id from the URL.
+        """
         if not new_articles:
             self.logger.debug("No new articles to process")
             return False
 
-        recent = self.file_handler.filter_articles_by_age(new_articles, max_age_seconds=86400)
-        existing_ids = {a.get("id") for a in self.news_database if a.get("id")}
-        unique = [a for a in recent if a.get("id") and a["id"] not in existing_ids]
+        recent = self.news_repository.filter_recent_articles(new_articles, max_age_seconds=86400)
+        min_body = 400
+        url_to_existing: dict[str, dict[str, Any]] = {}
+        existing_ids: set[str] = set()
+        for article_item in self.news_database:
+            url_val = article_item.get("url")
+            if url_val:
+                url_to_existing[url_val] = article_item
+            aid = article_item.get("id")
+            if aid:
+                existing_ids.add(aid)
 
-        if not unique:
+        unique: list = []
+        body_updated = False
+        for a in recent:
+            url = a.get("url")
+            if url:
+                if url not in url_to_existing:
+                    unique.append(a)
+                else:
+                    existing = url_to_existing[url]
+                    new_body = strip_news_boilerplate(a.get("body", ""))
+                    old_body = existing.get("body", "")
+                    improves_short_body = len(old_body) < min_body and len(new_body) > len(old_body)
+                    replaces_boilerplate = has_news_boilerplate(old_body) and len(new_body) >= min_body
+                    if improves_short_body or replaces_boilerplate:
+                        article_id = existing.get("id")
+                        existing.update(a)
+                        existing["body"] = new_body
+                        if article_id:
+                            existing["id"] = article_id
+                        self._normalize(existing)
+                        body_updated = True
+            elif a.get("id") and a["id"] not in existing_ids:
+                unique.append(a)
+
+        if not unique and not body_updated:
             self.logger.debug("No new articles to add or only duplicates found")
             return False
 
@@ -96,9 +139,9 @@ class NewsManager:
             self._normalize(article)
 
         combined = self.news_database + unique
-        combined.sort(key=self.article_processor.get_article_timestamp, reverse=True)
-        self.news_database = self.file_handler.filter_articles_by_age(combined, max_age_seconds=86400)
-        self.file_handler.save_news_articles(self.news_database)
+        combined.sort(key=self.article_processor.get_article_timestamp, reverse=True)  # type: ignore
+        self.news_database = self.news_repository.filter_recent_articles(combined, max_age_seconds=86400)
+        self.news_repository.save_recent_articles(self.news_database, max_age_seconds=86400)
 
         self.logger.debug("Updated news database with %s recent articles", len(self.news_database))
         return True
@@ -106,21 +149,22 @@ class NewsManager:
     def get_database_size(self) -> int:
         return len(self.news_database)
 
-    def clear_database(self) -> None:
-        self.news_database.clear()
 
-    # ── Private ───────────────────────────────────────────────────────────────
-
-    def _fallback(self) -> List[Dict[str, Any]]:
-        articles = self.file_handler.load_fallback_articles(max_age_hours=72)
+    def _fallback(self) -> list[dict[str, Any]]:
+        articles = self.news_repository.load_fallback_articles(max_age_hours=72)
         if articles:
             self.logger.info("Using %s cached articles as fallback", len(articles))
         return articles
 
-    def _normalize(self, article: Dict[str, Any]) -> None:
+    def _normalize(self, article: dict[str, Any]) -> None:
         """Pre-compute lowercased fields for fast keyword search."""
+        source_info = article.get("source_info")
+        if source_info and source_info.get("name"):
+            source_info["name"] = str(source_info["name"]).strip().lower()
+
         article["title_lower"] = article.get("title", "").lower()
         article["body_lower"] = article.get("body", "").lower()
         article["categories_lower"] = article.get("categories", "").lower()
         article["tags_lower"] = article.get("tags", "").lower()
         article["detected_coins_str_lower"] = article.get("detected_coins_str", "").lower()
+

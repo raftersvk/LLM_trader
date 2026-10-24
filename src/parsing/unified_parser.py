@@ -3,10 +3,14 @@ Unified parsing system that consolidates all parsing functionality.
 Eliminates duplication and unnecessary delegation layers.
 """
 import json
+import math
 import re
-from typing import Dict, Any, Set, Optional
+from typing import Any, ClassVar
+
+from pydantic import ValidationError
 
 from src.logger.logger import Logger
+from src.platforms.ai_providers.response_models import TradingAnalysisResponseModel
 
 
 class UnifiedParser:
@@ -15,25 +19,26 @@ class UnifiedParser:
     Replaces multiple scattered parsing components with a single, comprehensive solution.
     """
 
-    _CATEGORY_SEPARATORS = (',', ';', '|')
-
     def __init__(self, logger: Logger, format_utils=None):
         self.logger = logger
         self.format_utils = format_utils
 
-        # Numeric fields that should be converted from strings with their defaults
         self._numeric_fields = {
-            'risk_ratio': 1.0,
-            'trend_strength': 50,
-            'confidence_score': 50,
-            'bullish_scenario': 0.0,
-            'bearish_scenario': 0.0
+            "risk_ratio": 1.0,
+            "risk_reward_ratio": None,
+            "trend_strength": 50,
+            "confidence": 50,
+            "confidence_score": 50,
+            "entry_price": None,
+            "stop_loss": None,
+            "take_profit": None,
+            "position_size": None,
+            "bullish_scenario": 0.0,
+            "bearish_scenario": 0.0
         }
 
 
-
-
-    def parse_ai_response(self, raw_text: str) -> Dict[str, Any]:
+    def parse_ai_response(self, raw_text: str) -> dict[str, Any]:
         """
         Parse AI model response from raw string to structured data.
         Requires models to produce valid JSON (no heuristic parsing for low-quality models).
@@ -45,85 +50,235 @@ class UnifiedParser:
                 if json_end > json_start:
                     try:
                         result = json.loads(raw_text[json_start:json_end].strip())
-                        return self._normalize_numeric_fields(result)
+                        result = self._normalize_numeric_fields(result)
+                        return self._attach_response_validation(result)
                     except json.JSONDecodeError:
                         pass
 
-            first_brace = raw_text.find('{')
+            first_brace = raw_text.find("{")
             if first_brace != -1:
                 try:
                     decoder = json.JSONDecoder()
                     result, _ = decoder.raw_decode(raw_text, first_brace)
-                    return self._normalize_numeric_fields(result)
+                    result = self._normalize_numeric_fields(result)
+                    return self._attach_response_validation(result)
                 except json.JSONDecodeError:
                     pass
 
             self.logger.warning("Unable to parse AI response, using fallback. Preview: %s", raw_text[:200])
             return self._create_fallback_response(raw_text)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Failed to parse AI response: %s", e)
             return self._create_error_response(str(e), raw_text)
 
-    def validate_ai_response(self, response: Dict[str, Any]) -> bool:
+    def validate_ai_response(self, response: dict[str, Any]) -> bool:
         """Validate that AI response has required structure."""
         return (isinstance(response, dict) and
                 "analysis" in response and
                 isinstance(response["analysis"], dict))
 
-    def extract_json_block(self, text: str, unwrap_key: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Extract JSON block from markdown-formatted text.
+    def validate_trading_response(self, response: dict[str, Any]) -> dict[str, Any]:
+        """Validate parsed trading response against the response contract."""
+        validation = {
+            "schema": TradingAnalysisResponseModel.schema_version,
+            "status": "skipped",
+            "valid": None,
+            "errors": [],
+        }
+        if not isinstance(response, dict):
+            return {
+                **validation,
+                "status": "invalid",
+                "valid": False,
+                "errors": [{"field": "response", "message": "Response is not an object", "type": "type_error"}],
+            }
 
-        Reusable utility for extracting ```json ... ``` blocks from AI responses.
-        Used by notifiers, position extractors, and other components.
+        analysis = response.get("analysis")
+        if not isinstance(analysis, dict) or "signal" not in analysis:
+            return validation
 
-        Args:
-            text: Raw text containing JSON block
-            unwrap_key: If specified, unwrap this key from the result (e.g., 'analysis')
-
-        Returns:
-            Parsed JSON dict or None if extraction fails
-        """
         try:
-            json_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL | re.IGNORECASE)
-            if json_match:
-                json_str = json_match.group(1)
-                data = json.loads(json_str)
+            TradingAnalysisResponseModel.model_validate(response)
+        except ValidationError as error:
+            return {
+                **validation,
+                "status": "invalid",
+                "valid": False,
+                "errors": self._format_validation_errors(error),
+            }
+        return {**validation, "status": "valid", "valid": True}
 
-                if unwrap_key and unwrap_key in data and isinstance(data[unwrap_key], dict):
-                    return data[unwrap_key]
-                return data
-        except (json.JSONDecodeError, Exception) as e:
-            self.logger.debug("JSON block extraction failed: %s", e)
+    @staticmethod
+    def _iter_json_blocks(text: str) -> list[str]:
+        """Return every ```json ... ``` block body in order of appearance."""
+        blocks: list[str] = []
+        text_lower = text.lower()
+        index = 0
+        while True:
+            start = text_lower.find("```json", index)
+            if start == -1:
+                return blocks
+            body_start = start + 7
+            end = text_lower.find("```", body_start)
+            if end == -1:
+                return blocks
+            blocks.append(text[body_start:end].strip())
+            index = end + 3
+
+    _CONTROL_CHAR_ESCAPES: ClassVar[dict[str, str]] = {
+        "\n": "\\n",
+        "\r": "\\r",
+        "\t": "\\t",
+        "\b": "\\b",
+        "\f": "\\f",
+    }
+
+    @classmethod
+    def repair_raw_control_characters(cls, text: str) -> str:
+        """Escape raw control characters found INSIDE JSON string literals.
+
+        Structure is preserved: whitespace between tokens is untouched, only
+        characters that sit inside a string literal are rewritten to their
+        escaped forms. Text content itself is never altered or invented.
+        Returns:
+            The input with raw control characters escaped inside strings.
+        """
+        if not text:
+            return text
+        result: list[str] = []
+        in_string = False
+        escaped = False
+        for char in text:
+            if not in_string:
+                result.append(char)
+                if char == '"':
+                    in_string = True
+                continue
+            if escaped:
+                result.append(char)
+                escaped = False
+                continue
+            if char == "\\":
+                result.append(char)
+                escaped = True
+                continue
+            if char == '"':
+                result.append(char)
+                in_string = False
+                continue
+            replacement = cls._CONTROL_CHAR_ESCAPES.get(char)
+            if replacement is not None:
+                result.append(replacement)
+            elif char < " ":
+                result.append(f"\\u{ord(char):04x}")
+            else:
+                result.append(char)
+        return "".join(result)
+
+    @classmethod
+    def _loads_lenient(cls, text: str) -> dict[str, Any] | None:
+        """Decode a JSON object from one candidate, tolerating raw control chars.
+
+        Tries strict decoding, then decoding after escaping raw control
+        characters inside strings, and finally ``raw_decode`` from each ``{``
+        so leading prose or an earlier broken object does not hide a valid one.
+        Returns:
+            Parsed dict, or None when the candidate is not decodable.
+        """
+        if not text:
+            return None
+        for candidate in (text, cls.repair_raw_control_characters(text)):
+            stripped = candidate.strip()
+            if not stripped:
+                continue
+            try:
+                decoded = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                decoded = None
+            if isinstance(decoded, dict):
+                return decoded
+            for brace in range(len(stripped)):
+                if stripped[brace] != "{":
+                    continue
+                try:
+                    decoded, _end = json.JSONDecoder().raw_decode(stripped, brace)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if isinstance(decoded, dict):
+                    return decoded
+        return None
+
+    @classmethod
+    def parse_json_object(cls, text: str, unwrap_key: str | None = None) -> dict[str, Any] | None:
+        """Extract a JSON object from a model response with structure-only repair.
+
+        Candidates in order: every ```json fenced block (last parseable wins,
+        matching ``extract_json_block``), the whole response, then the response
+        from its first ``{``. Each candidate is decoded strictly and, failing
+        that, after raw control characters inside string values are escaped.
+        Returns:
+            Parsed JSON object or None when nothing decodes.
+        """
+        if not text or not text.strip():
+            return None
+        stripped = text.strip()
+        candidates = list(reversed(cls._iter_json_blocks(text)))
+        candidates.append(stripped)
+        brace = stripped.find("{")
+        if brace > 0:
+            candidates.append(stripped[brace:])
+        for candidate in candidates:
+            data = cls._loads_lenient(candidate)
+            if data is None:
+                continue
+            if unwrap_key and isinstance(data.get(unwrap_key), dict):
+                return data[unwrap_key]
+            return data
+        return None
+
+    @staticmethod
+    def extract_json_block(text: str, unwrap_key: str | None = None) -> dict[str, Any] | None:
+        """Extract JSON from markdown-formatted text.
+
+        The LAST parseable ```json block wins: a repaired response carries the
+        contract block appended at the end, so an earlier broken block must not
+        shadow it.
+        Returns:
+            Parsed JSON dict or None if no block parses
+        """
+        if not text:
+            return None
+        for block in reversed(UnifiedParser._iter_json_blocks(text)):
+            try:
+                data = json.loads(block)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if unwrap_key and isinstance(data.get(unwrap_key), dict):
+                return data[unwrap_key]
+            return data
         return None
 
     def extract_text_before_json(self, text: str) -> str:
         """Extract text content before a JSON block.
 
         Useful for separating reasoning/explanation from structured JSON data.
-
-        Args:
-            text: Raw text potentially containing JSON block
-
         Returns:
             Text before the JSON block, or full text if no JSON found
         """
-        json_match = re.search(r'```json', text, re.IGNORECASE)
-        if json_match:
-            reasoning = text[:json_match.start()].strip()
-            return reasoning
+        if not text:
+            return ""
+        start = text.lower().find("```json")
+        if start != -1:
+            return text[:start].strip()
         return text.strip()
-
-
 
 
     @staticmethod
     def format_error_response(error_message: str) -> str:
         """Create a standardized error response in JSON format.
-
-        Args:
-            error_message: Error message to include in the response
-
         Returns:
             Formatted error response with JSON structure and markdown
         """
@@ -134,84 +289,29 @@ class UnifiedParser:
         }
         return f"```json\n{json.dumps(json_fallback, indent=2)}\n```\n\nThe analysis failed due to a technical issue. Please try again later."
 
-    @staticmethod
-    def format_provider_error(provider: str, error_detail: str) -> Dict[str, Any]:
-        """Create a standardized provider error dictionary.
-
-        Args:
-            provider: Provider name that failed
-            error_detail: Details about the error
-
-        Returns:
-            Error dictionary for use in ChatResponseModel
-        """
-        return {"error": f"{provider} failed: {error_detail}"}
-
-    @staticmethod
-    def format_final_fallback_error(provider: str, error_detail: str) -> Dict[str, Any]:
-        """Create error response for final fallback failure.
-
-        Args:
-            provider: Last provider attempted
-            error_detail: Details about the error
-
-        Returns:
-            Error dictionary indicating all providers failed
-        """
-        return {"error": f"All models failed. Last attempt ({provider}): {error_detail}"}
-
-
-    def parse_article_categories(self, categories_string: str) -> Set[str]:
-        """Parse categories from article category string."""
-        if not categories_string:
-            return set()
-
-        categories = set()
-
-        # Split by common separators
-        for separator in self._CATEGORY_SEPARATORS:
-            if separator in categories_string:
-                parts = categories_string.split(separator)
-                for part in parts:
-                    clean_category = part.strip().lower()
-                    if clean_category and len(clean_category) > 2:
-                        categories.add(clean_category)
-                break
-        else:
-            # No separator found, use as single category
-            clean_category = categories_string.strip().lower()
-            if clean_category and len(clean_category) > 2:
-                categories.add(clean_category)
-
-        return categories
-
     def extract_base_coin(self, symbol: str) -> str:
         """Extract base coin from trading pair symbol."""
         if not symbol:
             return ""
 
-        # Handle symbols with explicit separators first
-        if '/' in symbol:
-            return symbol.split('/')[0].upper()
-        if '-' in symbol:
-            return symbol.split('-')[0].upper()
+        if "/" in symbol:
+            return symbol.split("/")[0].upper()
+        if "-" in symbol:
+            return symbol.split("-")[0].upper()
 
-        # Handle concatenated symbols by removing common quote currencies
-        # Check longer quotes first to avoid partial matches (e.g. matching USD in BUSD)
-        common_quotes = ['USDT', 'USDC', 'BUSD', 'USD', 'BTC', 'ETH', 'BNB']
+        common_quotes = ["USDT", "USDC", "BUSD", "USD", "BTC", "ETH", "BNB"]
         symbol_upper = symbol.upper()
 
         for quote in common_quotes:
             if symbol_upper.endswith(quote):
                 base = symbol_upper[:-len(quote)]
-                # Special handling for BNB/BUSD ambiguity: BNBUSD -> BN (via BUSD) is wrong, should be BNB (via USD)
-                if quote == 'BUSD' and base == 'BN':
+                if quote == "BUSD" and base == "BN":
                     continue
                 return base
 
         return symbol_upper
 
-    def detect_coins_in_text(self, text: str, known_tickers: Set[str]) -> Set[str]:
+    def detect_coins_in_text(self, text: str, known_tickers: set[str]) -> set[str]:
         """Detect cryptocurrency mentions in text content."""
         if not text:
             return set()
@@ -219,110 +319,129 @@ class UnifiedParser:
         coins_mentioned = set()
         text_upper = text.upper()
 
-        # Find potential tickers using regex
-        potential_tickers = set(re.findall(r'\b[A-Z]{2,6}\b', text_upper))
+        potential_tickers = set(re.findall(r"\b[A-Z]{2,6}\b", text_upper))
 
-        # Validate against known tickers
         for ticker in potential_tickers:
             if ticker in known_tickers:
                 coins_mentioned.add(ticker)
 
-        # Special handling for major cryptocurrencies
         text_lower = text.lower()
-        if 'bitcoin' in text_lower:
-            coins_mentioned.add('BTC')
-        if 'ethereum' in text_lower:
-            coins_mentioned.add('ETH')
+        if "bitcoin" in text_lower:
+            coins_mentioned.add("BTC")
+        if "ethereum" in text_lower:
+            coins_mentioned.add("ETH")
 
         return coins_mentioned
 
 
-
-
-
-
-    def _normalize_numeric_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_numeric_fields(self, data: dict[str, Any]) -> dict[str, Any]:
         """Ensure numeric fields are properly typed at the data source."""
-        if not isinstance(data, dict):
-            return data
 
-        # Check analysis section
-        analysis = data.get('analysis', {})
+        analysis = data.get("analysis", {})
+        if not isinstance(analysis, dict):
+            analysis = {}
+            data["analysis"] = analysis
         for field, default_value in self._numeric_fields.items():
             if field in analysis:
-                val = analysis[field]
-                if self.format_utils:
-                    parsed = self.format_utils.parse_value(val, default=None)
-                    if parsed is not None:
-                        analysis[field] = parsed
-                    else:
-                        analysis[field] = default_value
-                elif isinstance(val, str):
-                    try:
-                        analysis[field] = float(val)
-                    except ValueError:
-                        analysis[field] = default_value
+                analysis[field] = self._parse_numeric_field(field, analysis[field], default_value)
 
-        # Normalize confluence_factors (new Chain-of-Thought scoring)
-        confluence_factors = analysis.get('confluence_factors', {})
+        confluence_factors = analysis.get("confluence_factors", {})
         if isinstance(confluence_factors, dict):
-            for factor_key in ['trend_alignment', 'momentum_strength', 'volume_support',
-                              'pattern_quality', 'support_resistance_strength']:
+            for factor_key in ["trend_alignment", "momentum_strength", "volume_support",
+                              "pattern_quality", "support_resistance_strength"]:
                 if factor_key in confluence_factors:
-                    value = confluence_factors[factor_key]
-                    if self.format_utils:
-                        # Default to 50.0 (Neutral) if parsing fails
-                        parsed = self.format_utils.parse_value(value, default=None)
-                        confluence_factors[factor_key] = parsed if parsed is not None else 50.0
-                    elif isinstance(value, str):
-                        try:
-                            confluence_factors[factor_key] = float(value)
-                        except ValueError:
-                            confluence_factors[factor_key] = 50.0
-                    elif isinstance(value, (int, float)):
-                        confluence_factors[factor_key] = float(value)
-                    else:
-                        confluence_factors[factor_key] = 50.0
+                    confluence_factors[factor_key] = self._parse_finite_number(
+                        confluence_factors[factor_key], 50.0
+                    )
 
-        # Normalize key_levels arrays (support/resistance)
-        key_levels = analysis.get('key_levels', {})
+        key_levels = analysis.get("key_levels", {})
         if isinstance(key_levels, dict):
-            for level_type in ['support', 'resistance']:
+            for level_type in ["support", "resistance"]:
                 levels = key_levels.get(level_type, [])
                 if isinstance(levels, list):
                     normalized_levels = []
                     for level in levels:
-                        if self.format_utils:
-                            val = self.format_utils.parse_value(level, default=None)
-                            if val is not None:
-                                normalized_levels.append(val)
-                        elif isinstance(level, (int, float)):
-                            normalized_levels.append(float(level))
-                        elif isinstance(level, str):
-                            try:
-                                normalized_levels.append(float(level))
-                            except ValueError:
-                                continue
+                        val = self._parse_finite_number(level, None)
+                        if val is not None:
+                            normalized_levels.append(val)
                     key_levels[level_type] = normalized_levels
 
-        # Check root level
         for field, default_value in self._numeric_fields.items():
             if field in data:
-                if self.format_utils:
-                    parsed = self.format_utils.parse_value(data[field], default=None)
-                    if parsed is not None:
-                        data[field] = parsed
-                    else:
-                        data[field] = default_value
-                elif isinstance(data[field], str):
-                    try:
-                        data[field] = float(data[field])
-                    except ValueError:
-                        data[field] = default_value
+                data[field] = self._parse_numeric_field(field, data[field], default_value)
 
         return data
 
-    def _create_fallback_response(self, cleaned_text: str) -> Dict[str, Any]:
+    def _parse_numeric_field(self, field: str, value: Any, default_value: Any) -> float | int | None:
+        """Parse a known numeric field while rejecting NaN and infinity."""
+        numeric_value = self._parse_finite_number(value, None)
+        if numeric_value is None:
+            return default_value
+        if field == "position_size":
+            if isinstance(value, str) and value.strip().endswith("%"):
+                numeric_value = numeric_value / 100
+            if not 0.0 <= numeric_value <= 1.0:
+                self.logger.warning(
+                    "position_size %s is outside the 0.0-1.0 contract; treating it as unset", value
+                )
+                return None
+            return numeric_value
+        if isinstance(default_value, int) and float(numeric_value).is_integer():
+            return int(numeric_value)
+        return numeric_value
+
+    def _parse_finite_number(self, value: Any, default_value: Any) -> float | None:
+        """Parse a numeric value and discard non-finite results."""
+        if isinstance(value, bool):
+            return default_value
+        if self.format_utils:
+            parsed = self.format_utils.parse_value(value, default=None)
+        elif isinstance(value, (int, float)):
+            parsed = float(value)
+        elif isinstance(value, str):
+            try:
+                parsed = float(value.strip().replace(",", ""))
+            except ValueError:
+                return default_value
+        else:
+            return default_value
+
+        if parsed is None:
+            return default_value
+        try:
+            numeric_value = float(parsed)
+        except (TypeError, ValueError):
+            return default_value
+        return numeric_value if math.isfinite(numeric_value) else default_value
+
+    def _attach_response_validation(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Attach non-blocking response validation metadata to parsed responses."""
+        data["response_validation"] = self.validate_trading_response(data)
+        return data
+
+    @staticmethod
+    def _format_validation_errors(error: ValidationError) -> list[dict[str, str]]:
+        """Convert Pydantic validation errors into compact log/dashboard metadata."""
+        formatted_errors = []
+        for item in error.errors():
+            field_path = ".".join(str(part) for part in item.get("loc", ()))
+            formatted_errors.append({
+                "field": field_path or "response",
+                "message": str(item.get("msg", "Invalid value")),
+                "type": str(item.get("type", "value_error")),
+            })
+        return formatted_errors
+
+    def _create_validation_error_metadata(self, message: str, error_type: str) -> dict[str, Any]:
+        """Create response-validation metadata for parser-level failures."""
+        return {
+            "schema": TradingAnalysisResponseModel.schema_version,
+            "status": "invalid",
+            "valid": False,
+            "errors": [{"field": "response", "message": message, "type": error_type}],
+        }
+
+    def _create_fallback_response(self, cleaned_text: str) -> dict[str, Any]:
         """Create fallback response when parsing fails."""
         return {
             "analysis": {
@@ -332,10 +451,14 @@ class UnifiedParser:
                 "confidence_score": 0
             },
             "raw_response": cleaned_text,
-            "parse_error": "Failed to parse response"
+            "parse_error": "Failed to parse response",
+            "response_validation": self._create_validation_error_metadata(
+                "Failed to parse response JSON",
+                "json_parse_error"
+            )
         }
 
-    def _create_error_response(self, error_message: str, raw_text: str) -> Dict[str, Any]:
+    def _create_error_response(self, error_message: str, raw_text: str) -> dict[str, Any]:
         """Create error response for parsing exceptions."""
         return {
             "error": error_message,
@@ -344,5 +467,7 @@ class UnifiedParser:
                 "summary": "Error parsing response",
                 "observed_trend": "NEUTRAL",
                 "confidence_score": 0
-            }
+            },
+            "response_validation": self._create_validation_error_metadata(error_message, "parser_error")
         }
+
