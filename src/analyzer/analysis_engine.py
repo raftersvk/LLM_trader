@@ -71,7 +71,9 @@ def _normalize_market_context(market_context: Any) -> str:
                     text_parts.append(nested)
             # Non-text payloads (such as the URLs mapping) are not prompt material.
         return "\n".join(text_parts)
-    return str(market_context)
+    # Never stringify arbitrary objects: an unexpected payload carries no
+    # prompt-ready market context.
+    return ""
 
 
 class AnalysisEngine:

@@ -103,3 +103,5 @@ def test_normalize_market_context_drops_non_text_values():
     """No usable text means the analyzer must skip the custom instruction."""
     assert _normalize_market_context(None) == ""
     assert _normalize_market_context((None, {})) == ""
+    assert _normalize_market_context(123) == ""
+    assert _normalize_market_context({"article": "https://example.com"}) == ""
