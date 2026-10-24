@@ -76,6 +76,13 @@ def timeframe_seconds(timeframe: str) -> int:
 def confidence_to_float(confidence: Any) -> float:
     """Map HIGH/MEDIUM/LOW (or a 0-100 numeric) to a float in [0, 1].
 
+    A numeric score is preserved instead of being collapsed to a label: it is
+    clamped to 0-100 (values <= 1 are treated as an already-normalized
+    fraction), then rounded to the nearest 5 percentage points with half-up
+    rounding. For example, 51 and 52 map to 0.50, 53 to 0.55, 57 to 0.55 and
+    58 to 0.60. Labels remain the fallback and keep their historical mapping
+    (HIGH=0.90, MEDIUM=0.65, LOW=0.35).
+
     Args:
         confidence: "HIGH", "MEDIUM", "LOW" or a numeric 0-100 value.
 
@@ -83,12 +90,13 @@ def confidence_to_float(confidence: Any) -> float:
         Confidence as a float between 0 and 1.
     """
     if isinstance(confidence, (int, float)):
-        raw_100 = float(confidence) * 100.0 if float(confidence) <= 1.0 else float(confidence)
-        if raw_100 >= 70:
-            return 0.90
-        if raw_100 >= 50:
-            return 0.65
-        return 0.35
+        raw_100 = float(confidence)
+        if raw_100 <= 1.0:
+            raw_100 *= 100.0
+        raw_100 = max(0.0, min(100.0, raw_100))
+        # Add half a step before truncating to round half-up (e.g. 52.5 -> 55).
+        rounded = int(raw_100 / 5.0 + 0.5) * 5
+        return rounded / 100.0
     text = str(confidence).strip().upper()
     if text in CONFIDENCE_MAP:
         return CONFIDENCE_MAP[text]
