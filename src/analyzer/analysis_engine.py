@@ -45,16 +45,32 @@ def _normalize_market_context(market_context: Any) -> str:
     ``PromptBuilder.add_custom_instruction`` used to raise ``TypeError`` during
     prompt rendering, which silently degraded the analysis to HOLD.
 
+    Only real text parts are kept: the URLs payload of a ``(text, urls)``
+    return is not prompt material, and an empty text part yields an empty
+    string so the caller can skip the custom instruction entirely.
+
     Args:
         market_context: Retrieved context as text, or a sequence of parts.
 
     Returns:
-        The context flattened into a single string.
+        The context text flattened into a single string, or ``""`` when the
+        value carries no text.
     """
     if isinstance(market_context, str):
         return market_context
+    if market_context is None:
+        return ""
     if isinstance(market_context, (tuple, list)):
-        return "\n".join(str(part) for part in market_context)
+        text_parts: list[str] = []
+        for part in market_context:
+            if isinstance(part, str):
+                text_parts.append(part)
+            elif isinstance(part, (tuple, list)):
+                nested = _normalize_market_context(part)
+                if nested:
+                    text_parts.append(nested)
+            # Non-text payloads (such as the URLs mapping) are not prompt material.
+        return "\n".join(text_parts)
     return str(market_context)
 
 

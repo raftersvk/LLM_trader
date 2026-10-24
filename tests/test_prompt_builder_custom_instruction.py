@@ -91,3 +91,15 @@ def test_normalize_market_context_flattens_sequence():
     assert _normalize_market_context(("line one", "line two")) == "line one\nline two"
     assert _normalize_market_context("plain context") == "plain context"
     assert _normalize_market_context("") == ""
+
+
+def test_normalize_market_context_drops_urls_payload():
+    """A (text, urls) return keeps only the text part."""
+    assert _normalize_market_context(("News text", {"article": "https://example.com"})) == "News text"
+    assert _normalize_market_context(("", {})) == ""
+
+
+def test_normalize_market_context_drops_non_text_values():
+    """No usable text means the analyzer must skip the custom instruction."""
+    assert _normalize_market_context(None) == ""
+    assert _normalize_market_context((None, {})) == ""
