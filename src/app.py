@@ -476,6 +476,36 @@ class CryptoTradingBot:
             latency_ms=(time.perf_counter() - cycle_started) * 1000.0,
             stale=stale_recommendation,
         )
+        await self._sync_pair_dashboard_state()
+
+    async def _publish_price(self, price: float) -> None:
+        """Publish a ticker price, scoped to the current pair when known."""
+        if self.dashboard_state is None:
+            return
+        if self.current_symbol:
+            await self.dashboard_state.update_price(self.current_symbol, price)
+        else:
+            await self.dashboard_state.update_price(price)
+
+    async def _publish_next_check(self, next_check_time) -> None:
+        """Publish the next-check time, scoped to the current pair when known."""
+        if self.dashboard_state is None:
+            return
+        if self.current_symbol:
+            await self.dashboard_state.update_next_check(self.current_symbol, next_check_time)
+        else:
+            await self.dashboard_state.update_next_check(next_check_time)
+
+    async def _sync_pair_dashboard_state(self) -> None:
+        """Publish this pair's live position/analysis state to the dashboard."""
+        if self.dashboard_state is None or not self.current_symbol:
+            return
+        position = self.persistence.load_position()
+        await self.dashboard_state.update_position(
+            self.current_symbol,
+            position.to_dict() if position is not None else None,
+        )
+        await self.dashboard_state.update_analysis_complete(self.current_symbol)
 
     async def _await_manual_approval(
         self, decision: Any, analysis: dict[str, Any] | None, decision_hash: str | None
@@ -1103,7 +1133,7 @@ class CryptoTradingBot:
         if ticker and self.dashboard_state:
             price = float(ticker.get("last", ticker.get("close", 0)))
             if price > 0:
-                await self.dashboard_state.update_price(price)
+                await self._publish_price(price)
         return ticker
 
     async def fetch_current_ticker(self) -> dict[str, Any] | None:
@@ -1141,8 +1171,7 @@ class CryptoTradingBot:
                 self._format_utc_and_local(next_check_time),
                 delay_seconds
             )
-            if self.dashboard_state:
-                await self.dashboard_state.update_next_check(next_check_time)
+            await self._publish_next_check(next_check_time)
             return await self._interruptible_sleep(delay_seconds)
 
         except Exception as e:  # noqa: BLE001
@@ -1186,8 +1215,7 @@ class CryptoTradingBot:
             )
             self.logger.info("Crypto Trading Bot ready")
 
-            if self.dashboard_state:
-                await self.dashboard_state.update_next_check(next_check_time)
+            await self._publish_next_check(next_check_time)
             await self._interruptible_sleep(delay_seconds)
 
         except Exception as e:  # noqa: BLE001

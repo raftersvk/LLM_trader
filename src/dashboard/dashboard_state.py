@@ -63,6 +63,8 @@ class DashboardState:
                 if symbol_or_price not in self.pairs:
                     self.pairs[symbol_or_price] = PairState(symbol=symbol_or_price)
                 self.pairs[symbol_or_price].current_price = price
+                # Mirror to the global slot for single-pair readers.
+                self.current_price = price
             return
         async with self._lock:
             self.current_price = float(symbol_or_price)
@@ -74,6 +76,7 @@ class DashboardState:
                 if symbol_or_time not in self.pairs:
                     self.pairs[symbol_or_time] = PairState(symbol=symbol_or_time)
                 self.pairs[symbol_or_time].next_check_utc = next_time
+                self.next_check_utc = next_time
             await self.broadcast(
                 {"type": "countdown", "symbol": symbol_or_time, "next_check_utc": next_time.isoformat()}
             )
@@ -96,24 +99,29 @@ class DashboardState:
 
     def get_countdown_data(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get current countdown state for REST API, optionally for one symbol."""
-        if symbol or self.pairs:
-            target_symbol = symbol or (next(iter(self.pairs)) if self.pairs else None)
-            if not target_symbol or target_symbol not in self.pairs:
+        target_symbol = symbol
+        if target_symbol is None and self.pairs:
+            target_symbol = next(iter(self.pairs))
+        if target_symbol is not None:
+            if target_symbol in self.pairs:
+                state = self.pairs[target_symbol]
+                if not state.next_check_utc:
+                    return {"next_check_utc": None, "seconds_remaining": None}
+                now = datetime.now(timezone.utc)
+                next_check = (
+                    state.next_check_utc.replace(tzinfo=timezone.utc)
+                    if state.next_check_utc.tzinfo is None
+                    else state.next_check_utc
+                )
+                remaining = (next_check - now).total_seconds()
+                return {
+                    "next_check_utc": state.next_check_utc.isoformat(),
+                    "seconds_remaining": max(0, int(remaining)),
+                }
+            if self.pairs:
+                # Known symbol set but this pair has no state yet.
                 return {"next_check_utc": None, "seconds_remaining": None}
-            state = self.pairs[target_symbol]
-            if not state.next_check_utc:
-                return {"next_check_utc": None, "seconds_remaining": None}
-            now = datetime.now(timezone.utc)
-            next_check = (
-                state.next_check_utc.replace(tzinfo=timezone.utc)
-                if state.next_check_utc.tzinfo is None
-                else state.next_check_utc
-            )
-            remaining = (next_check - now).total_seconds()
-            return {
-                "next_check_utc": state.next_check_utc.isoformat(),
-                "seconds_remaining": max(0, int(remaining)),
-            }
+            # No per-pair state at all: fall back to the global slot.
         if not self.next_check_utc:
             return {"next_check_utc": None, "seconds_remaining": None}
         now = datetime.now(timezone.utc)
