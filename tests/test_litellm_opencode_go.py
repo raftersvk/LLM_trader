@@ -197,3 +197,23 @@ def test_factory_does_not_fall_back_to_minimax_key():
     factory = LiteLLMFactory(logger=MagicMock(), config=config)
 
     assert factory._get_litellm_config() is None
+
+
+def test_litellm_params_carry_configured_timeout():
+    """The configured [model_config] timeout must reach LiteLLM, not 30s."""
+    client = _client()
+
+    params = client._build_litellm_params({"timeout": 600, "max_tokens": 123})
+
+    assert params["timeout"] == 600
+
+
+def test_litellm_params_use_safe_timeout_fallback():
+    """A model config without timeout falls back to the safe default."""
+    from src.platforms.ai_providers.litellm_client import DEFAULT_REQUEST_TIMEOUT
+
+    client = _client()
+
+    params = client._build_litellm_params({"max_tokens": 123})
+
+    assert params["timeout"] == DEFAULT_REQUEST_TIMEOUT == 120
