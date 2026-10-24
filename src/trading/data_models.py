@@ -131,7 +131,6 @@ class MarketConditions(SerializableMixin):
     macd_signal: str = "NEUTRAL"
     bb_position: str = "MIDDLE"
     volume_state: str = "NORMAL"
-    is_weekend: bool = False
     market_sentiment: str = "NEUTRAL"
     order_book_bias: str = "BALANCED"
     fear_greed_index: int = 50
@@ -514,7 +513,6 @@ class MarketSnapshot:
     macd_signal: str = "NEUTRAL"
     volume_state: str = "NORMAL"
     bb_position: str = "MIDDLE"
-    is_weekend: bool = False
     market_sentiment: str = "NEUTRAL"
     order_book_bias: str = "BALANCED"
     exit_execution_context: ExitExecutionContext | None = None
@@ -541,7 +539,6 @@ class MarketSnapshot:
             macd_signal=conditions.macd_signal,
             volume_state=conditions.volume_state,
             bb_position=conditions.bb_position,
-            is_weekend=conditions.is_weekend,
             market_sentiment=conditions.market_sentiment,
             order_book_bias=conditions.order_book_bias,
             exit_execution_context=exit_execution_context,

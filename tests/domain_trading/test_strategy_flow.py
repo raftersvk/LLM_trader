@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import math
 import tempfile
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1515,15 +1515,9 @@ class TestConditionsAndPriceExtraction:
         ids=["empty-result", "null-analysis"],
     )
     def test_extract_market_conditions_defaults_when_nothing_is_readable(
-        self, result: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+        self, result: dict[str, Any]
     ) -> None:
         """An unreadable payload yields the neutral snapshot, never a partial one."""
-        class _Sroda(datetime):
-            @classmethod
-            def now(cls, tz: tzinfo | None = None) -> datetime:
-                return datetime(2026, 9, 16, 12, 0, tzinfo=tz or timezone.utc)
-
-        monkeypatch.setattr("src.trading.market_conditions_extractor.datetime", _Sroda)
         conditions = MarketConditionsExtractor(null_logger()).extract_market_conditions(result)
 
         assert conditions == MarketConditions()
@@ -1617,30 +1611,21 @@ class TestConditionsAndPriceExtraction:
         assert math.isnan(conditions.adx)
         assert conditions.trend_strength == 50.0
 
-    @pytest.mark.parametrize(
-        ("frozen_day", "expected"),
-        [
-            (datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc), True),
-            (datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc), False),
-        ],
-        ids=["saturday", "monday"],
-    )
-    def test_extract_market_conditions_marks_the_weekend_from_utc(
-        self, frozen_day: datetime, expected: bool, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """is_weekend drives brain matching, so it must follow the UTC weekday."""
-        import src.trading.market_conditions_extractor as extractor_module
+    def test_legacy_is_weekend_metadata_is_ignored(self) -> None:
+        """Persisted snapshots may still carry is_weekend; loading must not fail."""
+        from src.trading.data_models import MarketConditions
 
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz: Any = None) -> datetime:
-                return frozen_day
+        payload = {
+            "trend_direction": "BULLISH",
+            "adx": 26.0,
+            "is_weekend": True,
+        }
 
-        monkeypatch.setattr(extractor_module, "datetime", _FrozenDatetime)
+        conditions = MarketConditions.from_dict(payload)
 
-        conditions = MarketConditionsExtractor(null_logger()).extract_market_conditions({})
-
-        assert conditions.is_weekend is expected
+        assert conditions.trend_direction == "BULLISH"
+        assert conditions.adx == 26.0
+        assert not hasattr(conditions, "is_weekend")
 
     def test_build_conditions_from_position_returns_the_entry_snapshot(self) -> None:
         """The close path hands back the entry snapshot verbatim, not a reconstruction."""
@@ -1654,7 +1639,6 @@ class TestConditionsAndPriceExtraction:
             mfi=38.0,
             cmf=-0.0559,
             fear_greed_index=23,
-            is_weekend=True,
         )
         position = make_position(
             conditions_at_entry=snapshot,
@@ -1674,7 +1658,7 @@ class TestConditionsAndPriceExtraction:
         )
         assert (conditions.atr, conditions.atr_percentage) == (912.07, 1.17)
         assert (conditions.choppiness, conditions.mfi, conditions.cmf) == (62.7, 38.0, -0.0559)
-        assert (conditions.fear_greed_index, conditions.is_weekend) == (23, True)
+        assert conditions.fear_greed_index == 23
 
 
 class TestCheckPosition:

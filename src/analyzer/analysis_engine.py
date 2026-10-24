@@ -779,8 +779,6 @@ class AnalysisEngine:
         assert self.context is not None
         bb_position = classify_bb_position(technical_data, self.context.current_price)
 
-        is_weekend = datetime.now(timezone.utc).weekday() >= 5
-
         market_sentiment = classify_market_sentiment(self.context.sentiment)
 
         order_book_bias = classify_order_book_bias(self.context.market_microstructure)
@@ -810,7 +808,6 @@ class AnalysisEngine:
             macd_signal=macd_signal,
             volume_state=volume_state,
             bb_position=bb_position,
-            is_weekend=is_weekend,
             market_sentiment=market_sentiment,
             order_book_bias=order_book_bias,
             exit_execution_context=exit_execution_context,

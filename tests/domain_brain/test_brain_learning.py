@@ -253,7 +253,6 @@ def vector_memory_double(trade_count: int = 0) -> MagicMock:
     memory.compute_per_profile_stats.return_value = {}
     memory.compute_rsi_performance.return_value = {}
     memory.compute_volume_performance.return_value = {}
-    memory.compute_weekend_performance.return_value = {}
     return memory
 
 
@@ -303,7 +302,6 @@ def count_checklist_items(context: str) -> int:
         pytest.param({"adx": 25, "macd_signal": "BEARISH"}, "MACD BEARISH", id="macd"),
         pytest.param({"adx": 25, "volume_state": "DISTRIBUTION"}, "Volume DISTRIBUTION", id="volume"),
         pytest.param({"adx": 25, "bb_position": "LOWER"}, "Price at BB LOWER", id="bollinger"),
-        pytest.param({"adx": 25, "is_weekend": True}, "Weekend Low Volume", id="weekend"),
         pytest.param({"adx": 25, "market_sentiment": "EXTREME_FEAR"}, "Sentiment EXTREME_FEAR", id="sentiment"),
         pytest.param({"adx": 25, "order_book_bias": "SELL_PRESSURE"}, "OrderBook SELL_PRESSURE", id="orderbook"),
         pytest.param(
@@ -336,7 +334,6 @@ def test_snapshot_from_conditions_maps_stored_state_and_drops_unmodelled_fields(
         macd_signal="BULLISH",
         volume_state="ACCUMULATION",
         bb_position="UPPER",
-        is_weekend=True,
         market_sentiment="EXTREME_FEAR",
         order_book_bias="BUY_PRESSURE",
         choppiness=70.0,
@@ -351,7 +348,7 @@ def test_snapshot_from_conditions_maps_stored_state_and_drops_unmodelled_fields(
 
     assert context == (
         "BULLISH + High ADX + HIGH Volatility + RSI OVERBOUGHT + MACD BULLISH + Volume ACCUMULATION "
-        "+ Price at BB UPPER + Weekend Low Volume + Sentiment EXTREME_FEAR + OrderBook BUY_PRESSURE "
+        "+ Price at BB UPPER + Sentiment EXTREME_FEAR + OrderBook BUY_PRESSURE "
         "+ Exit Execution: SL hard/15m | TP hard/15m"
     )
     assert (snapshot.choppiness, snapshot.atr_percentage, snapshot.vwap, snapshot.mfi, snapshot.cmf) == (
@@ -1371,8 +1368,6 @@ def test_empty_brain_uses_limited_data_note_instead_of_apply_insights():
                 "- RSI 30-40 (OVERSOLD): 2/2 wins (65% WR) — STRONG SIGNAL",
                 "- RSI 60-70 (OVERBOUGHT): 1/4 wins (35% WR) — WEAK SIGNAL",
                 "- ACCUMULATION: 1/3 wins (35% WR) — UNFAVORABLE",
-                "- Weekend: 2/2 wins (65% WR) — FAVORABLE",
-                "- Weekday: 1/3 wins (66% WR) — FAVORABLE",
             ],
             id="at-evidence-floor",
         ),
@@ -1388,17 +1383,14 @@ def test_condition_performance_block_is_gated_by_trade_count_and_win_rate(trade_
     brain.vector_memory.compute_volume_performance.return_value = {
         "ACCUMULATION": {"total_trades": 3, "winning_trades": 1, "win_rate": 34.9},
     }
-    brain.vector_memory.compute_weekend_performance.return_value = {
-        "weekend": {"total_trades": 2, "winning_trades": 2, "win_rate": 65.0},
-        "weekday": {"total_trades": 3, "winning_trades": 1, "win_rate": 66.0},
-    }
-
     context = brain.get_context(MarketSnapshot(adx=25))
 
     assert ("### Market Condition Performance (from trade history):" in context) is bool(expected_lines)
     for line in expected_lines:
         assert line in context
     assert "RSI 40-60 (NEUTRAL)" not in context
+    assert "Weekend" not in context
+    assert "Weekday" not in context
     assert brain.vector_memory.compute_rsi_performance.called is (trade_count >= 3)
     assert brain.vector_memory.compute_per_profile_stats.called is (trade_count >= 3)
 

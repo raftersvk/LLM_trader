@@ -115,7 +115,6 @@ class BrainExperienceRecorder:
                 "market_regime": conditions.trend_direction,
                 "trend_direction_at_entry": position.trend_direction_at_entry,
                 "trend_strength": conditions.trend_strength,
-                "is_weekend": conditions.is_weekend,
                 "position_size_pct": position.size_pct,
                 "confluence_count": self.pattern_analyzer.count_strong_confluences(position.confluence_factors),
                 "timeframe_alignment": conditions.timeframe_alignment,

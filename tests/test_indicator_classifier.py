@@ -218,10 +218,10 @@ class TestBuildContextString:
         ctx = build_context_string_from_technical_data(td)
         assert "RSI" not in ctx
 
-    def test_weekend_flag(self):
+    def test_no_weekend_segment(self):
         td = {"adx": 25, "atr_percent": 2.0}
-        ctx = build_context_string_from_technical_data(td, is_weekend=True)
-        assert "Weekend Low Volume" in ctx
+        ctx = build_context_string_from_technical_data(td)
+        assert "Weekend" not in ctx
 
     def test_separator_is_plus(self):
         td = {"adx": 30, "plus_di": 30, "minus_di": 10, "atr_percent": 2.0}

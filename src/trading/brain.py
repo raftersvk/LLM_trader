@@ -255,7 +255,6 @@ class TradingBrainService:
         macd_signal: str = "NEUTRAL",
         volume_state: str = "NORMAL",
         bb_position: str = "MIDDLE",
-        is_weekend: bool = False,
         market_sentiment: str = "NEUTRAL",
         order_book_bias: str = "BALANCED",
     ) -> str:
@@ -270,8 +269,6 @@ class TradingBrainService:
             context_parts.append(f"Volume {volume_state}")
         if bb_position != "MIDDLE":
             context_parts.append(f"Price at BB {bb_position}")
-        if is_weekend:
-            context_parts.append("Weekend Low Volume")
         if market_sentiment not in ("NEUTRAL", ""):
             context_parts.append(f"Sentiment {market_sentiment}")
         if order_book_bias not in ("BALANCED", ""):
@@ -331,7 +328,6 @@ class TradingBrainService:
         macd_signal: str = "NEUTRAL",
         volume_state: str = "NORMAL",
         bb_position: str = "MIDDLE",
-        is_weekend: bool = False,
         market_sentiment: str = "NEUTRAL",
         order_book_bias: str = "BALANCED",
         k: int = 5,
@@ -345,7 +341,6 @@ class TradingBrainService:
             macd_signal=macd_signal,
             volume_state=volume_state,
             bb_position=bb_position,
-            is_weekend=is_weekend,
             market_sentiment=market_sentiment,
             order_book_bias=order_book_bias,
         )

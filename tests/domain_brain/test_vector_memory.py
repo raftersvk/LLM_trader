@@ -677,6 +677,24 @@ def test_empty_collection_returns_empty_context_and_stats():
     assert service.compute_adx_performance() == {}
 
 
+def test_analytics_ignores_legacy_is_weekend_and_has_no_weekend_split():
+    """Crypto trades 24/7: stored is_weekend metadata must be ignored, not grouped."""
+    service = make_service()
+    service._collection.get.return_value = {
+        "ids": ["1", "2"],
+        "metadatas": [
+            {"outcome": "WIN", "pnl_pct": 2.0, "is_weekend": True, "volume_state": "NORMAL"},
+            {"outcome": "LOSS", "pnl_pct": -1.0, "is_weekend": False, "volume_state": "NORMAL"},
+        ],
+    }
+
+    assert not hasattr(service, "compute_weekend_performance")
+    result = service.compute_volume_performance()
+    assert set(result) == {"ACCUMULATION", "NORMAL", "DISTRIBUTION"}
+    assert "weekend" not in result
+    assert "weekday" not in result
+
+
 def test_collection_read_failures_separate_safe_retrieval_from_unguarded_analytics():
     """Retrieval swallows Chroma errors; analytics reads let the outage escape."""
     service = make_service()

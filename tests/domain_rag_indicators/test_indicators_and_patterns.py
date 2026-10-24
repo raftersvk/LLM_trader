@@ -343,9 +343,9 @@ def test_rsi_level_reads_the_dict_and_delegates_to_the_label_function():
         ),
         (
             {"adx": 25, "atr_percent": 2.0},
-            {"is_weekend": True},
-            ["Weekend Low Volume"],
-            [],
+            {},
+            ["NEUTRAL + High ADX + MEDIUM Volatility"],
+            ["Weekend"],
         ),
         (
             {"adx": 30, "plus_di": 30, "minus_di": 10, "atr_percent": 2.0},
@@ -356,7 +356,7 @@ def test_rsi_level_reads_the_dict_and_delegates_to_the_label_function():
     ],
     ids=[
         "active-signals", "low-adx", "rsi-overbought",
-        "rsi-neutral-omitted", "weekend", "exit-execution-context",
+        "rsi-neutral-omitted", "no-weekend-segment", "exit-execution-context",
     ],
 )
 def test_context_string_reports_only_active_signals(

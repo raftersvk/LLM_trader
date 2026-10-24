@@ -653,7 +653,6 @@ class TestPositionPersistence:
             cmf=-0.0559,
             vwap=63120.5,
             fear_greed_index=23,
-            is_weekend=True,
             social_sentiment_reddit="BEARISH",
             portfolio_pnl_pct=-1.3,
         )
@@ -693,7 +692,6 @@ class TestPositionPersistence:
         assert loaded.conditions_at_entry.cmf == -0.0559
         assert loaded.conditions_at_entry.vwap == 63120.5
         assert loaded.conditions_at_entry.fear_greed_index == 23
-        assert loaded.conditions_at_entry.is_weekend is True
         assert loaded.conditions_at_entry.social_sentiment_reddit == "BEARISH"
         assert loaded.conditions_at_entry.portfolio_pnl_pct == -1.3
         assert manager.validate_loaded_position() == []

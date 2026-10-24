@@ -52,9 +52,9 @@ class TestBuildRichContextString:
         ctx = self.brain._build_rich_context_string(adx=25, rsi_level="NEUTRAL")
         assert "RSI" not in ctx
 
-    def test_weekend_flag(self):
-        ctx = self.brain._build_rich_context_string(adx=25, is_weekend=True)
-        assert "Weekend Low Volume" in ctx
+    def test_no_weekend_segment(self):
+        ctx = self.brain._build_rich_context_string(adx=25)
+        assert "Weekend" not in ctx
 
     def test_separator_is_plus(self):
         ctx = self.brain._build_rich_context_string(adx=25)

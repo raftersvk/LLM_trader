@@ -327,13 +327,7 @@ def test_dashboard_news_retains_disk_fallback_without_rag(tmp_path, with_analysi
         assert http.get("/api/monitor/news").json() == {"articles": articles, "count": 1}
 
 
-def test_build_current_market_context_renders_indicators_and_exit_execution(tmp_path, monkeypatch):
-    class _Sroda(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2026, 9, 16, 12, 0, tzinfo=tz or timezone.utc)
-
-    monkeypatch.setattr("src.dashboard.decision_presenter.datetime", _Sroda)
+def test_build_current_market_context_renders_indicators_and_exit_execution(tmp_path):
     persist_previous_response(
         tmp_path,
         json.dumps(

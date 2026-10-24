@@ -91,7 +91,6 @@ def _build_current_market_context(config, logger, unified_parser=None, symbol=No
             "technical_data": technical_data,
             "current_price": current_price,
             "sentiment_data": data.get("sentiment"),
-            "is_weekend": datetime.now().weekday() >= 5,
         }
         return (
             build_context_string_from_technical_data(**shared_kwargs),

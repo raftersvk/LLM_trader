@@ -569,9 +569,6 @@ class VectorMemoryContextMixin:
         if chand_dist is not None:
             parts.append(f"ChandDist={chand_dist * 100:+.2f}%")
 
-        if meta.get("is_weekend", False):
-            parts.append("Weekend ⚠️")
-
         exit_execution_text = format_exit_execution_context(
             build_exit_execution_context(
                 stop_loss_type=meta.get("stop_loss_type"),
