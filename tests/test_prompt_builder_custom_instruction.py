@@ -93,9 +93,21 @@ def test_normalize_market_context_flattens_sequence():
     assert _normalize_market_context("") == ""
 
 
-def test_normalize_market_context_drops_urls_payload():
-    """A (text, urls) return keeps only the text part."""
-    assert _normalize_market_context(("News text", {"article": "https://example.com"})) == "News text"
+def test_normalize_market_context_handles_news_ablation_tuple():
+    """The ``(text, urls)`` return shape keeps the text and drops the URLs.
+
+    Covers both the news-disabled ablation stub ``("", {})`` and a populated
+    URLs mapping, which is the shape that used to reach ``PromptBuilder`` and
+    degrade the analysis to HOLD.
+    """
+    text = "News headline one\nNews headline two"
+    normalized = _normalize_market_context(
+        (text, {"article": "https://example.com", "other": "https://example.org"})
+    )
+
+    assert normalized == text
+    assert "example.com" not in normalized
+    assert "example.org" not in normalized
     assert _normalize_market_context(("", {})) == ""
 
 
