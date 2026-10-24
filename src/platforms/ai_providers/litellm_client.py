@@ -18,6 +18,10 @@ from src.utils.decorators import retry_api_call
 
 litellm.drop_params = True  # Ignore unsupported params by some providers
 
+# Legacy fallback when a caller passes a model config without a timeout.
+# Normally the loader supplies the configured [model_config] timeout.
+DEFAULT_REQUEST_TIMEOUT = 120
+
 
 class LitellmAIClient(BaseAIClient):
     """Unified client using LiteLLM for all LLM providers."""
@@ -294,7 +298,7 @@ class LitellmAIClient(BaseAIClient):
         if "presence_penalty" in model_config:
             params["presence_penalty"] = model_config["presence_penalty"]
 
-        params["timeout"] = model_config.get("timeout", 30)
+        params["timeout"] = model_config.get("timeout", DEFAULT_REQUEST_TIMEOUT)
         # base_url is in litellm_kwargs
         # base_url already in litellm_kwargs, not added here
         return params

@@ -111,6 +111,11 @@ top_p = 0.9
 top_k = 40
 # REQUIRED - the bot refuses to start without it. Used by every provider except Google.
 max_tokens = 32768
+# Per-request LLM timeout in seconds (default 120 when omitted). The LiteLLM
+# client uses this value directly. The signal service also applies a hard outer
+# cap per analysis (--timeout-seconds, default 300s); keep that cap at or above
+# this value if a single analysis must be allowed the full configured window.
+timeout = 600
 # frequency_penalty and presence_penalty are also accepted (0.0 = off)
 # REQUIRED while provider = googleai OR all. Output cap, and it INCLUDES thought tokens.
 # gemini-3.8-flash accepts up to 65536; with thinking = high a low cap can cut the answer off

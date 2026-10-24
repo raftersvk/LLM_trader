@@ -118,3 +118,44 @@ def test_context_window_defaults_when_not_configured(tmp_path, monkeypatch):
 
     assert config.LITELLM_CONTEXT_WINDOW == 1_000_000
     assert config.VISION_CONTEXT_WINDOW == config.LITELLM_CONTEXT_WINDOW
+
+
+def _write_timeout_ini(path: Path, timeout_line: str) -> None:
+    path.write_text(
+        "[general]\n"
+        "crypto_pair = BTC/USDC\n"
+        "timeframe = 1h\n"
+        "\n"
+        "[ai_providers]\n"
+        "provider = googleai\n"
+        "\n"
+        "[model_config]\n"
+        "max_tokens = 32768\n"
+        "google_max_tokens = 65536\n"
+        f"{timeout_line}\n",
+        encoding="utf-8",
+    )
+
+
+def test_model_config_timeout_is_honoured(tmp_path, monkeypatch):
+    """A configured 600s timeout must survive into get_model_config as a number."""
+    ini = tmp_path / "timeout.ini"
+    _write_timeout_ini(ini, "timeout = 600")
+    monkeypatch.setenv("LLM_TRADER_CONFIG_INI", str(ini))
+
+    config = Config()
+
+    assert config.get_model_config("some-litellm-model")["timeout"] == 600
+
+
+def test_model_config_timeout_falls_back_when_missing(tmp_path, monkeypatch):
+    """Omitting timeout uses the safe default instead of the old 30s client default."""
+    from src.config.loader import DEFAULT_MODEL_TIMEOUT
+
+    ini = tmp_path / "no-timeout.ini"
+    _write_timeout_ini(ini, "# timeout omitted on purpose")
+    monkeypatch.setenv("LLM_TRADER_CONFIG_INI", str(ini))
+
+    config = Config()
+
+    assert config.get_model_config("some-litellm-model")["timeout"] == DEFAULT_MODEL_TIMEOUT == 120

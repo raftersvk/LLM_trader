@@ -59,6 +59,11 @@ _IMPORT_CONFIG_INI_PATH = CONFIG_INI_PATH
 
 VALID_PROVIDERS = {"local", "googleai", "openrouter", "deepseek", "litellm", "all"}
 VALID_EXIT_TYPES = {"soft", "hard"}
+
+# Safe per-request model timeout used when [model_config] timeout is absent.
+# The configured value always wins; this only keeps a missing key from falling
+# back to the clients' old 30-second default.
+DEFAULT_MODEL_TIMEOUT = 120
 VALID_MODEL_VERBOSITIES = {"low", "medium", "high", "full"}
 MIN_REFERENCE_EXIT_CHECK_SECONDS = 2.0
 MAX_REFERENCE_EXIT_CHECK_SECONDS = 120.0
@@ -307,6 +312,25 @@ class Config:
             return [item.strip() for item in value.split(",")]
         return value
 
+    @staticmethod
+    def _resolve_model_timeout(value: Any) -> int | float:
+        """Return a numeric per-request model timeout.
+
+        ``timeout`` is optional for backward compatibility, but when present it
+        must be a positive number. A missing, malformed or non-positive value
+        falls back to ``DEFAULT_MODEL_TIMEOUT`` instead of leaking a string (or
+        the clients' 30-second legacy default) into LiteLLM parameters.
+        """
+        if value is None:
+            return DEFAULT_MODEL_TIMEOUT
+        try:
+            timeout = float(value)
+        except (TypeError, ValueError):
+            return DEFAULT_MODEL_TIMEOUT
+        if timeout <= 0:
+            return DEFAULT_MODEL_TIMEOUT
+        return int(timeout) if timeout.is_integer() else timeout
+
     def _build_model_configs(self):
         """Build model configuration dictionaries as instance variables.
 
@@ -318,6 +342,10 @@ class Config:
         if default_max_tokens is None:
             raise RuntimeError("`max_tokens` is required in [model_config] of config.ini")
 
+        model_timeout = self._resolve_model_timeout(
+            self.get_config("model_config", "timeout", None)
+        )
+
         self._default_model_config = {
             "temperature": self.get_config("model_config", "temperature", None),
             "top_p": self.get_config("model_config", "top_p", None),
@@ -325,6 +353,7 @@ class Config:
             "frequency_penalty": self.get_config("model_config", "frequency_penalty", self.get_config("model_config", "freq_penalty", None)),
             "presence_penalty": self.get_config("model_config", "presence_penalty", self.get_config("model_config", "pres_penalty", None)),
             "max_tokens": default_max_tokens,
+            "timeout": model_timeout,
             "openrouter_reasoning_effort": self.get_config("model_config", "openrouter_reasoning_effort", "max"),
         }
 
@@ -337,6 +366,9 @@ class Config:
             "max_tokens": google_max_tokens,
             "thinking_level": self.get_config("model_config", "google_thinking_level", "high"),
             "google_code_execution": self.get_config("model_config", "google_code_execution", False),
+            # Vision can be served by LiteLLM with a Google model id, so this
+            # config must carry the request timeout too.
+            "timeout": model_timeout,
         }
 
         if self.PROVIDER.lower() == "deepseek" and not self.DEEPSEEK_API_KEY:
@@ -347,6 +379,9 @@ class Config:
             "max_tokens": deepseek_max_tokens,
             "reasoning_effort": self.get_config("model_config", "deepseek_reasoning_effort", "max"),
             "response_format": {"type": "json_object"},
+            # A DeepSeek model id can also be selected for a LiteLLM/vision
+            # client, so keep the configured request timeout coherent.
+            "timeout": model_timeout,
         }
 
     def get_env(self, key: str, default: Any = None) -> Any:
