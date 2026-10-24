@@ -3,6 +3,7 @@
 Provides functionality for analyzer.prompts.prompt_builder.py.
 """
 import math
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -604,9 +605,35 @@ class PromptBuilder:
 
         return f"{base_prompt}\n\n{decision_rules}\n\n{analysis_steps}\n\n{response_template}"
 
-    def add_custom_instruction(self, instruction: str) -> None:
-        """Add custom instruction to the prompt."""
-        self.custom_instructions.append(instruction)
+    def add_custom_instruction(self, instruction: str | Sequence[str]) -> None:
+        """Add custom instruction to the prompt.
+
+        A plain string is stored unchanged. A sequence is flattened into
+        individual string instructions, so callers can no longer break
+        ``build_prompt``'s ``str.join`` by passing a tuple or list.
+
+        Args:
+            instruction: Custom instruction text, or a sequence of instructions.
+
+        Raises:
+            TypeError: If instruction is neither a string nor a sequence.
+        """
+        if isinstance(instruction, str):
+            self.custom_instructions.append(instruction)
+            return
+        if isinstance(instruction, Sequence):
+            flattened: list[str] = []
+            for item in instruction:
+                if isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
+                    flattened.extend(str(part) for part in item)
+                else:
+                    flattened.append(str(item))
+            self.custom_instructions.extend(flattened)
+            return
+        raise TypeError(
+            "custom instruction must be a string or a sequence of strings, "
+            f"got {type(instruction).__name__}"
+        )
 
     def _has_retested_support_resistance(self) -> bool:
         """Whether either retested level is available on the latest candle."""
