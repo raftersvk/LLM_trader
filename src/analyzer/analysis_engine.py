@@ -33,6 +33,27 @@ if TYPE_CHECKING:
     from src.rag import RagEngine
 
 
+def _normalize_market_context(market_context: Any) -> str:
+    """Normalize retrieved market context into prompt-ready text.
+
+    Most RAG engines return a plain string, but replay/ablation callers may
+    return a ``(text, urls)`` tuple instead. Passing that tuple to
+    ``PromptBuilder.add_custom_instruction`` used to raise ``TypeError`` during
+    prompt rendering, which silently degraded the analysis to HOLD.
+
+    Args:
+        market_context: Retrieved context as text, or a sequence of parts.
+
+    Returns:
+        The context flattened into a single string.
+    """
+    if isinstance(market_context, str):
+        return market_context
+    if isinstance(market_context, (tuple, list)):
+        return "\n".join(str(part) for part in market_context)
+    return str(market_context)
+
+
 class AnalysisEngine:
     """Orchestrates market data collection, analysis, and publication"""
 
@@ -264,8 +285,9 @@ class AnalysisEngine:
 
             self.article_urls.update(rag_urls)
 
-            if market_context:
-                self.prompt_builder.add_custom_instruction(market_context)
+            market_context_text = _normalize_market_context(market_context)
+            if market_context_text:
+                self.prompt_builder.add_custom_instruction(market_context_text)
             else:
                 self.logger.warning("No market context available for %s", self.symbol)
 

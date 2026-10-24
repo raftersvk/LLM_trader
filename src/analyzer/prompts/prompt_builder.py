@@ -1,4 +1,5 @@
 from typing import Optional, Any, Dict, TYPE_CHECKING
+from collections.abc import Sequence
 
 import math
 import numpy as np
@@ -298,13 +299,35 @@ class PromptBuilder:
 
         return f"{base_prompt}\n\n{analysis_steps}\n\n{response_template}"
 
-    def add_custom_instruction(self, instruction: str) -> None:
+    def add_custom_instruction(self, instruction: str | Sequence[str]) -> None:
         """Add custom instruction to the prompt.
 
+        A plain string is stored unchanged. A sequence is flattened into
+        individual string instructions, so callers can no longer break
+        ``build_prompt``'s ``str.join`` by passing a tuple or list.
+
         Args:
-            instruction: Custom instruction to add
+            instruction: Custom instruction text, or a sequence of instructions.
+
+        Raises:
+            TypeError: If instruction is neither a string nor a sequence.
         """
-        self.custom_instructions.append(instruction)
+        if isinstance(instruction, str):
+            self.custom_instructions.append(instruction)
+            return
+        if isinstance(instruction, Sequence):
+            flattened: list[str] = []
+            for item in instruction:
+                if isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
+                    flattened.extend(str(part) for part in item)
+                else:
+                    flattened.append(str(item))
+            self.custom_instructions.extend(flattened)
+            return
+        raise TypeError(
+            "custom instruction must be a string or a sequence of strings, "
+            f"got {type(instruction).__name__}"
+        )
 
     def _has_advanced_support_resistance(self) -> bool:
         """Check if advanced support/resistance indicators are detected.
