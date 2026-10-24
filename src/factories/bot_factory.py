@@ -141,13 +141,28 @@ class BotDependencyFactory:
         return bot
 
     async def _create_engine_for_pair(self, symbol: str):
-        """Build a symbol-scoped AnalysisEngine sharing the provisioned collaborators."""
+        """Build a symbol-scoped AnalysisEngine with its own collaborators.
+
+        MarketDataCollector/PromptBuilder store symbol/timeframe and
+        TechnicalCalculator mutates self.ti in a worker thread, so a pair must
+        never reuse another pair's analyzer instances.
+        """
+        factory = self.base_dependencies.get("analyzer_engine_factory")
+        if factory is not None:
+            engine = factory()
+            self.logger.debug("BotFactory: built isolated AnalysisEngine for %s", symbol)
+            return engine
+
+        # Fallback (tests/legacy): at least give the pair its own engine object.
         base = self.base_dependencies.get("market_analyzer")
         if base is None:
             return None
         from src.analyzer.analysis_engine import AnalysisEngine
 
-        engine = AnalysisEngine(
+        self.logger.warning(
+            "No analyzer_engine_factory provided; %s shares analyzer collaborators", symbol
+        )
+        return AnalysisEngine(
             self.logger.getChild(symbol.replace("/", "_")),
             base.rag_engine,
             base.model_manager,
@@ -161,8 +176,6 @@ class BotDependencyFactory:
             base.result_processor,
             base.chart_generator,
         )
-        self.logger.debug("BotFactory: created AnalysisEngine for %s", symbol)
-        return engine
 
     def _clone_dependencies(self, symbol: str) -> Dict[str, Any]:
         """Clone shared (non-symbol-specific) dependencies."""

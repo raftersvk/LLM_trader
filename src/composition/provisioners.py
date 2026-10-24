@@ -413,10 +413,15 @@ class ProvisioningMixin:
 
         return {"manager": manager}
 
-    async def _provision_analyzer_layer(
+    def _build_analyzer_collaborators(
         self, infra: dict, apis: dict, utils: dict, rag: RagEngine, models: dict
     ) -> dict:
-        """Provision the market analysis engine."""
+        """Build a fresh set of analyzer collaborators.
+
+        Every multi-pair engine needs its own stateful collaborators:
+        MarketDataCollector/PromptBuilder store symbol/timeframe and
+        TechnicalCalculator mutates ``self.ti`` inside a worker thread.
+        """
         overview_fmt = MarketOverviewFormatter(self.logger, utils["format_utils"])
         long_term_fmt = LongTermFormatter(self.logger, utils["format_utils"])
 
@@ -433,17 +438,6 @@ class ProvisioningMixin:
         pattern_analyzer = PatternAnalyzer(
             indicator_pattern_engine=IndicatorPatternEngine(), logger=self.logger
         )
-        try:
-            self.logger.info(
-                "  -> Warming up Numba JIT pattern engine (compiling 50+ indicator kernels)..."
-            )
-            pattern_analyzer.warmup()
-            self.logger.info("  -> Numba JIT pattern engine compiled & warm")
-        except Exception as warmup_error:  # noqa: BLE001
-            self.logger.warning(
-                "Pattern analyzer warm-up could not run: %s", warmup_error
-            )
-
         ev_fmt = EVFrameworkFormatter(self.config)
 
         prompt_builder = PromptBuilder(
@@ -462,20 +456,19 @@ class ProvisioningMixin:
             ),
         )
 
-        engine = AnalysisEngine(
-            self.logger,
-            rag,
-            models["manager"],
-            apis["market"],
-            self.config,
-            tech_calc,
-            pattern_analyzer,
-            prompt_builder,
-            MarketDataCollector(
+        return {
+            "overview_fmt": overview_fmt,
+            "long_term_fmt": long_term_fmt,
+            "market_fmt": market_fmt,
+            "tech_calc": tech_calc,
+            "pattern_analyzer": pattern_analyzer,
+            "ev_fmt": ev_fmt,
+            "prompt_builder": prompt_builder,
+            "data_collector": MarketDataCollector(
                 self.logger, rag, apis["alternative_me"], session=infra["session"]
             ),
-            MarketMetricsCalculator(self.logger),
-            AnalysisResultProcessor(
+            "metrics_calculator": MarketMetricsCalculator(self.logger),
+            "result_processor": AnalysisResultProcessor(
                 models["manager"],
                 self.logger,
                 utils["parser"],
@@ -483,15 +476,58 @@ class ProvisioningMixin:
                 PatternQualityScorer(),
                 RiskRewardValidator(),
             ),
-            ChartGenerator(
+            "chart_generator": ChartGenerator(
                 self.logger,
                 self.config,
                 formatter=utils["format_utils"].fmt,
                 format_utils=utils["format_utils"],
             ),
+        }
+
+    def build_analyzer_engine(
+        self, infra: dict, apis: dict, utils: dict, rag: RagEngine, models: dict
+    ) -> AnalysisEngine:
+        """Build a symbol-scoped AnalysisEngine with fresh collaborators."""
+        collaborators = self._build_analyzer_collaborators(infra, apis, utils, rag, models)
+        return self._make_engine(rag, apis, models, collaborators)
+
+    def _make_engine(self, rag: RagEngine, apis: dict, models: dict, c: dict) -> AnalysisEngine:
+        """Assemble an AnalysisEngine from a collaborator set."""
+        return AnalysisEngine(
+            self.logger,
+            rag,
+            models["manager"],
+            apis["market"],
+            self.config,
+            c["tech_calc"],
+            c["pattern_analyzer"],
+            c["prompt_builder"],
+            c["data_collector"],
+            c["metrics_calculator"],
+            c["result_processor"],
+            c["chart_generator"],
         )
 
-        return {"engine": engine, "ev_formatter": ev_fmt}
+    async def _provision_analyzer_layer(
+        self, infra: dict, apis: dict, utils: dict, rag: RagEngine, models: dict
+    ) -> dict:
+        """Provision the market analysis engine."""
+        collaborators = self._build_analyzer_collaborators(infra, apis, utils, rag, models)
+        pattern_analyzer = collaborators["pattern_analyzer"]
+        try:
+            self.logger.info(
+                "  -> Warming up Numba JIT pattern engine (compiling 50+ indicator kernels)..."
+            )
+            pattern_analyzer.warmup()
+            self.logger.info("  -> Numba JIT pattern engine compiled & warm")
+        except Exception as warmup_error:  # noqa: BLE001
+            self.logger.warning(
+                "Pattern analyzer warm-up could not run: %s", warmup_error
+            )
+
+        engine = self._make_engine(rag, apis, models, collaborators)
+
+        return {"engine": engine, "ev_formatter": collaborators["ev_fmt"]}
 
     def _provision_trading_layer(self, utils: dict, models: dict) -> dict:
         """Provision trading strategy and memory services."""

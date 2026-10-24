@@ -278,6 +278,9 @@ class CompositionRoot(ProvisioningMixin):
                     "keyboard_handler": infra["keyboard_handler"],
                     "exit_monitor": trading["exit_monitor"],
                     "market_analyzer": analyzer["engine"],
+                    "analyzer_engine_factory": lambda: self.build_analyzer_engine(
+                        infra, apis, utils, rag, models
+                    ),
                     "ev_formatter": analyzer["ev_formatter"],
                     "parser": utils["parser"],
                     "dashboard_state": None,

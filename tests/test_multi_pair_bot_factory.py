@@ -81,3 +81,32 @@ async def test_create_bot_for_pair_wires_the_pair_strategy(tmp_path, monkeypatch
     assert strategy.dashboard_state is factory.base_dependencies["dashboard_state"]
     conditions = strategy._conditions.extract_market_conditions({"price": 100.0})
     assert conditions is not None
+
+
+@pytest.mark.asyncio
+async def test_each_pair_gets_its_own_analyzer_engine(tmp_path, monkeypatch):
+    """Pairs must not receive the shared engine/collaborator set."""
+    monkeypatch.chdir(tmp_path)
+    logger = MagicMock()
+    logger.getChild.return_value = logger
+    engines = []
+
+    def _engine_factory():
+        engine = MagicMock(name=f"engine-{len(engines)}")
+        engines.append(engine)
+        return engine
+
+    base = _base_dependencies()
+    base["analyzer_engine_factory"] = _engine_factory
+
+    with patch("src.factories.bot_factory.chromadb.PersistentClient"), patch(
+        "src.factories.bot_factory.SentenceTransformer"
+    ), patch("src.app.CryptoTradingBot.initialize", new=AsyncMock()):
+        factory = BotDependencyFactory(base, _config(), logger)
+        first = await factory.create_bot_for_pair("BTC/USDC")
+        second = await factory.create_bot_for_pair("ETH/USDC")
+
+    assert len(engines) == 2
+    assert first.market_analyzer is engines[0]
+    assert second.market_analyzer is engines[1]
+    assert first.market_analyzer is not second.market_analyzer
