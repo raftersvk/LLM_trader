@@ -27,6 +27,7 @@ def _signal(
     action: str = "BUY",
     confidence: float = 0.9,
     jev: dict | None = None,
+    reasoning: str = "test reasoning",
 ) -> dict:
     candle_open = created_at.replace(minute=0, second=0, microsecond=0)
     timeframe_delta = timedelta(hours=1)
@@ -49,7 +50,7 @@ def _signal(
         "model": "test-model",
         "provider": "test-provider",
         "latency_ms": 123,
-        "reasoning": "test reasoning",
+        "reasoning": reasoning,
         "jev": jev,
     }
 
@@ -401,8 +402,9 @@ def test_invalid_timestamps_do_not_crash_responses(tmp_path):
         assert heartbeat["stale"] is True
 
 
-def test_jev_veto_is_exposed(tmp_path):
+def test_jev_veto_is_derived_from_real_contract_payload(tmp_path):
     now = datetime.now(timezone.utc)
+    veto_reason = "not tradeable (noul=0.120 < 0.500)"
     _write_jsonl(
         tmp_path,
         "BTC_USDT_1h.jsonl",
@@ -410,13 +412,42 @@ def test_jev_veto_is_exposed(tmp_path):
             _signal(
                 "vetoed",
                 created_at=now,
-                jev={"veto": True, "reason": "risk-off regime"},
-            )
+                reasoning=(
+                    "LLM wanted a breakout. "
+                    f"[JEV veto: JEV veto: {veto_reason}]"
+                ),
+                jev={
+                    "model": "noul-3",
+                    "tradeability": False,
+                    "bias": "short",
+                    "regime": "risk-off",
+                },
+            ),
+            _signal(
+                "cleared",
+                created_at=now - timedelta(hours=1),
+                jev={
+                    "model": "noul-3",
+                    "tradeability": True,
+                    "bias": "long",
+                    "regime": "trend",
+                },
+            ),
         ],
     )
 
     with _client(tmp_path) as client:
-        row = client.get("/api/signals").json()[0]
-        assert row["jev"]["reason"] == "risk-off regime"
-        assert row["jev_veto"] is True
-        assert row["jev_reason"] == "risk-off regime"
+        rows = {
+            row["decision_id"]: row
+            for row in client.get("/api/signals").json()
+        }
+
+        vetoed = rows["vetoed"]
+        assert vetoed["jev"]["tradeability"] is False
+        assert vetoed["jev_veto"] is True
+        assert vetoed["jev_reason"] == veto_reason
+
+        cleared = rows["cleared"]
+        assert cleared["jev"]["tradeability"] is True
+        assert cleared["jev_veto"] is False
+        assert cleared["jev_reason"] is None

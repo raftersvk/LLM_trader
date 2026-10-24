@@ -131,24 +131,55 @@ def _age_seconds(timestamp: Any, now: datetime) -> Optional[int]:
     return int((now - parsed).total_seconds())
 
 
-def _jev_fields(jev: Any) -> Tuple[Optional[Dict[str, Any]], Optional[bool], Optional[str]]:
-    """Return (raw jev, derived veto flag, derived reason) for a signal."""
+def _extract_jev_reason(reasoning: Any) -> Optional[str]:
+    """Extract the JEV veto reason appended to a signal's reasoning text."""
+    if not isinstance(reasoning, str):
+        return None
+    marker = "[JEV veto:"
+    start = reasoning.rfind(marker)
+    if start == -1:
+        return None
+    end = reasoning.find("]", start)
+    if end == -1:
+        reason = reasoning[start + len(marker):]
+    else:
+        reason = reasoning[start + len(marker):end]
+    reason = reason.strip()
+    if reason.lower().startswith("jev veto:"):
+        reason = reason[len("jev veto:"):].strip()
+    return reason or None
+
+
+def _jev_fields(
+    jev: Any,
+    reasoning: Any,
+) -> Tuple[Optional[Dict[str, Any]], Optional[bool], Optional[str]]:
+    """Return (raw jev, derived veto flag, derived reason) for a signal.
+
+    The signal contract stores ``JevSignal.to_payload()``: ``model``,
+    ``tradeability`` (boolean), ``bias`` and ``regime``. A signal is vetoed
+    when ``tradeability`` is false; the human-readable veto text is appended
+    to ``reasoning`` as ``[JEV veto: ...]`` by the analyzer adapter.
+    """
     if not isinstance(jev, dict):
         return None, None, None
-    veto = jev.get("veto")
-    veto_flag: Optional[bool] = veto if isinstance(veto, bool) else None
-    if veto_flag is None:
-        tradeability = jev.get("tradeability")
-        if isinstance(tradeability, str):
-            veto_flag = tradeability.strip().lower() in {
-                "veto",
-                "blocked",
-                "no_trade",
-                "untradeable",
-            }
-    reason = jev.get("reason")
-    if not isinstance(reason, str):
-        reason = None
+
+    veto_flag: Optional[bool] = None
+    tradeability = jev.get("tradeability")
+    if isinstance(tradeability, bool):
+        veto_flag = not tradeability
+    else:
+        # Tolerate an explicit legacy veto flag, though the contract does not
+        # emit one.
+        legacy_veto = jev.get("veto")
+        if isinstance(legacy_veto, bool):
+            veto_flag = legacy_veto
+
+    reason = _extract_jev_reason(reasoning)
+    if reason is None:
+        legacy_reason = jev.get("reason")
+        if isinstance(legacy_reason, str):
+            reason = legacy_reason
     return jev, veto_flag, reason
 
 
@@ -159,7 +190,10 @@ def _normalise_signal(row: Any, now: datetime) -> Optional[Dict[str, Any]]:
     if any(not row.get(field) for field in _REQUIRED_SIGNAL_FIELDS):
         return None
 
-    jev, jev_veto, jev_reason = _jev_fields(row.get("jev"))
+    jev, jev_veto, jev_reason = _jev_fields(
+        row.get("jev"),
+        row.get("reasoning"),
+    )
     expires_at = row.get("expires_at")
     expires_dt = parse_timestamp(expires_at)
     created_at = row.get("created_at")
