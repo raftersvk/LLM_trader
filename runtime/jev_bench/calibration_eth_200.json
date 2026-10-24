@@ -18,6 +18,7 @@
     ],
     "horizon": 1,
     "move_threshold_pct": 1.0,
+    "cost_pct": 0.1,
     "base": "momentum-proxy (rule-based, NOT an LLM)",
     "delay_seconds": 0.5,
     "model": "vllm-sr/d3-flash"

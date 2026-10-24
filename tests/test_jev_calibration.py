@@ -205,6 +205,16 @@ def test_records_from_payload_round_trip():
     assert rebuilt.base_direction_correct == {1: True}
 
 
+
+def test_records_from_payload_preserves_explicit_zero_cost():
+    """A stored 0.0 cost is not replaced by the 0.10 default."""
+    payload = _full_record(0, 0.4).to_payload()
+    payload["cost_pct"] = 0.0
+    assert jev_calibration.records_from_payload([payload])[0].cost_pct == 0.0
+
+    payload.pop("cost_pct")
+    assert jev_calibration.records_from_payload([payload])[0].cost_pct == 0.10
+
 def test_write_observations_emits_one_line_per_scored_state(tmp_path):
     """Observations use the required keys and skip failed JEV calls."""
     scored = _record(0.4, "long", "BUY", 0.02)
@@ -344,7 +354,7 @@ def test_aggregate_from_payload_reproduces_embedded_metrics():
     args = Namespace(
         candles="synthetic", symbol="BTC/USDT", timeframe="1h", candle_count=10,
         move_threshold_pct=1.0, delay_seconds=0.0, horizon=1,
-        thresholds=(0.2, 0.45, 0.5),
+        thresholds=(0.2, 0.45, 0.5), cost_pct=0.1,
     )
     metric_keys = ("noul", "brier", "reliability", "worth_rate", "base",
                    "threshold_curve", "by_horizon")
@@ -365,7 +375,10 @@ def test_aggregate_from_payload_reproduces_embedded_metrics():
 
 
 def _full_record(
-    index: int, noul: float, opened: str = "2026-10-15T09:00:00Z"
+    index: int,
+    noul: float,
+    opened: str = "2026-10-15T09:00:00Z",
+    cost_pct: float = 0.1,
 ) -> Any:
     """Record carrying every horizon so report validation succeeds."""
     forward = 0.01 * (index + 1)
@@ -377,6 +390,7 @@ def _full_record(
         bias="long",
         regime="trend",
         atr_pct=0.01,
+        cost_pct=cost_pct,
         forward_returns={1: forward, 2: forward, 3: forward, 4: forward},
         worth_trading={horizon: False for horizon in (1, 2, 3, 4)},
         base_action="BUY",
@@ -403,10 +417,77 @@ def _source_args(**overrides: Any) -> Namespace:
         "delay_seconds": 0.25,
         "horizon": 2,
         "thresholds": (0.2, 0.5),
+        "cost_pct": 0.1,
     }
     values.update(overrides)
     return Namespace(**values)
 
+
+
+@pytest.mark.asyncio
+async def test_aggregate_from_carries_dataset_cost_pct(tmp_path):
+    """A flag-free rebuild keeps the report's stored cost, not the default."""
+    records = [_full_record(0, 0.4, cost_pct=0.05), _full_record(1, 0.6, cost_pct=0.05)]
+    report = jev_calibration.build_report(
+        records, _source_args(cost_pct=0.05), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    path = tmp_path / "calibration.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    args = jev_calibration._parse_args(["--aggregate-from", str(path)])
+    rebuilt = await jev_calibration.run_calibration(args)
+
+    assert rebuilt["dataset"]["cost_pct"] == pytest.approx(0.05)
+    assert all(state["cost_pct"] == pytest.approx(0.05) for state in rebuilt["states"])
+
+
+@pytest.mark.asyncio
+async def test_aggregate_from_carries_explicit_zero_cost(tmp_path):
+    """Zero is a valid stored cost and must survive a flag-free rebuild."""
+    records = [_full_record(0, 0.4, cost_pct=0.0)]
+    report = jev_calibration.build_report(
+        records, _source_args(cost_pct=0.0), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    path = tmp_path / "calibration.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    rebuilt = await jev_calibration.run_calibration(
+        jev_calibration._parse_args(["--aggregate-from", str(path)])
+    )
+
+    assert rebuilt["dataset"]["cost_pct"] == 0.0
+    assert rebuilt["states"][0]["cost_pct"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_aggregate_from_explicit_cost_overrides_dataset(tmp_path):
+    """An explicit --cost-pct still overrides the stored cost."""
+    records = [_full_record(0, 0.4, cost_pct=0.05)]
+    report = jev_calibration.build_report(
+        records, _source_args(cost_pct=0.05), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    path = tmp_path / "calibration.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    rebuilt = await jev_calibration.run_calibration(
+        jev_calibration._parse_args(
+            ["--aggregate-from", str(path), "--cost-pct", "0.2"]
+        )
+    )
+
+    assert rebuilt["dataset"]["cost_pct"] == pytest.approx(0.2)
+    assert rebuilt["states"][0]["cost_pct"] == pytest.approx(0.2)
+
+
+def test_fresh_run_default_cost_is_applied_only_when_resolved():
+    """--cost-pct stays None in the parser and defaults on a fresh run."""
+    args = jev_calibration._parse_args(["--candles", "candles.csv"])
+    assert args.cost_pct is None
+    jev_calibration._apply_run_defaults(args)
+    assert args.cost_pct == pytest.approx(0.10)
 
 def test_validate_calibration_report_accepts_and_rejects():
     """Validation requires a dataset, a non-empty states list and state keys."""

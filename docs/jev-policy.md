@@ -45,6 +45,10 @@ aborted run never replaces a non-empty log with its partial states. Running the
 harness per symbol therefore accumulates a cross-pair history; no manual
 concatenation is required.
 
+`cost_pct` defaults to 0.10 % for a fresh calibration run and is stored in the
+report dataset. A flag-free `--aggregate-from` carries it over (including an
+explicit zero); an explicit `--cost-pct` overrides it.
+
 ## Trade-P&L label
 
 The policy uses the label that matches the actual trade, not the absolute

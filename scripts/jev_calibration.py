@@ -75,6 +75,7 @@ RELIABILITY_BINS = 5
 DEFAULT_SYMBOL = "BTC/USDT"
 DEFAULT_TIMEFRAME = "1h"
 DEFAULT_DELAY_SECONDS = 0.5
+DEFAULT_COST_PCT = 0.10
 
 
 @dataclass
@@ -464,6 +465,16 @@ def write_observations(report: Dict[str, Any], path: str) -> int:
     return len(merged)
 
 
+def _stored_cost_pct(value: Any) -> float:
+    """Read a stored cost, keeping an explicit zero and defaulting only None."""
+    if value is None:
+        return DEFAULT_COST_PCT
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_COST_PCT
+
+
 def records_from_payload(payloads: Sequence[Dict[str, Any]]) -> List[CalibrationRecord]:
     """Rebuild records from a saved report so metrics regenerate offline."""
     records: List[CalibrationRecord] = []
@@ -481,7 +492,7 @@ def records_from_payload(payloads: Sequence[Dict[str, Any]]) -> List[Calibration
                 confidence=payload.get("confidence"),
                 score_raw=payload.get("score_raw"),
                 latency_ms=payload.get("latency_ms"),
-                cost_pct=float(payload.get("cost_pct") or 0.10),
+                cost_pct=_stored_cost_pct(payload.get("cost_pct")),
                 error=payload.get("error"),
                 error_kind=payload.get("error_kind"),
                 forward_returns={
@@ -557,12 +568,16 @@ def _parse_horizons(value: Any, default: Sequence[int] = DEFAULT_HORIZONS) -> Tu
 
 
 def _carry_aggregate_dataset(
-    args: argparse.Namespace, dataset: Dict[str, Any]
+    args: argparse.Namespace,
+    dataset: Dict[str, Any],
+    states: Sequence[Dict[str, Any]] = (),
 ) -> None:
     """Fill aggregate-from fields from the report unless the CLI overrode them.
 
     ``None`` means the option was not given (all provenance options default to
     ``None``), so a rebuild without flags preserves the original dataset.
+    ``cost_pct`` is read from the dataset, then from a single stored state cost
+    for older reports, and is never silently replaced by the 0.10 default.
     """
     if args.symbol is None:
         args.symbol = dataset.get("symbol") or DEFAULT_SYMBOL
@@ -575,6 +590,17 @@ def _carry_aggregate_dataset(
     if args.candles is None:
         source = dataset.get("source")
         args.candles = source if isinstance(source, str) and source else None
+    if args.cost_pct is None:
+        stored = dataset.get("cost_pct")
+        if stored is None and states:
+            costs = {
+                state.get("cost_pct") for state in states
+                if isinstance(state, dict) and state.get("cost_pct") is not None
+            }
+            if len(costs) == 1:
+                stored = costs.pop()
+        if stored is not None:
+            args.cost_pct = _stored_cost_pct(stored)
 
 
 def _apply_run_defaults(args: argparse.Namespace) -> None:
@@ -587,6 +613,8 @@ def _apply_run_defaults(args: argparse.Namespace) -> None:
         args.move_threshold_pct = DEFAULT_MOVE_THRESHOLD_PCT
     if args.delay_seconds is None:
         args.delay_seconds = DEFAULT_DELAY_SECONDS
+    if args.cost_pct is None:
+        args.cost_pct = DEFAULT_COST_PCT
 
 
 def build_report(
@@ -659,6 +687,7 @@ def build_report(
             "horizons": list(horizons),
             "horizon": horizon,
             "move_threshold_pct": args.move_threshold_pct,
+            "cost_pct": args.cost_pct,
             "base": "momentum-proxy (rule-based, NOT an LLM)",
             "delay_seconds": args.delay_seconds,
             "model": model,
@@ -709,7 +738,7 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
                 f"invalid calibration report {args.aggregate_from}: {'; '.join(problems)}"
             )
         dataset = existing["dataset"]
-        _carry_aggregate_dataset(args, dataset)
+        _carry_aggregate_dataset(args, dataset, existing["states"])
         horizons = _parse_horizons(
             args.horizons, dataset.get("horizons") or DEFAULT_HORIZONS
         )
@@ -738,8 +767,9 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
                 for record in records:
                     if record.index in enrichment:
                         record.candle_open_time, record.atr_pct = enrichment[record.index]
-        for record in records:
-            record.cost_pct = args.cost_pct
+        if args.cost_pct is not None:
+            for record in records:
+                record.cost_pct = args.cost_pct
         scoring = existing.get("scoring") or {}
         return build_report(
             records,
@@ -900,8 +930,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Pause before each real JEV call (default 0.5; carried from the report on rebuild)",
     )
     parser.add_argument(
-        "--cost-pct", type=float, default=0.10,
-        help="Round-trip trading cost in percent, stored in every observation",
+        "--cost-pct", type=float, default=None,
+        help=(
+            "Round-trip trading cost in percent (default 0.10 for fresh runs; "
+            "carried from the report on --aggregate-from)"
+        ),
     )
     parser.add_argument(
         "--observations", default=None,
