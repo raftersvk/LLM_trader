@@ -178,6 +178,9 @@ async def test_composition_root_wires_reconcile_interval_from_config(
         for field in fields(BotServices)
         if field.default is MISSING and field.name not in {"logger", "config", "shutdown_manager"}
     }
+    # The signal CLI needs the per-pair factory, but single-pair startup must
+    # not forward it to BotServices (which has no such field).
+    dependencies["market_analyzer_factory"] = MagicMock()
     root.build_dependencies = AsyncMock(return_value=dependencies)
     monitors = []
 

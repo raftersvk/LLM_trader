@@ -396,6 +396,8 @@ class CompositionRoot(ProvisioningMixin):
 
         dashboard_server = dependencies.pop("dashboard_server", None)
         force_analysis_event = dependencies.pop("force_analysis_event", None)
+        # Signal-service only: BotServices has no per-pair engine factory field.
+        dependencies.pop("market_analyzer_factory", None)
 
         def _create_position_monitor(bot: CryptoTradingBot) -> PositionStatusMonitor:
             try:
