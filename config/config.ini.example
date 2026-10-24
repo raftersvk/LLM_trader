@@ -111,8 +111,9 @@ top_p = 0.9
 top_k = 40
 # REQUIRED - the bot refuses to start without it. Used by every provider except Google.
 max_tokens = 32768
-# Per-request LLM timeout in seconds (default 120 when omitted). The LiteLLM
-# client uses this value directly. The signal service also applies a hard outer
+# Per-request LLM timeout in seconds. When omitted, each provider client keeps
+# its own default (the LiteLLM client falls back to 120s; the OpenAI-SDK
+# clients keep the SDK default). The signal service also applies a hard outer
 # cap per analysis (--timeout-seconds, default 300s); keep that cap at or above
 # this value if a single analysis must be allowed the full configured window.
 timeout = 600

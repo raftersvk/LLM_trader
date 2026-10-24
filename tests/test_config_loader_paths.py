@@ -148,14 +148,12 @@ def test_model_config_timeout_is_honoured(tmp_path, monkeypatch):
     assert config.get_model_config("some-litellm-model")["timeout"] == 600
 
 
-def test_model_config_timeout_falls_back_when_missing(tmp_path, monkeypatch):
-    """Omitting timeout uses the safe default instead of the old 30s client default."""
-    from src.config.loader import DEFAULT_MODEL_TIMEOUT
-
+def test_model_config_omits_timeout_when_not_configured(tmp_path, monkeypatch):
+    """An omitted timeout must not impose a global default on provider clients."""
     ini = tmp_path / "no-timeout.ini"
     _write_timeout_ini(ini, "# timeout omitted on purpose")
     monkeypatch.setenv("LLM_TRADER_CONFIG_INI", str(ini))
 
     config = Config()
 
-    assert config.get_model_config("some-litellm-model")["timeout"] == DEFAULT_MODEL_TIMEOUT == 120
+    assert "timeout" not in config.get_model_config("some-litellm-model")
