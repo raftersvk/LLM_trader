@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from re import Pattern
 from typing import Tuple, Optional, Dict, Any, TYPE_CHECKING
@@ -140,27 +141,34 @@ class PositionExtractor:
         return base + (self._numeric_confidence_from_text(text),)
 
     def _raw_confidence(self, value: Any) -> Optional[float]:
-        """Return a numeric confidence (0-100) or None for labels and invalid values."""
+        """Return a finite numeric confidence (0-100) or None.
+
+        Labels and non-finite numbers (NaN, Infinity) yield None so the label
+        fallback is used instead of forwarding an invalid score downstream.
+        """
         if isinstance(value, bool):
             return None
         if isinstance(value, (int, float)):
-            return float(value)
+            numeric = float(value)
+            return numeric if math.isfinite(numeric) else None
         if isinstance(value, str):
             try:
-                return float(value.strip())
+                numeric = float(value.strip())
             except ValueError:
                 return None
+            return numeric if math.isfinite(numeric) else None
         return None
 
     def _numeric_confidence_from_text(self, text: str) -> Optional[float]:
-        """Extract a numeric confidence from free-form text, if any."""
+        """Extract a finite numeric confidence from free-form text, if any."""
         match = self.numeric_confidence_pattern.search(text)
         if not match:
             return None
         try:
-            return float(match.group(1))
+            numeric = float(match.group(1))
         except ValueError:
             return None
+        return numeric if math.isfinite(numeric) else None
 
     def _extract_from_dict(self, data: Dict[str, Any]) -> Tuple[str, str, Optional[float], Optional[float], Optional[float], str, Optional[str]]:
         """Extract trading info from a dictionary.

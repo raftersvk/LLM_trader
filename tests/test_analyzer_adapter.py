@@ -933,6 +933,34 @@ async def test_numeric_confidence_57_is_preserved_as_055():
     assert signal.confidence == 0.55
 
 
+FENCED_NAN_CONFIDENCE = (
+    "```json\n"
+    '{"signal": "BUY", "confidence": NaN, "stop_loss": 67000.0, '
+    '"take_profit": 70000.0, "position_size": 5, "reasoning": "bad score"}\n'
+    "```"
+)
+
+
+@pytest.mark.asyncio
+async def test_nan_confidence_never_becomes_max_confidence():
+    """A NaN score must not be clamped to 1.0 and approved.
+
+    Python's json.loads accepts NaN; the extractor drops the non-finite score
+    so the historical LOW label fallback (0.35) applies instead.
+    """
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=FENCED_NAN_CONFIDENCE,
+        result={**RESULT_META, "raw_response": FENCED_NAN_CONFIDENCE},
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-23T14:00:00Z")
+
+    assert signal.confidence == 0.35
+    assert signal.risk_approved is False
+
+
 @pytest.mark.asyncio
 async def test_label_only_confidence_keeps_the_legacy_mapping():
     """Without a numeric score, the label fallback is unchanged."""

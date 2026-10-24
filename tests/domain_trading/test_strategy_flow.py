@@ -2002,6 +2002,20 @@ class TestParserAndExtractorContract:
         assert extracted[-1] == expected_raw
 
     @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(float("nan"), id="nan"),
+            pytest.param(float("inf"), id="positive-infinity"),
+            pytest.param(float("-inf"), id="negative-infinity"),
+        ],
+    )
+    def test_extractor_does_not_forward_non_finite_confidence(self, value: float) -> None:
+        """Non-finite scores fall back to the label instead of reaching the contract."""
+        extracted = PositionExtractor().extract_trading_info_with_confidence({"confidence": value})
+
+        assert extracted[-1] is None
+
+    @pytest.mark.parametrize(
         ("raw_position_size", "expected_position_size"),
         [
             pytest.param("5%", 0.05, id="percent-string"),

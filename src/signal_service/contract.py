@@ -9,6 +9,7 @@ is kept, plus a sha256 fingerprint of the raw response for audit.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -82,16 +83,24 @@ def confidence_to_float(confidence: Any) -> float:
     already-normalized fraction; 1 and 1.0 are valid 0-100 scores (a raw score
     of 1 is minimum confidence, not 100%). For example, 51 and 52 map to 0.50,
     53 to 0.55, 57 to 0.55 and 58 to 0.60. Labels remain the fallback and keep
-    their historical mapping (HIGH=0.90, MEDIUM=0.65, LOW=0.35).
+    their historical mapping (HIGH=0.90, MEDIUM=0.65, LOW=0.35). Non-finite
+    scores (NaN, Infinity) are rejected with :class:`SignalValidationError`
+    rather than clamped into a valid range.
 
     Args:
         confidence: "HIGH", "MEDIUM", "LOW" or a numeric 0-100 value.
 
     Returns:
         Confidence as a float between 0 and 1.
+
+    Raises:
+        SignalValidationError: for labels or numbers that are not valid
+            confidence values, including non-finite scores.
     """
     if isinstance(confidence, (int, float)):
         raw_100 = float(confidence)
+        if not math.isfinite(raw_100):
+            raise SignalValidationError(f"Invalid confidence value: {confidence!r}")
         # 1 and 1.0 are valid 0-100 scores (the extractor forwards raw scores),
         # so only a strictly fractional value is rescaled.
         if 0.0 < raw_100 < 1.0:

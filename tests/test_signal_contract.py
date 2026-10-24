@@ -103,6 +103,22 @@ def test_numeric_confidence_clamps_and_accepts_fractions(raw, expected):
     assert confidence_to_float(raw) == expected
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param(float("nan"), id="nan-float"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+        pytest.param("NaN", id="nan-string"),
+        pytest.param("Infinity", id="infinity-string"),
+    ],
+)
+def test_non_finite_confidence_is_rejected(raw):
+    """NaN and Infinity must never be clamped into a valid high confidence."""
+    with pytest.raises(SignalValidationError):
+        confidence_to_float(raw)
+
+
 def test_hash_raw_response_format_and_determinism():
     raw = "raw llm response text"
     assert hash_raw_response(raw) == hash_raw_response(raw)
