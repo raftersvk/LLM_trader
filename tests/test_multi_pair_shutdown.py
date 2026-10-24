@@ -103,3 +103,58 @@ async def test_multi_pair_registers_quit_and_starts_keyboard_listener():
 
     await commands["q"]()
     await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_quit_runs_shutdown_off_the_listener_task():
+    """The q callback must not await shutdown inside the cancellable listener."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _SlowShutdown(_FakeShutdownManager):
+        async def shutdown_gracefully(self) -> None:
+            self._shutting_down = True
+            started.set()
+            await release.wait()
+
+    keyboard = MagicMock()
+    keyboard.start_listening = AsyncMock()
+    keyboard.stop_listening = AsyncMock()
+    shutdown = _SlowShutdown()
+    root = _root(shutdown)
+
+    root._register_multi_pair_keyboard(keyboard, AsyncMock())
+    commands = {call.args[0]: call.args[1] for call in keyboard.register_command.call_args_list}
+
+    await asyncio.wait_for(commands["q"](), timeout=1.0)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    # The callback returned while shutdown is still running elsewhere.
+    assert shutdown.is_shutting_down is True
+    release.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_supervisor_returns_when_callbacks_abort_after_shutdown_started():
+    """A bot callback cancelling the chain must not strand the supervisor."""
+    manager = MagicMock()
+    manager.stop_all_pairs = AsyncMock()
+    shutdown = _FakeShutdownManager()
+
+    async def _bot_shutdown_cancels_listener() -> None:
+        raise asyncio.CancelledError()
+
+    # Registered before the supervisor, like CryptoTradingBot.shutdown.
+    shutdown.callbacks.append(_bot_shutdown_cancels_listener)
+    root = _root(shutdown)
+
+    supervisor = asyncio.create_task(root._supervise_multi_pair(manager))
+    await asyncio.sleep(0)
+
+    runner = asyncio.create_task(shutdown.shutdown_gracefully())
+    with pytest.raises(asyncio.CancelledError):
+        await runner
+
+    await asyncio.wait_for(supervisor, timeout=1.0)
+    manager.stop_all_pairs.assert_awaited_once()

@@ -520,8 +520,11 @@ class CompositionRoot(ProvisioningMixin):
         )
 
         async def _quit_multi_pair() -> None:
+            # Run shutdown in its own task: bot.shutdown (a registered callback)
+            # cancels the bot's active tasks, which includes this listener; awaiting
+            # shutdown here would let that cancellation abort the callback chain.
             if self.shutdown_manager is not None:
-                await self.shutdown_manager.shutdown_gracefully()
+                asyncio.create_task(self.shutdown_manager.shutdown_gracefully())
 
         keyboard_handler.register_command("q", _quit_multi_pair, "Quit the application")
         if self.shutdown_manager is not None:
@@ -554,6 +557,16 @@ class CompositionRoot(ProvisioningMixin):
             if self.shutdown_manager.is_shutting_down:
                 shutdown_event.set()
         try:
+            # Also watch the shutdown flag: an aborted callback chain (e.g. a bot
+            # cancelling its tasks) must not leave this supervisor waiting forever.
+            while not shutdown_event.is_set():
+                if (
+                    self.shutdown_manager is not None
+                    and self.shutdown_manager.is_shutting_down
+                ):
+                    shutdown_event.set()
+                    break
+                await asyncio.sleep(0.05)
             await shutdown_event.wait()
         finally:
             # Cancellation or a missing/failed callback must still stop the loops.
