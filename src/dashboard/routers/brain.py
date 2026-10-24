@@ -21,12 +21,105 @@ from src.dashboard.decision_presenter import (
     extract_market_status,
     read_json_file,
 )
+# Backwards-compatible helpers used by the fork's dashboard tests/integrations.
+_read_json_file = read_json_file
+_distance_pct_or_fallback = distance_pct_or_fallback
+
+
+def _extract_persisted_technical_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Return persisted indicator values from new or legacy previous_response shapes."""
+    technical_data = data.get("technical_data")
+    if isinstance(technical_data, dict) and technical_data:
+        return technical_data
+    response = data.get("response", {})
+    if not isinstance(response, dict):
+        return {}
+    return {key: value for key, value in response.items() if key != "text_analysis"}
+
+
+def _extract_market_status(data: dict[str, Any], unified_parser=None) -> dict[str, Any]:
+    """Extract market status from previous_response data (fork compatibility)."""
+    response = data.get("response", {})
+    text = response.get("text_analysis", "")
+    technical_data = _extract_persisted_technical_data(data)
+    status: dict[str, Any] = {
+        "trend": "NEUTRAL", "action": "--", "confidence": "--",
+        "adx": response.get("adx"), "rsi": response.get("rsi"),
+    }
+    if technical_data:
+        status["adx"] = technical_data.get("adx", status["adx"])
+        status["rsi"] = technical_data.get("rsi", status["rsi"])
+        status["trend"] = classify_trend_direction(technical_data)
+    signal_match = re.search(r"\bSIGNAL\s*:\s*([A-Z_]+)\b", text, re.IGNORECASE)
+    if signal_match:
+        status["action"] = signal_match.group(1).upper()
+    confidence_match = re.search(r"\bConfidence\s*:\s*(\d+(?:\.\d+)?)\s*%", text, re.IGNORECASE)
+    if confidence_match:
+        confidence_value = float(confidence_match.group(1))
+        status["confidence"] = int(confidence_value) if confidence_value.is_integer() else confidence_value
+    if status["trend"] == "NEUTRAL":
+        if "BEARISH" in text.upper():
+            status["trend"] = "BEARISH"
+        elif "BULLISH" in text.upper():
+            status["trend"] = "BULLISH"
+    return status
+
+
+def _build_current_market_context(config, logger, unified_parser=None, symbol=None) -> tuple[str, str]:
+    """Build rich context query strings from persisted technical data (fork compatibility)."""
+    data_dir = config.DATA_DIR
+    if symbol:
+        safe_symbol = symbol.replace("/", "_").replace("-", "_")
+        prev_response_file = Path(data_dir) / "trading" / f"pair_{safe_symbol}" / "previous_response.json"
+    else:
+        prev_response_file = Path(data_dir) / "trading" / "previous_response.json"
+    if not prev_response_file.exists():
+        return "", ""
+    try:
+        data = _read_json_file(prev_response_file)
+        if not data:
+            return "", ""
+        technical_data = _extract_persisted_technical_data(data)
+        if not technical_data:
+            status = _extract_market_status(data, unified_parser)
+            adx = status["adx"] or 0
+            fallback = f"{status['trend']} + {classify_adx_label(adx)} + MEDIUM Volatility"
+            return fallback, fallback
+        response = data.get("response", {})
+        current_price = response.get("current_price") if isinstance(response, dict) else None
+        shared_kwargs = {
+            "technical_data": technical_data,
+            "current_price": current_price,
+            "sentiment_data": data.get("sentiment"),
+            "is_weekend": datetime.now().weekday() >= 5,
+        }
+        return (
+            build_context_string_from_technical_data(**shared_kwargs),
+            build_query_document_from_technical_data(**shared_kwargs),
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.error("Failed to build market context", exc_info=True)
+        return "", ""
+
+
 from src.utils.indicator_classifier import (
+    build_context_string_from_technical_data,
+    build_query_document_from_technical_data,
+    classify_adx_label,
+    classify_trend_direction,
     build_exit_execution_context,
     build_exit_execution_context_from_config,
     build_exit_execution_context_from_position,
     format_exit_execution_context,
 )
+
+
+def _safe_exit_management(config, timeframe):
+    """Build the configured exit-management block, tolerating partial configs."""
+    try:
+        return build_exit_execution_context_from_config(config, timeframe).to_dict()
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 class BrainRouter:
@@ -35,7 +128,7 @@ class BrainRouter:
     PRICE_REFRESH_TTL_SECONDS = 10.0
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-instance-attributes
-    def __init__(self, config, logger, dashboard_state, vector_memory, unified_parser, persistence, exchange_manager, post_mortem_repo=None):
+    def __init__(self, config, logger, dashboard_state, vector_memory, unified_parser, persistence, exchange_manager, post_mortem_repo=None, vector_memory_registry=None):
         self.router = APIRouter(prefix="/api/brain", tags=["brain"])
         self.config = config
         self.logger = logger
@@ -45,6 +138,7 @@ class BrainRouter:
         self.persistence = persistence
         self.exchange_manager = exchange_manager
         self.post_mortem_repo = post_mortem_repo
+        self.vector_memory_registry = vector_memory_registry
         self._price_refresh_lock = asyncio.Lock()
         self._price_refresh_result: dict[str, Any] | None = None
         self._price_refresh_expires_at = 0.0
@@ -62,8 +156,11 @@ class BrainRouter:
 
     def _resolve_rule_exit_profile(self, metadata: dict[str, Any]) -> str:
         """Resolve semantic-rule exit profile using stored metadata plus config fallback."""
-        timeframe = self.config.TIMEFRAME
-        default_context = build_exit_execution_context_from_config(self.config, timeframe)
+        timeframe = getattr(self.config, "TIMEFRAME", "4h")
+        try:
+            default_context = build_exit_execution_context_from_config(self.config, timeframe)
+        except Exception:  # noqa: BLE001 - partial configs (tests) omit exit keys
+            default_context = build_exit_execution_context()
         context = build_exit_execution_context(
             stop_loss_type=metadata.get("dominant_stop_loss_type") or metadata.get("stop_loss_type"),
             stop_loss_check_interval=(
@@ -110,7 +207,7 @@ class BrainRouter:
             "action": "--",
             "adx": None,
             "rsi": None,
-            "exit_management": build_exit_execution_context_from_config(self.config, timeframe).to_dict(),
+            "exit_management": _safe_exit_management(self.config, timeframe),
             "brain_lifecycle": self.dashboard_state.get_brain_lifecycle(),
         }
         try:
@@ -354,10 +451,16 @@ class BrainRouter:
             position.entry_price,
             position.take_profit,
         )
-        current_exit_management = build_exit_execution_context_from_config(
-            self.config, self.config.TIMEFRAME
-        ).to_dict()
-        entry_exit_management = build_exit_execution_context_from_position(position).to_dict()
+        try:
+            current_exit_management = build_exit_execution_context_from_config(
+                self.config, getattr(self.config, "TIMEFRAME", "4h")
+            ).to_dict()
+        except Exception:  # noqa: BLE001 - config may omit exit-management keys
+            current_exit_management = {}
+        try:
+            entry_exit_management = build_exit_execution_context_from_position(position).to_dict()
+        except Exception:  # noqa: BLE001 - legacy positions carry no snapshot
+            entry_exit_management = {}
         res = {
             "has_position": True,
             "current_price": current_price,

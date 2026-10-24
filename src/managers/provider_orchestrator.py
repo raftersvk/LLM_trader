@@ -53,39 +53,49 @@ class ProviderOrchestrator:
                 name="Google AI Studio",
                 client=self.clients.google,
                 paid_client=self.clients.google_paid,
-                default_model=self.config.GOOGLE_STUDIO_MODEL,
-                config=self.config.get_model_config(self.config.GOOGLE_STUDIO_MODEL),
+                default_model=getattr(self.config, "GOOGLE_STUDIO_MODEL", ""),
+                config=self.config.get_model_config(getattr(self.config, "GOOGLE_STUDIO_MODEL", "")),
                 supports_chart=True,
             ),
             "openrouter": ProviderMetadata(
                 name="OpenRouter",
                 client=self.clients.openrouter,
-                default_model=self.config.OPENROUTER_BASE_MODEL,
-                config=self.config.get_model_config(self.config.OPENROUTER_BASE_MODEL),
+                default_model=getattr(self.config, "OPENROUTER_BASE_MODEL", ""),
+                config=self.config.get_model_config(getattr(self.config, "OPENROUTER_BASE_MODEL", "")),
                 supports_chart=True,
-                fallback_model=self.config.OPENROUTER_FALLBACK_MODEL,
+                fallback_model=getattr(self.config, "OPENROUTER_FALLBACK_MODEL", None),
             ),
             "local": ProviderMetadata(
                 name="LM Studio",
                 client=self.clients.lmstudio,
-                default_model=self.config.LM_STUDIO_MODEL,
-                config=self.config.get_model_config(self.config.LM_STUDIO_MODEL),
+                default_model=getattr(self.config, "LM_STUDIO_MODEL", ""),
+                config=self.config.get_model_config(getattr(self.config, "LM_STUDIO_MODEL", "")),
                 supports_chart=False,
             ),
             "blockrun": ProviderMetadata(
                 name="BlockRun.AI",
                 client=self.clients.blockrun,
-                default_model=self.config.BLOCKRUN_MODEL,
-                config=self.config.get_model_config(self.config.BLOCKRUN_MODEL),
+                default_model=getattr(self.config, "BLOCKRUN_MODEL", ""),
+                config=self.config.get_model_config(getattr(self.config, "BLOCKRUN_MODEL", "")),
                 supports_chart=True,
             ),
             "deepseek": ProviderMetadata(
                 name="DeepSeek",
                 client=self.clients.deepseek,
-                default_model=self.config.DEEPSEEK_MODEL,
-                config=self.config.get_model_config(self.config.DEEPSEEK_MODEL),
+                default_model=getattr(self.config, "DEEPSEEK_MODEL", ""),
+                config=self.config.get_model_config(getattr(self.config, "DEEPSEEK_MODEL", "")),
                 supports_chart=True,
-            )
+            ),
+            # Fork: OpenCode Go through the LiteLLM endpoint.
+            "litellm": ProviderMetadata(
+                name="OpenCode Go (LiteLLM)",
+                client=getattr(self.clients, "litellm", None),
+                default_model=getattr(self.config, "LITELLM_MODEL", "deepseek-v4.1-flash"),
+                config=self.config.get_model_config(
+                    getattr(self.config, "LITELLM_MODEL", "deepseek-v4.1-flash")
+                ),
+                supports_chart=True,
+            ),
         }
 
     def prepare_request_messages(
@@ -121,6 +131,20 @@ class ProviderOrchestrator:
         metadata = self._providers.get(provider)
         return metadata.is_available() if metadata else False
 
+    def _all_text_chain(self) -> list[str]:
+        """Fallback chain for text; the fork's LiteLLM provider is appended when configured."""
+        chain = ["googleai", "deepseek", "local", "openrouter", "blockrun"]
+        if self.is_available("litellm"):
+            chain.append("litellm")
+        return chain
+
+    def _all_chart_chain(self) -> list[str]:
+        """Fallback chain for charts; LiteLLM is appended when configured."""
+        chain = ["googleai", "deepseek", "openrouter", "blockrun"]
+        if self.is_available("litellm"):
+            chain.append("litellm")
+        return chain
+
     def supports_chart(self, provider: str) -> bool:
         """Check if provider supports chart analysis."""
         if provider == "all":
@@ -129,6 +153,8 @@ class ProviderOrchestrator:
                 or self.is_available("deepseek")
                 or self.is_available("openrouter")
                 or self.is_available("blockrun")
+                or self.is_available("litellm")
+                or getattr(self.clients, "vision_litellm", None) is not None
             )
         metadata = self._providers.get(provider)
         return metadata.supports_chart if metadata and metadata.is_available() else False
@@ -183,6 +209,8 @@ class ProviderOrchestrator:
             return await self._invoke_blockrun(metadata, messages, effective_model, chart, chart_image)
         if provider == "deepseek":
             return await self._invoke_deepseek(metadata, messages, effective_model, chart, chart_image)
+        if provider == "litellm":
+            return await self._invoke_litellm(metadata, messages, effective_model, chart, chart_image)
         return InvocationResult(
             success=False,
             response=ChatResponseModel.from_error(f"Unknown provider '{provider}'"),
@@ -244,7 +272,7 @@ class ProviderOrchestrator:
         """
         if effective_provider == "all":
             result = await self.invoke_with_fallback(
-                ["googleai", "deepseek", "local", "openrouter", "blockrun"], messages, model=model
+                self._all_text_chain(), messages, model=model
             )
             return result
         if self.is_available(effective_provider):
@@ -273,7 +301,7 @@ class ProviderOrchestrator:
         """
         if effective_provider == "all":
             return await self.invoke_with_fallback(
-                ["googleai", "deepseek", "openrouter", "blockrun"], messages, chart=True, chart_image=chart_image, model=model
+                self._all_chart_chain(), messages, chart=True, chart_image=chart_image, model=model
             )
         if effective_provider == "local":
             return InvocationResult(
@@ -540,6 +568,44 @@ class ProviderOrchestrator:
                 self.logger.error("DeepSeek client not initialized. Check DEEPSEEK_API_KEY in keys.env")
         elif provider == "local":
             self.logger.error("Local models don't support image analysis")
+
+    async def _invoke_litellm(
+        self,
+        metadata: ProviderMetadata,
+        messages: list[dict[str, str]],
+        effective_model: str,
+        chart: bool,
+        chart_image: io.BytesIO | bytes | str | None,
+    ) -> InvocationResult:
+        """Invoke the fork's LiteLLM/OpenCode Go client."""
+        client = metadata.client
+        if client is None:
+            return InvocationResult(
+                success=False,
+                response=ChatResponseModel.from_error("LiteLLM client is not configured"),
+                provider="litellm",
+                model=effective_model,
+            )
+        try:
+            if chart and chart_image is not None:
+                response = await client.chat_completion_with_chart_analysis(
+                    effective_model, messages, chart_image, metadata.config
+                )
+            else:
+                response = await client.chat_completion(
+                    effective_model, messages, metadata.config
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("LiteLLM invocation failed")
+            response = ChatResponseModel.from_error(str(exc))
+        success = self._is_valid_response(response) and not self._is_rate_limited(response)
+        return InvocationResult(
+            success=success,
+            response=response,
+            provider="litellm",
+            model=effective_model,
+            error_message=None if success else (response.error if response else "Empty response from LiteLLM"),
+        )
 
     async def _invoke_blockrun(
         self,

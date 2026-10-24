@@ -169,6 +169,13 @@ class CompositionRoot(ProvisioningMixin):
         self.logger.install_crash_handler()
         self.loop = None
         self.shutdown_manager: GracefulShutdownManager | None = None
+        # Multi-pair registries are created up front so the dashboard routers and
+        # the per-pair bot factory share the same objects.
+        from src.dashboard.registries import AnalysisEngineRegistry, VectorMemoryRegistry
+
+        self.engine_registry = AnalysisEngineRegistry()
+        self.vector_memory_registry = VectorMemoryRegistry()
+        self.multi_pair_manager = None
 
     # pylint: disable=too-many-statements
     async def build_dependencies(self) -> dict:
@@ -252,6 +259,43 @@ class CompositionRoot(ProvisioningMixin):
             notifiers = await self._provision_notifiers(utils)
             progress.update(task, completed=8)
 
+            # Multi-pair: build the per-pair factory before the dashboard so the
+            # portfolio/system routers receive the live manager and registries.
+            if len(self.config.CRYPTO_PAIRS) > 1:
+                from src.factories.bot_factory import BotDependencyFactory
+                from src.managers.multi_pair_manager import MultiPairManager
+
+                base_dependencies = {
+                    "shutdown_manager": self.shutdown_manager,
+                    "exchange_manager": infra["exchange_manager"],
+                    "coingecko_api": apis["coingecko"],
+                    "market_api": apis["market"],
+                    "alternative_me_api": apis["alternative_me"],
+                    "http_session": infra["session"],
+                    "model_manager": models["manager"],
+                    "rag_engine": rag,
+                    "discord_notifier": notifiers["notifier"],
+                    "keyboard_handler": infra["keyboard_handler"],
+                    "exit_monitor": trading["exit_monitor"],
+                    "market_analyzer": analyzer["engine"],
+                    "ev_formatter": analyzer["ev_formatter"],
+                    "parser": utils["parser"],
+                    "dashboard_state": None,
+                }
+                factory = BotDependencyFactory(
+                    base_dependencies=base_dependencies,
+                    config=self.config,
+                    logger=self.logger,
+                    engine_registry=self.engine_registry,
+                    vector_memory_registry=self.vector_memory_registry,
+                )
+                self.multi_pair_manager = MultiPairManager(
+                    self.logger, self.config, factory
+                )
+                self.logger.info(
+                    "Multi-pair mode: %s pairs configured", len(self.config.CRYPTO_PAIRS)
+                )
+
             progress.update(
                 task, description="[green]Stage 9/9 — Dashboard server & web admin..."
             )
@@ -300,6 +344,15 @@ class CompositionRoot(ProvisioningMixin):
             "dashboard_state": dashboard["dashboard_state"],
             "force_analysis_event": dashboard["force_analysis_event"],
         }
+
+        if self.multi_pair_manager is not None:
+            self.multi_pair_manager.dependencies_factory.base_dependencies.update({
+                key: deps.get(key)
+                for key in (
+                    "dashboard_state", "sentiment_analyst", "executor_handler",
+                    "ev_formatter", "discord_task",
+                )
+            })
 
         return deps
 
@@ -367,21 +420,28 @@ class CompositionRoot(ProvisioningMixin):
                 forward_local_close=bot.forward_local_exit_request,
             )
 
-        bot = CryptoTradingBot(
-            BotServices(
-                logger=self.logger,
-                config=self.config,
-                shutdown_manager=self.shutdown_manager,
-                position_monitor_factory=_create_position_monitor,
-                force_analysis_event=force_analysis_event,
-                **dependencies,
+        multi_pair_manager = getattr(self, "multi_pair_manager", None)
+        bot = None
+        if multi_pair_manager is None:
+            bot = CryptoTradingBot(
+                BotServices(
+                    logger=self.logger,
+                    config=self.config,
+                    shutdown_manager=self.shutdown_manager,
+                    position_monitor_factory=_create_position_monitor,
+                    force_analysis_event=force_analysis_event,
+                    **dependencies,
+                )
             )
-        )
 
         try:
-            await bot.initialize()
-            symbol = self.config.CRYPTO_PAIR
-            timeframe = self.config.TIMEFRAME
+            if multi_pair_manager is not None:
+                # Multi-pair: every configured pair runs its own bot loop.
+                await multi_pair_manager.start_all_pairs()
+            else:
+                await bot.initialize()
+                symbol = self.config.CRYPTO_PAIR
+                timeframe = self.config.TIMEFRAME
 
             dashboard_running = False
 
@@ -403,9 +463,10 @@ class CompositionRoot(ProvisioningMixin):
                         self.config.DASHBOARD_PORT,
                     )
 
-            bot.keyboard_handler.register_command(
-                "d", _toggle_dashboard, "Toggle dashboard on/off"
-            )
+            if bot is not None:
+                bot.keyboard_handler.register_command(
+                    "d", _toggle_dashboard, "Toggle dashboard on/off"
+                )
 
             if dashboard_server and self.config.DASHBOARD_ENABLED:
                 await dashboard_server.start()
@@ -416,7 +477,11 @@ class CompositionRoot(ProvisioningMixin):
             if dashboard_server and self.shutdown_manager:
                 self.shutdown_manager.register_shutdown_callback(dashboard_server.stop)
 
-            await bot.run(symbol, timeframe)
+            if multi_pair_manager is not None:
+                # Stay alive until shutdown; pair loops own the trading cadence.
+                await asyncio.Event().wait()
+            else:
+                await bot.run(symbol, timeframe)
 
         except asyncio.CancelledError:
             self.logger.info("Trading cancelled, shutting down...")

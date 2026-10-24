@@ -36,6 +36,23 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_RR = 1.5
 DEFAULT_MIN_CONFIDENCE = 0.6
+def _normalize_position_pct(raw_size) -> float:
+    """Normalize a position size to a fraction in [0, 1].
+
+    The upstream parser already emits fractions, while legacy AI replies and the
+    fork's text path give percentages > 1; divide those once here.
+    """
+    if raw_size is None:
+        return DEFAULT_POSITION_SIZE_PCT
+    try:
+        size = float(raw_size)
+    except (TypeError, ValueError):
+        return DEFAULT_POSITION_SIZE_PCT
+    if size > 1:
+        size = size / 100.0
+    return round(max(0.0, min(1.0, size)), 4)
+
+
 DEFAULT_POSITION_SIZE_PCT = 0.05
 PROMPT_VERSION = "llm-trader-signal-v1"
 _UNKNOWN_LABELS = frozenset({"", "unknown", "unspecified", "none", "null"})
@@ -618,11 +635,7 @@ class PairAnalyzer:
             risk_approved=approved,
             sl=draft.sl,
             tp=draft.tp,
-            position_size_pct=(
-                round(float(draft.position_size), 4)
-                if draft.position_size is not None
-                else DEFAULT_POSITION_SIZE_PCT
-            ),
+            position_size_pct=_normalize_position_pct(draft.position_size),
             reasoning=reasoning,
             model=draft.model,
             provider=draft.provider,

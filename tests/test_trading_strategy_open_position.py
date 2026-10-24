@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.trading.data_models import RiskAssessment
+from src.trading.data_models import MarketConditions, RiskAssessment
 from src.trading.trading_strategy import TradingStrategy
 
 
@@ -41,6 +41,10 @@ def _strategy(reserve_result: bool):
     position_factory = MagicMock()
     position_factory.create_position.side_effect = AssertionError("position must not be created")
 
+    config = MagicMock()
+    config.TIMEFRAME = "4h"
+    config.EXECUTOR_MAX_POSITION_USDC = 0
+
     strategy = TradingStrategy(
         logger=MagicMock(),
         persistence=persistence,
@@ -48,7 +52,7 @@ def _strategy(reserve_result: bool):
         statistics_service=MagicMock(),
         memory_service=MagicMock(),
         risk_manager=risk_manager,
-        config=MagicMock(),
+        config=config,
         position_factory=position_factory,
         portfolio_capital_service=portfolio,
     )
@@ -69,6 +73,7 @@ async def test_open_position_aborts_when_reservation_fails():
         current_price=100.0,
         symbol="BTC/USDT",
         reasoning="test",
+        market_conditions=MarketConditions(),
     )
 
     assert decision is None

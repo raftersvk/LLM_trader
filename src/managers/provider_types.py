@@ -67,3 +67,20 @@ class ProviderClients:
     lmstudio: LMStudioClient | None = None
     blockrun: BlockRunClient | None = None
     deepseek: DeepSeekClient | None = None
+    # Fork: OpenCode Go / LiteLLM provider clients.
+    litellm: Any | None = None
+    vision_litellm: Any | None = None
+
+    @classmethod
+    def from_factory_dict(cls, clients: dict[str, Any]) -> "ProviderClients":
+        """Build the container from a provider-factory dict (fork compatibility)."""
+        return cls(
+            google=clients.get("google"),
+            google_paid=clients.get("google_paid"),
+            openrouter=clients.get("openrouter"),
+            lmstudio=clients.get("lmstudio"),
+            blockrun=clients.get("blockrun"),
+            deepseek=clients.get("deepseek"),
+            litellm=clients.get("litellm"),
+            vision_litellm=clients.get("vision_litellm"),
+        )

@@ -6,6 +6,7 @@ Handles brain state management, learning from closed trades, and providing AI co
 from typing import TYPE_CHECKING, Any
 
 from src.logger.logger import Logger
+from src.utils.indicator_classifier import classify_adx_label
 from src.utils.prompt_budget import PromptBudgetPolicy
 
 from .brain_context import BrainContextProvider
@@ -192,6 +193,10 @@ class TradingBrainService:
 
         return thresholds
 
+    def _trigger_reflection(self) -> None:
+        """Backwards-compatible alias for the fork's reflection trigger."""
+        self.trigger_reflection()
+
     def trigger_reflection(self) -> None:
         """Reflect on recent trades and synthesize best-practice semantic rules.
 
@@ -237,3 +242,136 @@ class TradingBrainService:
             tightening_evaluation=tightening_evaluation,
             timeframe_minutes=self._timeframe_minutes,
         )
+
+    # ------------------------------------------------------------------
+    # Fork compatibility helpers (vector-context building)
+    # ------------------------------------------------------------------
+    def _build_rich_context_string(
+        self,
+        trend_direction: str = "NEUTRAL",
+        adx: float = 0,
+        volatility_level: str = "MEDIUM",
+        rsi_level: str = "NEUTRAL",
+        macd_signal: str = "NEUTRAL",
+        volume_state: str = "NORMAL",
+        bb_position: str = "MIDDLE",
+        is_weekend: bool = False,
+        market_sentiment: str = "NEUTRAL",
+        order_book_bias: str = "BALANCED",
+    ) -> str:
+        """Build the semantic context string used for vector storage/retrieval."""
+        adx_label = classify_adx_label(adx)
+        context_parts = [trend_direction, adx_label, f"{volatility_level} Volatility"]
+        if rsi_level != "NEUTRAL":
+            context_parts.append(f"RSI {rsi_level}")
+        if macd_signal != "NEUTRAL":
+            context_parts.append(f"MACD {macd_signal}")
+        if volume_state != "NORMAL":
+            context_parts.append(f"Volume {volume_state}")
+        if bb_position != "MIDDLE":
+            context_parts.append(f"Price at BB {bb_position}")
+        if is_weekend:
+            context_parts.append("Weekend Low Volume")
+        if market_sentiment not in ("NEUTRAL", ""):
+            context_parts.append(f"Sentiment {market_sentiment}")
+        if order_book_bias not in ("BALANCED", ""):
+            context_parts.append(f"OrderBook {order_book_bias}")
+        return " + ".join(context_parts)
+
+    def _build_query_document(
+        self,
+        trend_direction: str,
+        adx: float,
+        rsi: float,
+        volatility_level: str,
+        rsi_level: str,
+        macd_signal: str,
+        volume_state: str,
+        bb_position: str,
+        market_sentiment: str,
+        order_book_bias: str,
+    ) -> str:
+        """Build a query document mirroring the stored experience format."""
+        adx_label = classify_adx_label(adx)
+        context_str = self._build_rich_context_string(
+            trend_direction=trend_direction,
+            adx=adx,
+            volatility_level=volatility_level,
+            rsi_level=rsi_level,
+            macd_signal=macd_signal,
+            volume_state=volume_state,
+            bb_position=bb_position,
+            market_sentiment=market_sentiment,
+            order_book_bias=order_book_bias,
+        )
+        indicator_parts = [
+            f"ADX={adx:.1f} ({adx_label})",
+            f"RSI={rsi:.1f} ({rsi_level})",
+            f"Vol={volatility_level}",
+            f"MACD={macd_signal}",
+            f"BB={bb_position}",
+        ]
+        structure_parts = []
+        if market_sentiment not in ("NEUTRAL", ""):
+            structure_parts.append(f"Sentiment={market_sentiment}")
+        if order_book_bias not in ("BALANCED", ""):
+            structure_parts.append(f"OB={order_book_bias}")
+        lines = [context_str, f"Indicators: {' | '.join(indicator_parts)}"]
+        if structure_parts:
+            lines.append(f"Structure: {' | '.join(structure_parts)}")
+        return " ".join(lines)
+
+    def get_vector_context(
+        self,
+        trend_direction: str = "NEUTRAL",
+        adx: float = 0,
+        rsi: float = 50.0,
+        volatility_level: str = "MEDIUM",
+        rsi_level: str = "NEUTRAL",
+        macd_signal: str = "NEUTRAL",
+        volume_state: str = "NORMAL",
+        bb_position: str = "MIDDLE",
+        is_weekend: bool = False,
+        market_sentiment: str = "NEUTRAL",
+        order_book_bias: str = "BALANCED",
+        k: int = 5,
+    ) -> str:
+        """Retrieve similar past experiences for the given market conditions."""
+        context_query = self._build_rich_context_string(
+            trend_direction=trend_direction,
+            adx=adx,
+            volatility_level=volatility_level,
+            rsi_level=rsi_level,
+            macd_signal=macd_signal,
+            volume_state=volume_state,
+            bb_position=bb_position,
+            is_weekend=is_weekend,
+            market_sentiment=market_sentiment,
+            order_book_bias=order_book_bias,
+        )
+        query_document = self._build_query_document(
+            trend_direction=trend_direction,
+            adx=adx,
+            rsi=rsi,
+            volatility_level=volatility_level,
+            rsi_level=rsi_level,
+            macd_signal=macd_signal,
+            volume_state=volume_state,
+            bb_position=bb_position,
+            market_sentiment=market_sentiment,
+            order_book_bias=order_book_bias,
+        )
+        vector_context = self.vector_memory.get_context_for_prompt(
+            query_document, k, display_context=context_query
+        )
+        if not vector_context:
+            return ""
+        stats = self.vector_memory.get_stats_for_context(query_document, k=20)
+        if stats["total_trades"] > 0:
+            vector_context += (
+                "### Learned Stats for This Context:\n"
+                f"- Win Rate in similar conditions: {stats['win_rate']:.0f}% "
+                f"({stats['total_trades']} trades)\n"
+                f"- Avg P&L: {stats['avg_pnl']:+.2f}%\n"
+            )
+        return vector_context

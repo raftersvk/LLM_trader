@@ -167,7 +167,10 @@ def classify_macd_signal(technical_data: dict[str, Any]) -> str:
 
 def classify_volume_state(technical_data: dict[str, Any]) -> str:
     """Classify volume flow from the net signed volume ratio over the trailing window."""
-    net_flow_ratio = technical_data.get("net_flow_ratio", 0.0)
+    net_flow_ratio = technical_data.get("net_flow_ratio")
+    if net_flow_ratio is None:
+        # Fork's persisted snapshots use the OBV slope for the same signal.
+        net_flow_ratio = technical_data.get("obv_slope", 0.0)
     return "ACCUMULATION" if net_flow_ratio > 0.5 else ("DISTRIBUTION" if net_flow_ratio < -0.5 else "NORMAL")
 
 

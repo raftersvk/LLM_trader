@@ -1,6 +1,7 @@
 """Trading strategy that wraps analysis with position management."""
 
 import asyncio
+import json
 import math
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -68,6 +69,8 @@ class TradingStrategy(ExecutorReconciliationMixin, PositionManagementMixin):
         tightening_policy: StopLossTighteningPolicy | None = None,
         guard_pipeline: GuardPipeline | None = None,
         post_mortem_service: Any | None = None,
+        position_factory: Any | None = None,
+        portfolio_capital_service: Any | None = None,
     ):
         """Initialize the trading strategy with DI pattern."""
         self.logger = logger
@@ -78,6 +81,8 @@ class TradingStrategy(ExecutorReconciliationMixin, PositionManagementMixin):
         self.risk_manager = risk_manager
         self.config = config
         self.extractor = position_extractor
+        self.position_factory = position_factory
+        self.portfolio_capital_service = portfolio_capital_service
         self.dashboard_state = dashboard_state
 
         self._conditions = conditions_extractor
@@ -91,6 +96,14 @@ class TradingStrategy(ExecutorReconciliationMixin, PositionManagementMixin):
         self._last_executor_position_payload: dict | None = None
 
         self.current_position: Position | None = self.persistence.load_position()
+        if self.current_position and self.portfolio_capital_service:
+            self.portfolio_capital_service.reserve_position(
+                symbol=self.current_position.symbol,
+                quote_amount=self.current_position.quote_amount,
+                entry_price=self.current_position.entry_price,
+                quantity=self.current_position.size,
+                direction=self.current_position.direction,
+            )
 
         self._executor_side_exit_reason: str | None = None
         self._state_divergence: str | None = None
@@ -524,6 +537,18 @@ class TradingStrategy(ExecutorReconciliationMixin, PositionManagementMixin):
             self.statistics_service.recalculate(self.config.DEMO_QUOTE_CAPITAL)
         except Exception as e:  # noqa: BLE001
             self.logger.error("Error recalculating statistics: %s", e)
+
+        # Release capital from shared portfolio tracking (multi-pair fork feature).
+        if self.portfolio_capital_service:
+            try:
+                net_pnl = self._calculate_net_pnl_quote(
+                    closed_position, current_price, exit_fee or 0.0
+                )
+            except Exception:  # noqa: BLE001
+                self.logger.warning("Could not compute net P&L for portfolio release", exc_info=True)
+                net_pnl = 0.0
+            self.portfolio_capital_service.release_position(closed_position.symbol, net_pnl)
+
         await self.persistence.async_save_position(None)
         self.current_position = None
 
@@ -592,8 +617,10 @@ class TradingStrategy(ExecutorReconciliationMixin, PositionManagementMixin):
                 self.logger.error("Invalid current_price extracted, cannot process trade")
                 return None
 
-            signal, confidence, stop_loss, take_profit, position_size, reasoning = \
-                self.extractor.extract_trading_info(analysis)  # type: ignore
+            # Fork extractor accepts raw AI text (7-tuple including symbol) and
+            # parsed payloads (6-tuple); upstream passes the parsed payload.
+            extracted = self.extractor.extract_trading_info(analysis)  # type: ignore
+            signal, confidence, stop_loss, take_profit, position_size, reasoning = extracted[:6]
 
             self.logger.info("Extracted Signal: %s, Confidence: %s", signal, confidence)
 
@@ -710,12 +737,32 @@ class TradingStrategy(ExecutorReconciliationMixin, PositionManagementMixin):
             lines.append("- Execution is not confirmed. Local SL/TP values are a mirror, not proof of exchange protection.")
         return lines
 
+    @staticmethod
+    def _calculate_net_pnl_quote(
+        position: Position, current_price: float, closing_fee: float
+    ) -> float:
+        """Convert a position's P&L percentage into a net quote-currency amount.
+
+        ``Position.calculate_pnl`` returns a percentage, whereas portfolio
+        capital accounting expects a quote-currency amount. Convert the
+        direction-aware price delta with the position quantity and deduct the
+        entry and closing fees so realised equity matches reality.
+        """
+        if position.direction == "LONG":
+            pnl_quote = (current_price - position.entry_price) * position.size
+        else:  # SHORT
+            pnl_quote = (position.entry_price - current_price) * position.size
+        return pnl_quote - (position.entry_fee or 0.0) - (closing_fee or 0.0)
+
     def get_position_context(self, current_price: float | None = None) -> str:
         """Get formatted context about current position for prompts.
         Returns:
             Formatted position context string with capital status
         """
-        capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
+        if self.portfolio_capital_service:
+            capital = self.portfolio_capital_service.current_capital
+        else:
+            capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
         currency = self.config.QUOTE_CURRENCY
 
         capital_header = [

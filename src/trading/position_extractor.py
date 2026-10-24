@@ -84,15 +84,21 @@ class PositionExtractor:
         # Try raw extraction without unwrapping
         return self.unified_parser.extract_json_block(text)
 
-    def extract_trading_info(self, text: str) -> Tuple[str, str, Optional[float], Optional[float], Optional[float], str, Optional[str]]:
-        """Extract trading information from AI response.
+    def extract_trading_info(self, text):
+        """Extract trading information from an AI response or a parsed payload.
 
         Args:
-            text: AI response text
+            text: AI response text, or an already-parsed analysis dict (upstream
+                callers pass the parsed payload).
 
         Returns:
-            Tuple of (signal, confidence, stop_loss, take_profit, position_size, reasoning, symbol)
+            Tuple of (signal, confidence, stop_loss, take_profit, position_size,
+            reasoning, symbol). A dict input returns a 6-tuple without the symbol,
+            matching the upstream contract.
         """
+        if isinstance(text, dict):
+            return self._extract_from_dict(text)[:6]
+
         # First try JSON extraction
         json_data = self.extract_from_json(text)
         if json_data:
@@ -113,12 +119,7 @@ class PositionExtractor:
         signal = str(data.get("signal", data.get("action", "HOLD"))).upper()
 
         # Confidence can be numeric (0-100) or string (HIGH/MEDIUM/LOW)
-        confidence_raw = data.get("confidence", "MEDIUM")
-        if isinstance(confidence_raw, (int, float)):
-            # Convert numeric confidence to string
-            confidence = self._numeric_to_confidence_string(confidence_raw)
-        else:
-            confidence = str(confidence_raw).upper()
+        confidence = self._confidence_label(data.get("confidence", "MEDIUM"))
 
         stop_loss = data.get("stop_loss")
         if stop_loss is not None:
@@ -130,7 +131,12 @@ class PositionExtractor:
 
         position_size = data.get("position_size")
         if position_size is not None:
-            position_size = float(str(position_size).replace("%", "")) / 100
+            raw_size = str(position_size).strip()
+            if "%" in raw_size:
+                # Legacy AI text gives a percentage; the parser already emits fractions.
+                position_size = float(raw_size.replace("%", "").replace(",", "")) / 100
+            else:
+                position_size = float(raw_size.replace(",", ""))
 
         reasoning = str(data.get("reasoning", data.get("rationale", "")))
 
@@ -140,6 +146,14 @@ class PositionExtractor:
             symbol = str(symbol).upper()
 
         return signal, confidence, stop_loss, take_profit, position_size, reasoning, symbol
+
+    def _confidence_label(self, value: Any) -> str:
+        """Map a numeric confidence (0-100) or an already-labelled string."""
+        if isinstance(value, bool):
+            return "MEDIUM"
+        if isinstance(value, (int, float)):
+            return self._numeric_to_confidence_string(float(value))
+        return str(value).upper()
 
     def _numeric_to_confidence_string(self, confidence: float) -> str:
         """Convert numeric confidence (0-100) to string (HIGH/MEDIUM/LOW).
@@ -223,5 +237,8 @@ class PositionExtractor:
         Returns:
             True if valid signal
         """
-        valid_signals = {"BUY", "SELL", "HOLD", "CLOSE", "CLOSE_LONG", "CLOSE_SHORT", "UPDATE"}
+        valid_signals = {
+            "BUY", "SELL", "HOLD", "CLOSE", "CLOSE_LONG", "CLOSE_SHORT", "UPDATE",
+            "LONG", "SHORT",
+        }
         return signal.upper() in valid_signals

@@ -164,7 +164,7 @@ class Position(SerializableMixin):
     confidence: str
     direction: str
     symbol: str
-    conditions_at_entry: MarketConditions
+    conditions_at_entry: MarketConditions | None = None
     confluence_factors: tuple = field(default_factory=tuple)
     entry_fee: float | None = None
     entry_execution_quality: dict[str, Any] | None = None
@@ -191,6 +191,15 @@ class Position(SerializableMixin):
     max_drawdown_pct: float = 0.0
     max_profit_pct: float = 0.0
     regime_profile: str = "NEUTRAL"
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Position":
+        """Rehydrate a Position, rebuilding the nested MarketConditions snapshot."""
+        payload = dict(data)
+        conditions = payload.get("conditions_at_entry")
+        if isinstance(conditions, dict):
+            payload["conditions_at_entry"] = MarketConditions.from_dict(conditions)
+        return SerializableMixin.from_dict.__func__(cls, payload)
 
     def calculate_pnl(self, current_price: float) -> float:
         """Calculate unrealized P&L percentage."""

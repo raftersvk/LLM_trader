@@ -288,6 +288,8 @@ class PositionManagementMixin:
             intent.transition_to(OrderLifecycle.READY_FOR_REVIEW, reason="No guard pipeline configured")
             return None
         capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
+        if getattr(self, "portfolio_capital_service", None):
+            capital = self.portfolio_capital_service.get_available_capital(intent.symbol, 0)
         guard_results = self.guard_pipeline.evaluate(intent, capital=capital, config=self.config)
         failed = [result for result in guard_results if not result.passed]
         if not failed:
@@ -411,6 +413,14 @@ class PositionManagementMixin:
             return rejected
 
         capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
+        if getattr(self, "portfolio_capital_service", None):
+            # Multi-pair fork: size against the capital left after other pairs.
+            capital = self.portfolio_capital_service.get_available_capital(symbol, 0)
+            self.logger.info(
+                "Using shared portfolio capital: $%s available (total: $%s)",
+                f"{capital:,.2f}",
+                f"{self.portfolio_capital_service.current_capital:,.2f}",
+            )
         risk = self.risk_manager.calculate_entry_parameters(
             signal=signal,
             current_price=current_price,
@@ -461,6 +471,25 @@ class PositionManagementMixin:
 
         mc = market_conditions
         ec = build_exit_execution_context_from_config(self.config, self.config.TIMEFRAME)
+
+        # Reserve capital in shared portfolio tracking before opening. The
+        # availability check above is not atomic: another pair may have
+        # reserved the funds meanwhile, so refuse to open in that case.
+        if getattr(self, "portfolio_capital_service", None):
+            reserved = self.portfolio_capital_service.reserve_position(
+                symbol=symbol,
+                quote_amount=quote_amount,
+                entry_price=current_price,
+                quantity=quantity,
+                direction=direction,
+            )
+            if not reserved:
+                self.logger.warning(
+                    "Order rejected: could not reserve $%s for %s (insufficient unallocated capital)",
+                    f"{quote_amount:,.2f}", symbol,
+                )
+                return None
+
         self.current_position = Position(
             entry_price=risk.entry_price,
             stop_loss=risk.stop_loss,

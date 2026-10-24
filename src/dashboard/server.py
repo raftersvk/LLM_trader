@@ -24,6 +24,8 @@ from .log_stream import LogStreamManager
 from .routers import brain, monitor, performance, visuals, ws_router
 from .routers.admin import AdminRouter
 from .routers.console import ConsoleRouter
+from .routers.portfolio import PortfolioRouter
+from .routers.system import SystemRouter
 
 
 class DashboardServer:
@@ -47,6 +49,9 @@ class DashboardServer:
         admin_credentials=None,
         post_mortem_repo=None,
         connection_manager=None,
+        engine_registry=None,
+        vector_memory_registry=None,
+        multi_pair_manager=None,
     ):
         self.brain_service = brain_service
         self.vector_memory = vector_memory
@@ -59,6 +64,9 @@ class DashboardServer:
         self.post_mortem_repo = post_mortem_repo
         self.host = host
         self.port = port
+        self.engine_registry = engine_registry
+        self.vector_memory_registry = vector_memory_registry
+        self.multi_pair_manager = multi_pair_manager
         self.server_task = None
         self._server = None
         self.dashboard_state = DashboardState(connection_manager=connection_manager)
@@ -175,6 +183,7 @@ class DashboardServer:
             persistence=self.persistence,
             exchange_manager=self.exchange_manager,
             post_mortem_repo=self.post_mortem_repo,
+            vector_memory_registry=self.vector_memory_registry,
         )
         rag_engine = self.analysis_engine.rag_engine if self.analysis_engine else None
 
@@ -203,6 +212,23 @@ class DashboardServer:
         app.include_router(visuals_router.router)
         app.include_router(performance_router.router)
         app.include_router(websocket_router.router)
+
+        # Multi-pair fork routers (portfolio overview + system controls).
+        portfolio_router = PortfolioRouter(
+            config=self.config,
+            logger=self.logger,
+            dashboard_state=self.dashboard_state,
+            engine_registry=self.engine_registry,
+            vector_memory_registry=self.vector_memory_registry,
+        )
+        system_router = SystemRouter(
+            config=self.config,
+            logger=self.logger,
+            dashboard_state=self.dashboard_state,
+            multi_pair_manager=self.multi_pair_manager,
+        )
+        app.include_router(portfolio_router.router)
+        app.include_router(system_router.router)
 
         admin_router = AdminRouter(
             writable_config=self.writable_config,
@@ -298,6 +324,9 @@ class DashboardServer:
             _uv_logger.propagate = False
 
         self.server_task = asyncio.create_task(self._run_server())
+        # Yield once so the server task starts (and captures a bind error) before
+        # the caller resumes; this keeps start() non-blocking for trading loops.
+        await asyncio.sleep(0)
         return self.server_task
 
     async def _run_server(self):
@@ -306,6 +335,8 @@ class DashboardServer:
             await self._server.serve()  # type: ignore[reportOptionalMemberAccess]
         except asyncio.CancelledError:
             pass
+        except Exception as exc:  # noqa: BLE001
+            self.logger.error("Dashboard server failed to run: %s", exc)
 
     async def stop(self):
         """Stop the dashboard server gracefully.
