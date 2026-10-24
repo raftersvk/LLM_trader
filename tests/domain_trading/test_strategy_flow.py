@@ -1618,17 +1618,21 @@ class TestConditionsAndPriceExtraction:
         assert conditions.trend_strength == 50.0
 
     @pytest.mark.parametrize(
-        ("frozen_day", "expected"),
+        "frozen_day",
         [
-            (datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc), True),
-            (datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc), False),
+            datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc),
+            datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc),
         ],
         ids=["saturday", "monday"],
     )
-    def test_extract_market_conditions_marks_the_weekend_from_utc(
-        self, frozen_day: datetime, expected: bool, monkeypatch: pytest.MonkeyPatch
+    def test_extract_market_conditions_never_marks_the_weekend(
+        self, frozen_day: datetime, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """is_weekend drives brain matching, so it must follow the UTC weekday."""
+        """Crypto trades 24/7: the neutral calendar helper always reports False.
+
+        ``is_weekend`` is kept on the upstream-owned structure so future upstream
+        syncs stay conflict-free, but it must never become True.
+        """
         import src.trading.market_conditions_extractor as extractor_module
 
         class _FrozenDatetime(datetime):
@@ -1640,7 +1644,7 @@ class TestConditionsAndPriceExtraction:
 
         conditions = MarketConditionsExtractor(null_logger()).extract_market_conditions({})
 
-        assert conditions.is_weekend is expected
+        assert conditions.is_weekend is False
 
     def test_build_conditions_from_position_returns_the_entry_snapshot(self) -> None:
         """The close path hands back the entry snapshot verbatim, not a reconstruction."""
