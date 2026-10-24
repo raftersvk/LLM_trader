@@ -252,6 +252,43 @@ async def test_replay_passes_candle_close_to_engine_and_drops_article_urls():
 
 
 @pytest.mark.asyncio
+async def test_replay_restore_restores_article_url_state():
+    """restore() must undo every article-URL mutation made by install()."""
+    timestamps = [datetime(2026, 10, 21, 0, 0, tzinfo=timezone.utc)]
+    candles = np.array([[0.0, 100.0, 110.0, 90.0, 105.0, 1000.0]])
+
+    engine = _ClockEngine()
+    original_engine_urls = {"current": "https://example.invalid/now"}
+    original_collector_urls = {"collector": "https://example.invalid/collector"}
+    engine.article_urls = original_engine_urls
+    engine.data_collector.article_urls = original_collector_urls
+    injector = ReplayDataInjector(
+        PairAnalyzer(engine=engine, symbol="BTC/USDT", timeframe="1h"), candles, timestamps,
+    )
+
+    injector.install()
+    assert engine.article_urls == {}
+    assert engine.data_collector.article_urls == {}
+    injector.restore()
+    assert engine.article_urls is original_engine_urls
+    assert engine.data_collector.article_urls is original_collector_urls
+
+    # A collector that had no article_urls attribute must not keep the added {}.
+    engine_without_attr = _ClockEngine()
+    del engine_without_attr.data_collector.article_urls
+    injector = ReplayDataInjector(
+        PairAnalyzer(engine=engine_without_attr, symbol="BTC/USDT", timeframe="1h"),
+        candles,
+        timestamps,
+    )
+
+    injector.install()
+    assert engine_without_attr.data_collector.article_urls == {}
+    injector.restore()
+    assert not hasattr(engine_without_attr.data_collector, "article_urls")
+
+
+@pytest.mark.asyncio
 async def test_live_analysis_uses_candle_close_clock_not_wall_clock():
     """Live analyses for a closed candle also use that candle's close."""
     engine = _ClockEngine()

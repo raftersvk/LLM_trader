@@ -802,6 +802,8 @@ class ReplayDataInjector:
         self._original_enrich = None
         self._original_article_snapshot = None
         self._original_collector_article_urls = None
+        self._collector_had_article_urls = False
+        self._original_engine_article_urls: Any = {}
 
     def install(self) -> None:
         """Bypass live collection and live enrichment for this engine."""
@@ -823,16 +825,17 @@ class ReplayDataInjector:
         # article URLs describe today, not the replayed candle. Neutralize both
         # the snapshot source and the collector's cached URLs, then restore on
         # exit so live behaviour is unchanged.
-        self._original_collector_article_urls = getattr(engine.data_collector, "article_urls", None)
-        try:
-            engine.data_collector.article_urls = {}
-        except AttributeError:
-            self._original_collector_article_urls = None
+        collector = engine.data_collector
+        self._collector_had_article_urls = hasattr(collector, "article_urls")
+        if self._collector_had_article_urls:
+            self._original_collector_article_urls = collector.article_urls
+        collector.article_urls = {}
         rag_engine = getattr(engine, "rag_engine", None)
         snapshot = getattr(rag_engine, "get_latest_article_urls_snapshot", None)
         if callable(snapshot):
             self._original_article_snapshot = snapshot
             rag_engine.get_latest_article_urls_snapshot = lambda: {}  # type: ignore[assignment]
+        self._original_engine_article_urls = getattr(engine, "article_urls", {})
         engine.article_urls = {}
 
         # Bind the same use_news/use_chart ablation flags as the run command;
@@ -849,8 +852,14 @@ class ReplayDataInjector:
             engine.data_collector.collect_data = self._original_collect
         if self._original_enrich is not None:
             engine._enrich_market_context = self._original_enrich
-        if self._original_collector_article_urls is not None:
+        if self._collector_had_article_urls:
             engine.data_collector.article_urls = self._original_collector_article_urls
+        else:
+            try:
+                del engine.data_collector.article_urls
+            except AttributeError:
+                pass
+        engine.article_urls = self._original_engine_article_urls
         if self._original_article_snapshot is not None:
             engine.rag_engine.get_latest_article_urls_snapshot = self._original_article_snapshot
 
