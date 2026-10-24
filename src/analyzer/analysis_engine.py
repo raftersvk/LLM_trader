@@ -37,6 +37,45 @@ if TYPE_CHECKING:
     from src.rag import RagEngine
 
 
+def _normalize_market_context(market_context: Any) -> str:
+    """Normalize retrieved market context into prompt-ready text.
+
+    Most RAG engines return a plain string, but replay/ablation callers may
+    return a ``(text, urls)`` tuple instead. Passing that tuple to
+    ``PromptBuilder.add_custom_instruction`` used to raise ``TypeError`` during
+    prompt rendering, which silently degraded the analysis to HOLD.
+
+    Only real text parts are kept: the URLs payload of a ``(text, urls)``
+    return is not prompt material, and an empty text part yields an empty
+    string so the caller can skip the custom instruction entirely.
+
+    Args:
+        market_context: Retrieved context as text, or a sequence of parts.
+
+    Returns:
+        The context text flattened into a single string, or ``""`` when the
+        value carries no text.
+    """
+    if isinstance(market_context, str):
+        return market_context
+    if market_context is None:
+        return ""
+    if isinstance(market_context, (tuple, list)):
+        text_parts: list[str] = []
+        for part in market_context:
+            if isinstance(part, str):
+                text_parts.append(part)
+            elif isinstance(part, (tuple, list)):
+                nested = _normalize_market_context(part)
+                if nested:
+                    text_parts.append(nested)
+            # Non-text payloads (such as the URLs mapping) are not prompt material.
+        return "\n".join(text_parts)
+    # Never stringify arbitrary objects: an unexpected payload carries no
+    # prompt-ready market context.
+    return ""
+
+
 class AnalysisEngine:
     """Orchestrates market data collection, analysis, and publication"""
 
@@ -228,9 +267,10 @@ class AnalysisEngine:
 
             self.article_urls.update(rag_urls)
 
-            if market_context:
+            market_context_text = _normalize_market_context(market_context)
+            if market_context_text:
                 assert self.prompt_builder is not None
-                self.prompt_builder.add_custom_instruction(market_context)
+                self.prompt_builder.add_custom_instruction(market_context_text)
             else:
                 self.logger.warning("No market context available for %s", self.symbol)
 
