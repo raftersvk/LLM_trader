@@ -163,6 +163,16 @@ audit that invalidated the old comparison. The bootstrap is seeded
 The wider OOS sample is small (6-7 trades), so the CIs are wide. That is the
 honest result: with these data, neither symbol demonstrates a net edge.
 
+A positive **point estimate** is never reported as an edge while its CI still
+contains zero. The verdict is gated on every cost bucket's bootstrap CI:
+`positive at all tested costs (CI excludes zero)` is emitted only when every
+`cost_pct[*].net_ci95.low > 0`. Otherwise the report says
+`no demonstrated edge (CI includes zero)`. The report exposes
+`all_positive`, `ci_excludes_zero` and `demonstrated_edge` alongside the
+verdict. For example, BTC h4 has a positive point estimate at all costs after
+the rework but a CI that includes zero at every cost, so it is reported as
+**no demonstrated edge (CI includes zero)**, not as a positive result.
+
 ### Audit baseline on all labeled states (pre-rework evidence)
 
 The audit that motivated this rework computed economics over all 200 states,

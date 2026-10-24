@@ -564,14 +564,26 @@ def economics_report(
 
     sign_flip = bool(nets) and min(nets) < 0.0 < max(nets)
     any_trades = any(entry["trades"] for entry in costs.values())
+    all_positive = bool(nets) and all(net > 0.0 for net in nets)
+    # A positive point estimate is not an edge unless the bootstrap CI excludes
+    # zero at every tested cost. A CI that still contains zero is the honest
+    # "not demonstrated" outcome, not a positive verdict.
+    ci_excludes_zero = all_positive and all(
+        entry["net_ci95"] is not None
+        and entry["net_ci95"].get("low") is not None
+        and entry["net_ci95"]["low"] > 0.0
+        for entry in costs.values()
+    )
     if not any_trades:
         verdict = "no demonstrated edge (no OOS trades)"
     elif sign_flip:
         verdict = "no demonstrated edge (cost-sensitive sign flip)"
-    elif all(net > 0.0 for net in nets):
-        verdict = "positive at all tested costs"
-    else:
+    elif not all_positive:
         verdict = "no demonstrated edge (non-positive at all tested costs)"
+    elif not ci_excludes_zero:
+        verdict = "no demonstrated edge (CI includes zero)"
+    else:
+        verdict = "positive at all tested costs (CI excludes zero)"
     return {
         "evaluated_on": "oos",
         "oos_fraction": ECONOMICS_OOS_FRACTION,
@@ -583,6 +595,9 @@ def economics_report(
         "oos_last": oos[-1].candle_open_time or oos[-1].as_of if oos else None,
         "cost_pct": costs,
         "sign_flip": sign_flip,
+        "all_positive": all_positive,
+        "ci_excludes_zero": ci_excludes_zero,
+        "demonstrated_edge": ci_excludes_zero,
         "verdict": verdict,
     }
 

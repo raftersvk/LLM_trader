@@ -727,3 +727,33 @@ def test_build_report_is_deterministic():
         records, _source_args(), (1, 2), "2026-10-15T00:00:00Z", 0.0, False, None, "test"
     )
     assert json.dumps(first) == json.dumps(second)
+
+
+def test_economics_positive_point_estimate_with_ci_including_zero_is_not_edge():
+    """A positive point estimate is not an edge while its CI contains zero."""
+    records = _tail_records(0.0015)
+    for record, forward in zip(records[-3:], (0.02, -0.005, 0.01)):
+        record.forward_returns[1] = forward
+        record.base_direction_correct[1] = forward > 0
+        record.worth_trading[1] = abs(forward) * 100.0 >= 1.0
+
+    economics = jev_calibration.economics_report(records, horizon=1)
+
+    assert economics["all_positive"] is True
+    assert economics["ci_excludes_zero"] is False
+    assert economics["demonstrated_edge"] is False
+    assert economics["verdict"] == "no demonstrated edge (CI includes zero)"
+    assert all(
+        entry["net_ci95"]["low"] <= 0.0
+        for entry in economics["cost_pct"].values()
+    )
+
+
+def test_economics_positive_verdict_requires_ci_excluding_zero():
+    """The positive verdict is reserved for a CI that excludes zero."""
+    economics = jev_calibration.economics_report(_tail_records(0.02), horizon=1)
+
+    assert economics["all_positive"] is True
+    assert economics["ci_excludes_zero"] is True
+    assert economics["demonstrated_edge"] is True
+    assert economics["verdict"] == "positive at all tested costs (CI excludes zero)"

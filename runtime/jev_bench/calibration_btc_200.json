@@ -373,6 +373,9 @@
           }
         },
         "sign_flip": true,
+        "all_positive": false,
+        "ci_excludes_zero": false,
+        "demonstrated_edge": false,
         "verdict": "no demonstrated edge (cost-sensitive sign flip)"
       },
       "threshold_curve": [
@@ -586,6 +589,9 @@
           }
         },
         "sign_flip": true,
+        "all_positive": false,
+        "ci_excludes_zero": false,
+        "demonstrated_edge": false,
         "verdict": "no demonstrated edge (cost-sensitive sign flip)"
       },
       "threshold_curve": [
@@ -799,6 +805,9 @@
           }
         },
         "sign_flip": true,
+        "all_positive": false,
+        "ci_excludes_zero": false,
+        "demonstrated_edge": false,
         "verdict": "no demonstrated edge (cost-sensitive sign flip)"
       },
       "threshold_curve": [
@@ -1012,7 +1021,10 @@
           }
         },
         "sign_flip": false,
-        "verdict": "positive at all tested costs"
+        "all_positive": true,
+        "ci_excludes_zero": false,
+        "demonstrated_edge": false,
+        "verdict": "no demonstrated edge (CI includes zero)"
       },
       "threshold_curve": [
         {

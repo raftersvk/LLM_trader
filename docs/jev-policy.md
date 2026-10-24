@@ -217,7 +217,10 @@ Consequences for this policy layer:
    rework. No gate or threshold behavior changes.
 2. Do not promote a weekly threshold on the strength of in-sample precision or
    a single cost assumption. Promotion must survive the existing held-out OOS
-   improvement rule, and a cost-sensitive sign flip is a rejection.
+   improvement rule, and a cost-sensitive sign flip is a rejection. The
+   calibration report only calls a positive result an edge when every tested
+   cost bucket's bootstrap net CI excludes zero; a positive point estimate with
+   a CI spanning zero is reported as "no demonstrated edge (CI includes zero)".
 3. Do not read `metrics.brier` / `metrics.raw_brier` in a policy as evidence of
    skill by themselves; the policy label is the directional trade-P&L label,
    but the sample is still small and the calibration doc's class-imbalance
