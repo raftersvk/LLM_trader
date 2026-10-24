@@ -3,8 +3,11 @@
 Manages statistics state, recalculation, and context formatting.
 """
 
+import math
 from typing import TYPE_CHECKING
+
 from src.logger.logger import Logger
+
 from .statistics_calculator import StatisticsCalculator
 
 if TYPE_CHECKING:
@@ -22,27 +25,15 @@ class TradingStatisticsService:
     """
 
     def __init__(self, logger: Logger, persistence: "PersistenceManager"):
-        """Initialize trading statistics service.
-
-        Args:
-            logger: Logger instance
-            persistence: Persistence service for loading/saving statistics and trade history
-        """
+        """Initialize trading statistics service."""
         self.logger = logger
         self.persistence = persistence
         self.statistics = persistence.load_statistics()
-
-    async def async_reload(self) -> None:
-        """Asynchronously reload statistics from persistence layer."""
-        self.statistics = await self.persistence.async_load_statistics()
 
     def recalculate(self, initial_capital: float = 10000.0) -> None:
         """Recalculate all statistics from trade history.
 
         Should be called after every closed trade.
-
-        Args:
-            initial_capital: Starting capital for equity curve calculation
         """
         history = self.persistence.load_trade_history()
         self.statistics = StatisticsCalculator.calculate_from_history(history, initial_capital)
@@ -53,10 +44,6 @@ class TradingStatisticsService:
         """Get current capital (initial + realized P&L).
 
         Falls back to initial_capital if no statistics available.
-
-        Args:
-            initial_capital: The starting capital from config (DEMO_QUOTE_CAPITAL)
-
         Returns:
             Current capital accounting for all closed trade P&L
         """
@@ -80,10 +67,14 @@ class TradingStatisticsService:
             f"- Avg Trade: {stats.avg_trade_pct:+.2f}% | Best: {stats.best_trade_pct:+.2f}% | Worst: {stats.worst_trade_pct:+.2f}%",
             f"- Total P&L: ${stats.total_pnl_quote:+,.2f} ({stats.total_pnl_pct:+.2f}%)",
             f"- Max Drawdown: {stats.max_drawdown_pct:.2f}%",
-            f"- Sharpe Ratio: {stats.sharpe_ratio:.2f} | Sortino: {stats.sortino_ratio:.2f}",
         ]
 
-        if stats.profit_factor > 0 and stats.profit_factor != float('inf'):
+        if math.isfinite(stats.sharpe_ratio) and math.isfinite(stats.sortino_ratio):
+            lines.append(f"- Sharpe Ratio: {stats.sharpe_ratio:.2f} | Sortino: {stats.sortino_ratio:.2f}")
+        elif math.isfinite(stats.sharpe_ratio):
+            lines.append(f"- Sharpe Ratio: {stats.sharpe_ratio:.2f}")
+
+        if stats.profit_factor > 0 and stats.profit_factor != float("inf"):
             lines.append(f"- Profit Factor: {stats.profit_factor:.2f}")
 
         return "\n".join(lines)

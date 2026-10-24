@@ -2,68 +2,61 @@
 import asyncio
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any
 
 from fastapi import APIRouter
 
+from src.managers.cycle_metrics import DEFAULT_RELATIVE_PATH, load_cycles, summarize
+from src.trading.data_models import ENTRY_SIGNALS, EXIT_SIGNALS
 from src.trading.statistics_calculator import StatisticsCalculator, TradingStatistics
 
 
 class PerformanceRouter:
     """Handles performance history and statistics endpoints."""
-    def __init__(self, config, logger, dashboard_state):
+    def __init__(self, config, logger, dashboard_state, persistence=None):
         self.router = APIRouter(prefix="/api/performance", tags=["performance"])
         self.config = config
         self.logger = logger
         self.dashboard_state = dashboard_state
+        self.persistence = persistence
 
         self.router.add_api_route("/history", self.get_performance_history, methods=["GET"])
         self.router.add_api_route("/stats", self.get_statistics, methods=["GET"])
-        self.router.add_api_route("/stats/all", self.get_consolidated_statistics, methods=["GET"])
-        self.router.add_api_route("/trades", self.get_trade_history, methods=["GET"])
-        self.router.add_api_route("/compare", self.get_pair_comparison, methods=["GET"])
+        self.router.add_api_route("/cycles", self.get_cycle_metrics, methods=["GET"])
 
-    def _get_persistence_for_symbol(self, symbol: Optional[str]) -> Any:
-        """Get a PersistenceManager instance for a specific symbol or the primary one."""
-        from src.managers.persistence_manager import PersistenceManager
-        
-        if symbol:
-            safe_symbol = symbol.replace("/", "_").replace("-", "_")
-            data_dir = Path("data/trading/pair_{}".format(safe_symbol))
-        else:
-            # Default to the primary pair for backward compatibility
-            primary_symbol = self.config.CRYPTO_PAIRS[0] if self.config.CRYPTO_PAIRS else self.config.CRYPTO_PAIR
-            safe_symbol = primary_symbol.replace("/", "_").replace("-", "_")
-            data_dir = Path("data/trading/pair_{}".format(safe_symbol))
-        
-        return PersistenceManager(logger=self.logger, data_dir=str(data_dir))
+    async def get_cycle_metrics(self, days: int = 1) -> dict[str, Any]:
+        """Cycle journal summary: counts, HOLD share, latency p50/p95 (no cost yet)."""
+        if self.persistence is None:
+            return summarize([], days=days)
+        path = Path(self.persistence.data_dir) / DEFAULT_RELATIVE_PATH
+        records = await asyncio.to_thread(load_cycles, path)
+        return summarize(records, days=days)
 
-    def _load_json_file(self, file_path: Path) -> Dict[str, Any]:
+    def _load_json_file(self, file_path: Path) -> dict[str, Any]:
         """Load JSON from a file synchronously."""
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             return json.load(f)
 
-    def _default_statistics(self) -> Dict[str, Any]:
+    def _default_statistics(self) -> dict[str, Any]:
         """Return a default statistics payload seeded from configured capital."""
-        initial_capital = getattr(self.config, "DEMO_QUOTE_CAPITAL", 10000.0)
+        initial_capital = self.config.DEMO_QUOTE_CAPITAL
         return TradingStatistics(
             initial_capital=initial_capital,
             current_capital=initial_capital,
         ).to_dict()
 
-    def _process_trade_history(self, trades: list, stats: Dict[str, Any]) -> list:
+    def _process_trade_history(self, trades: list, stats: dict[str, Any]) -> list:
         """Process trade history into an equity curve synchronously."""
         equity_curve = []
         initial_capital = stats.get("initial_capital", 10000.0)
         running_capital = initial_capital
         # pylint: disable=protected-access
-        closed_trades = StatisticsCalculator._extract_closed_trades(trades)
-        closed_trade_idx = 0
+        closed_trades = []
         open_position = None
         for trade in trades:
             ts = trade.get("timestamp")
             action = trade.get("action", "").upper()
-            if action in ("BUY", "SELL"):
+            if action in ENTRY_SIGNALS:
                 open_position = trade
                 equity_curve.append({
                     "time": ts,
@@ -71,10 +64,15 @@ class PerformanceRouter:
                     "action": action,
                     "price": trade.get("price")
                 })
-            elif action in ("CLOSE", "CLOSE_LONG", "CLOSE_SHORT") and open_position:
-                if closed_trade_idx < len(closed_trades):
-                    running_capital += closed_trades[closed_trade_idx].pnl_quote
-                    closed_trade_idx += 1
+            elif action in EXIT_SIGNALS and open_position:
+                closed_trades = StatisticsCalculator._extract_closed_trades([open_position, trade])
+                if closed_trades:
+                    closed = closed_trades[0]
+                    if closed.pnl_quote:
+                        running_capital += closed.pnl_quote
+                    else:
+                        running_capital += running_capital * closed.pnl_pct / 100
+
                 equity_curve.append({
                     "time": ts,
                     "value": round(running_capital, 2),
@@ -84,28 +82,26 @@ class PerformanceRouter:
                 open_position = None
         return equity_curve
 
-    async def get_performance_history(self, symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Get historical performance data for the chart, optionally for a specific symbol."""
+    async def get_performance_history(self) -> dict[str, Any]:
+        """Get historical performance data for the chart."""
         cached = self.dashboard_state.get_cached("performance_history", ttl_seconds=60.0)
         if cached:
             return cached
-
-        persistence = self._get_persistence_for_symbol(symbol)
-        trade_history_file = persistence.data_dir / "trade_history.json"
-        stats_file = persistence.data_dir / "statistics.json"
+        data_dir = self.config.DATA_DIR
+        stats_file = Path(data_dir) / "trading" / "statistics.json"
         equity_curve = []
         stats = self._default_statistics()
         if stats_file.exists():
             try:
                 stats = await asyncio.to_thread(self._load_json_file, stats_file)
             except Exception:
-                self.logger.error("Failed to load stats file for symbol %s", symbol, exc_info=True)
-        if trade_history_file.exists():
+                self.logger.error("Failed to load stats file", exc_info=True)  # noqa: G201
+        if self.persistence:
             try:
-                trades = await asyncio.to_thread(self._load_json_file, trade_history_file)
+                trades = await asyncio.to_thread(self.persistence.load_trade_history)
                 equity_curve = await asyncio.to_thread(self._process_trade_history, trades, stats)
             except Exception:
-                self.logger.error("Failed to process trade history for symbol %s", symbol, exc_info=True)
+                self.logger.error("Failed to process trade history", exc_info=True)  # noqa: G201
                 return {"error": "Failed to load trade history"}
         result = {
             "history": equity_curve,
@@ -114,130 +110,22 @@ class PerformanceRouter:
         self.dashboard_state.set_cached("performance_history", result)
         return result
 
-    async def get_statistics(self, symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Get trading statistics summary for a specific symbol or the primary one."""
-        persistence = self._get_persistence_for_symbol(symbol)
-        stats_file = persistence.data_dir / "statistics.json"
-        if stats_file.exists():
-            try:
-                return await asyncio.to_thread(self._load_json_file, stats_file)
-            except Exception:
-                self.logger.error("Failed to load statistics for symbol %s", symbol, exc_info=True)
-                return {"error": "Failed to load stats"}
-        return self._default_statistics()
-
-    async def get_consolidated_statistics(self) -> Dict[str, Any]:
-        """Get consolidated statistics across all configured pairs."""
-        try:
-            pairs = self.config.CRYPTO_PAIRS
-            if not pairs:
-                return {"error": "No pairs configured"}
-            
-            consolidated_stats = []
-            total_pnl = 0.0
-            total_trades = 0
-            winning_trades = 0
-            
-            for symbol in pairs:
-                persistence = self._get_persistence_for_symbol(symbol)
-                stats_file = persistence.data_dir / "statistics.json"
-                if stats_file.exists():
-                    try:
-                        stats = await asyncio.to_thread(self._load_json_file, stats_file)
-                        # Accumulate for consolidated view
-                        total_pnl += stats.get("total_pnl_quote", 0.0)
-                        total_trades += stats.get("total_trades", 0)
-                        winning_trades += stats.get("winning_trades", 0)
-                        consolidated_stats.append({
-                            "symbol": symbol,
-                            "stats": stats
-                        })
-                    except Exception:
-                        self.logger.error("Failed to load stats for symbol %s", symbol, exc_info=True)
-                        consolidated_stats.append({
-                            "symbol": symbol,
-                            "error": "Failed to load statistics"
-                        })
-                else:
-                    consolidated_stats.append({
-                        "symbol": symbol,
-                        "stats": self._default_statistics()
-                    })
-            
-            win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
-            
-            return {
-                "pairs": consolidated_stats,
-                "consolidated": {
-                    "total_pnl_quote": total_pnl,
-                    "total_trades": total_trades,
-                    "winning_trades": winning_trades,
-                    "win_rate": win_rate
-                }
-            }
-        except Exception:
-            self.logger.error("Failed to generate consolidated statistics", exc_info=True)
-            return {"error": "Failed to generate consolidated statistics"}
-
-    async def get_trade_history(self, symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Get trade history for a specific pair or all pairs."""
-        if symbol:
-            persistence = self._get_persistence_for_symbol(symbol)
-            trade_file = persistence.data_dir / "trade_history.json"
-            if trade_file.exists():
-                try:
-                    trades = await asyncio.to_thread(self._load_json_file, trade_file)
-                    return {"symbol": symbol, "trades": trades or []}
-                except Exception:
-                    self.logger.error("Failed to load trade history for %s", symbol, exc_info=True)
-            return {"symbol": symbol, "trades": []}
-
-        all_trades = []
-        for sym in self.config.CRYPTO_PAIRS:
-            persistence = self._get_persistence_for_symbol(sym)
-            trade_file = persistence.data_dir / "trade_history.json"
-            if trade_file.exists():
-                try:
-                    trades = await asyncio.to_thread(self._load_json_file, trade_file)
-                    if trades:
-                        for t in trades:
-                            t["symbol"] = sym
-                        all_trades.extend(trades)
-                except Exception:
-                    self.logger.error("Failed to load trade history for %s", sym, exc_info=True)
-        all_trades.sort(key=lambda t: t.get("timestamp", ""), reverse=True)
-        return {"symbol": None, "trades": all_trades}
-
-    async def get_pair_comparison(self) -> Dict[str, Any]:
-        """Get comparison metrics across all pairs."""
-        cached = self.dashboard_state.get_cached("pair_comparison", ttl_seconds=60.0)
+    async def get_statistics(self) -> dict[str, Any]:
+        """Get trading statistics summary."""
+        cached = self.dashboard_state.get_cached("statistics", ttl_seconds=60.0)
         if cached:
             return cached
+        data_dir = self.config.DATA_DIR
+        stats_file = Path(data_dir) / "trading" / "statistics.json"
+        if stats_file.exists():
+            try:
+                result = await asyncio.to_thread(self._load_json_file, stats_file)
+                self.dashboard_state.set_cached("statistics", result)
+                return result
+            except Exception:
+                self.logger.error("Failed to load statistics", exc_info=True)  # noqa: G201
+                return {"error": "Failed to load stats"}
+        result = self._default_statistics()
+        self.dashboard_state.set_cached("statistics", result)
+        return result
 
-        pairs = self.config.CRYPTO_PAIRS
-        comparison = []
-        for sym in pairs:
-            persistence = self._get_persistence_for_symbol(sym)
-            stats_file = persistence.data_dir / "statistics.json"
-            if stats_file.exists():
-                try:
-                    stats = await asyncio.to_thread(self._load_json_file, stats_file)
-                    comparison.append({
-                        "symbol": sym,
-                        "total_pnl_quote": stats.get("total_pnl_quote", 0.0),
-                        "total_pnl_pct": stats.get("total_pnl_pct", 0.0),
-                        "total_trades": stats.get("total_trades", 0),
-                        "win_rate": stats.get("win_rate", 0),
-                        "sharpe_ratio": stats.get("sharpe_ratio", 0),
-                        "profit_factor": stats.get("profit_factor", 0),
-                        "max_drawdown_pct": stats.get("max_drawdown_pct", 0),
-                        "current_capital": stats.get("current_capital", 0),
-                    })
-                except Exception:
-                    self.logger.error("Failed to load stats for %s", sym, exc_info=True)
-                    comparison.append({"symbol": sym, "error": "Failed to load stats"})
-            else:
-                comparison.append({"symbol": sym, **self._default_statistics()})
-
-        self.dashboard_state.set_cached("pair_comparison", {"pairs": comparison})
-        return {"pairs": comparison}

@@ -1,55 +1,50 @@
-// Sort state
 let currentSort = {
     by: 'date',
     order: 'desc'
 };
 
 export async function initVectorPanel() {
-    // Expose sort handler globally
     window.vectorSort = async (field) => {
         if (currentSort.by === field) {
             currentSort.order = currentSort.order === 'desc' ? 'asc' : 'desc';
         } else {
             currentSort.by = field;
-            currentSort.order = 'desc'; // Default to desc for new field
+            currentSort.order = 'desc'; 
         }
         await updateVectorData();
     };
 
-    // Initial load
     await updateVectorData();
 }
 
 export async function updateVectorData() {
     try {
-        const symbol = window.state?.currentPair;
-        const symbolParam = symbol && symbol !== '__global__' ? `&symbol=${encodeURIComponent(symbol)}` : '';
-        const [vectorResponse, rulesResponse] = await Promise.all([
-            fetch(`/api/brain/vectors?limit=50&sort_by=${currentSort.by}&order=${currentSort.order}${symbolParam}`),
-            fetch(`/api/brain/rules${symbol && symbol !== '__global__' ? `?symbol=${encodeURIComponent(symbol)}` : ''}`)
+        const [vectorResponse, rulesResponse, blockedResponse] = await Promise.all([
+            fetch(`/api/brain/vectors?limit=50&sort_by=${currentSort.by}&order=${currentSort.order}`),
+            fetch('/api/brain/rules'),
+            fetch('/api/brain/blocked-trades?limit=10')
         ]);
         const data = await vectorResponse.json();
         const rulesData = rulesResponse.ok ? await rulesResponse.json() : [];
+        const blockedData = blockedResponse.ok ? await blockedResponse.json() : { blocked_trades: [] };
 
-        renderVectorPanel(data, rulesData);
+        renderVectorPanel(data, rulesData, blockedData);
     } catch (e) {
         console.error("Failed to fetch vector data", e);
         renderEmptyState();
     }
 }
 
-function renderVectorPanel(data, rulesData) {
+function renderVectorPanel(data, rulesData, blockedData) {
     const container = document.getElementById('vector-content');
     if (!container) return;
 
-    // Save focus state before re-render
     const activeElement = document.activeElement;
     let focusedSortField = null;
     if (activeElement && activeElement.classList.contains('sortable-header')) {
         focusedSortField = activeElement.getAttribute('data-sort');
     }
 
-    // Build context indicator
     let readableContext = data.current_context || '';
     if (readableContext.includes('+')) {
         const parts = readableContext.split('+').map(p => escapeHtml(p.trim()));
@@ -64,18 +59,34 @@ function renderVectorPanel(data, rulesData) {
            </div>`
         : '';
 
-    // Build stats cards
+    const gate = data.evidence_gate;
+    const gateHtml = gate
+        ? `<span style="color: ${gate.limited ? 'var(--accent-warning)' : 'var(--text-muted)'};" title="The brain treats its recall as evidence only after ${escapeHtml(String(gate.min_trades))} closed trades; below that, matches are flagged as anecdotes.">${gate.limited
+            ? `⚠ Evidence ${escapeHtml(String(gate.trade_count))}/${escapeHtml(String(gate.min_trades))} trades — limited inference`
+            : `✓ Evidence ${escapeHtml(String(gate.trade_count))} trades — full inference`}</span>`
+        : '';
+    const freshnessHtml = `
+        <div class="vector-freshness" aria-live="polite">
+            <span>${escapeHtml(String(data.experience_count || 0))} experiences</span>
+            <span>${escapeHtml(String(data.rule_count || 0))} active rules</span>
+            ${gateHtml}
+            <span>Refreshed ${new Intl.DateTimeFormat(navigator.language, { timeStyle: 'medium' }).format(new Date())}</span>
+        </div>
+    `;
+
     const statsHtml = renderStatsCards(data);
 
-    // Build rules section
     const rulesHtml = renderSemanticRules(rulesData);
 
-    // Build experience table
+    const frictionHtml = renderTradeFriction(blockedData);
+
     const tableHtml = renderExperienceTable(data.experiences || []);
 
-    container.innerHTML = `
+    container.innerHTML = DOMPurify.sanitize(`
+        ${freshnessHtml}
         ${contextHtml}
         <div class="vector-stats">${statsHtml}</div>
+        ${frictionHtml}
         <div style="margin-bottom: 24px;">
             <h3 style="margin-top: 0; margin-bottom: 12px; color: var(--text-muted); font-size: 13px; text-transform: uppercase; letter-spacing: 1px;">Semantic Rules</h3>
             ${rulesHtml}
@@ -84,9 +95,8 @@ function renderVectorPanel(data, rulesData) {
             <h3 style="margin-top: 0; margin-bottom: 12px; color: var(--text-muted); font-size: 13px; text-transform: uppercase; letter-spacing: 1px;">Experience History</h3>
             <div class="vector-table">${tableHtml}</div>
         </div>
-    `;
+    `);
 
-    // Attach sort handlers
     container.querySelectorAll('.sortable-header').forEach(header => {
         const field = header.getAttribute('data-sort');
         if (field) {
@@ -96,17 +106,24 @@ function renderVectorPanel(data, rulesData) {
 
             header.addEventListener('click', handleSort);
 
-            // Add keyboard support (Enter/Space)
             header.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault(); // Prevent scroll on Space
+                    e.preventDefault();
                     handleSort();
                 }
             });
         }
     });
 
-    // Restore focus if it was on a sort header
+    container.querySelectorAll('tr.exp-row[data-expandable]').forEach(row => {
+        row.addEventListener('click', () => {
+            const detail = row.nextElementSibling;
+            if (detail && detail.classList.contains('exp-detail')) {
+                detail.style.display = detail.style.display === 'none' ? '' : 'none';
+            }
+        });
+    });
+
     if (focusedSortField) {
         const newHeader = container.querySelector(`.sortable-header[data-sort="${focusedSortField}"]`);
         if (newHeader) newHeader.focus();
@@ -144,7 +161,6 @@ function renderStatsCards(data) {
     const adxStats = data.adx_stats || {};
     const factorStats = Array.isArray(data.factor_stats) ? data.factor_stats : Object.values(data.factor_stats || {});
 
-    // Fallback getter for factor stats if keys are strictly strings
     const getFactorWR = (keywords) => {
         const factor = factorStats.find(f => keywords.some(k => f.factor_name && f.factor_name.toUpperCase().includes(k)));
         return factor ? factor.win_rate : '--';
@@ -185,24 +201,116 @@ function renderStatsCards(data) {
     `;
 }
 
+function toNumber(value, fallback = null) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatNumber(value, digits = 1) {
+    const parsed = toNumber(value);
+    return parsed === null ? '--' : parsed.toFixed(digits);
+}
+
+function renderTradeFriction(data) {
+    const blockedTrades = data?.blocked_trades || [];
+    if (!blockedTrades.length) return '';
+    const rows = blockedTrades.slice(0, 6).map(item => {
+        const timestamp = item.timestamp
+            ? new Intl.DateTimeFormat(navigator.language, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(item.timestamp))
+            : '--';
+        const guard = item.guard_type ? item.guard_type.replace(/_/g, ' ') : 'unknown guard';
+        return `
+            <tr>
+                <td>${escapeHtml(guard)}</td>
+                <td>${escapeHtml(item.direction || '--')}</td>
+                <td>${escapeHtml(item.confidence || '--')}</td>
+                <td>${formatNumber(item.suggested_rr, 2)} / ${formatNumber(item.required_rr, 2)}</td>
+                <td>${timestamp}</td>
+            </tr>
+        `;
+    }).join('');
+    return `
+        <div class="trade-friction-block">
+            <h3>Trade Friction</h3>
+            <div class="vector-table compact">
+                <table>
+                    <thead>
+                        <tr><th>Guard</th><th>Direction</th><th>Confidence</th><th>R:R</th><th>Date</th></tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+        </div>
+    `;
+}
+
 function renderSemanticRules(rules) {
     if (!rules || rules.length === 0) {
         return `
             <div style="font-size: 13px; color: var(--text-muted); padding: 12px 16px; background: rgba(255,255,255,0.02); border: 1px dashed var(--border-subtle); border-radius: 6px;">
-                Status: Gathering trade data to formulate rules... need 10+ wins matching a pattern.
+                Status: Analyzing closed trades for profitable patterns and recurring loss drivers (wins + losses both considered).
             </div>
         `;
     }
 
+    const TYPE_CONFIG = {
+        anti_pattern: { label: 'Avoid', color: 'var(--accent-danger)', bg: 'rgba(248,81,73,0.12)' },
+        corrective: { label: 'Improve', color: 'var(--accent-warning)', bg: 'rgba(210,153,34,0.12)' },
+        ai_mistake: { label: 'AI Mistake', color: '#79c0ff', bg: 'rgba(121,192,255,0.12)' },
+        best_practice: { label: 'Best Practice', color: 'var(--accent-success)', bg: 'rgba(63,185,80,0.10)' },
+    };
+
+    const renderDetailBlock = (label, value, color) => value
+        ? `<div style="font-size:12px; line-height:1.45; color:var(--text-muted); margin-top:6px; padding:5px 8px; background:rgba(255,255,255,0.04); border-radius:4px; border-left:2px solid ${color};">
+               → ${label}: ${escapeHtml(value)}
+           </div>`
+        : '';
+
     const cards = rules.map(rule => {
-        const winRate = rule.win_rate !== undefined ? `${Math.round(rule.win_rate)}%` : '--';
-        const srcTrades = rule.source_trades || '--';
+        const cfg = TYPE_CONFIG[rule.rule_type] || TYPE_CONFIG.best_practice;
+        const winRateValue = toNumber(rule.win_rate);
+        const winRate = winRateValue !== null ? `${Math.round(winRateValue)}%` : '--';
+
+        const wlLabel = (rule.wins !== undefined && rule.losses !== undefined)
+            ? `${rule.wins}W / ${rule.losses}L`
+            : `From ${rule.source_trades || '--'} Trades`;
+
+        const avgPnlValue = toNumber(rule.avg_pnl_pct);
+        const avgPnl = avgPnlValue !== null
+            ? `<span style="color:${avgPnlValue >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'};">${avgPnlValue >= 0 ? '+' : ''}${avgPnlValue.toFixed(1)}% Avg P&L</span>`
+            : '';
+
+        const profitFactor = toNumber(rule.profit_factor);
+        const pf = profitFactor !== null && profitFactor < 90
+            ? `<span>PF ${profitFactor.toFixed(1)}</span>`
+            : '';
+
+        const exitProfile = rule.dominant_exit_profile
+            ? `<span>${escapeHtml(rule.dominant_exit_profile)}</span>`
+            : '';
+
+        const mistakeType = rule.mistake_type
+            ? `<span>${escapeHtml(rule.mistake_type.replace(/_/g, ' '))}</span>`
+            : '';
+
+        const failureHtml = renderDetailBlock('Why', rule.failure_reason, cfg.color);
+        const fixHtml = renderDetailBlock('Fix', rule.recommended_adjustment, cfg.color);
+
         return `
-            <div class="rule-card">
+            <div class="rule-card" style="border-left: 3px solid ${cfg.color}; background: ${cfg.bg};">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                    <span style="font-size:10px; font-weight:600; padding:2px 6px; border-radius:3px; background:${cfg.color}; color:#0d1117; white-space:nowrap;">${cfg.label}</span>
+                </div>
                 <div class="rule-text">${escapeHtml(rule.rule_text)}</div>
-                <div class="rule-meta">
-                    <span>From ${srcTrades} Trades</span>
+                ${failureHtml}
+                ${fixHtml}
+                <div class="rule-meta" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
+                    <span>${wlLabel}</span>
                     <span class="win-rate">${winRate} Win Rate</span>
+                    ${avgPnl}
+                    ${pf}
+                    ${exitProfile}
+                    ${mistakeType}
                 </div>
             </div>
         `;
@@ -225,9 +333,8 @@ function renderExperienceTable(experiences) {
 
     function parseDocumentSections(doc) {
         if (!doc) return {};
-        const sections = {};
-        // Split on recognisable section labels; the document is space-joined so we
-        // split on "Label:" patterns.
+        const sections = Object.create(null);
+        const allowedKeys = new Set(['Indicators', 'Structure', 'Confluences', 'Reasoning', 'Result', 'Post-trade']);
         const pattern = /\b(Indicators|Structure|Confluences|Reasoning|Result|Post-trade):\s*/g;
         let match;
         sections['_header'] = '';
@@ -236,8 +343,11 @@ function renderExperienceTable(experiences) {
             hits.push({ key: match[1], start: match.index, contentStart: match.index + match[0].length });
         }
         for (let i = 0; i < hits.length; i++) {
-            const end = i + 1 < hits.length ? hits[i + 1].start : doc.length;
-            sections[hits[i].key] = doc.slice(hits[i].contentStart, end).trim();
+            const key = hits[i].key;
+            if (allowedKeys.has(key)) {
+                const end = i + 1 < hits.length ? hits[i + 1].start : doc.length;
+                sections[key] = doc.slice(hits[i].contentStart, end).trim();
+            }
         }
         if (hits.length > 0) {
             sections['_header'] = doc.slice(0, hits[0].start).trim();
@@ -251,7 +361,6 @@ function renderExperienceTable(experiences) {
         if (!doc) return '--';
         const sections = parseDocumentSections(doc);
 
-        // Keyword pills from header + indicators
         const pillKeywords = [
             { label: 'BULLISH', cls: 'pill-bullish' },
             { label: 'BEARISH', cls: 'pill-bearish' },
@@ -269,7 +378,6 @@ function renderExperienceTable(experiences) {
             .map(kw => `<span class="context-pill ${kw.cls}">${kw.label.replace('_', ' ')}</span>`)
             .join(' ');
 
-        // Indicator mini-row: show ADX + RSI values if present
         let indicatorsHtml = '';
         const indText = sections['Indicators'] || '';
         const adxM = indText.match(/ADX=(\d+\.?\d*)/);
@@ -283,7 +391,6 @@ function renderExperienceTable(experiences) {
             indicatorsHtml = `<div class="doc-section-row" style="color:var(--text-muted);font-size:0.78em;margin-top:3px;">${indParts.join(' &bull; ')}</div>`;
         }
 
-        // Structure mini-row: RR + close_reason label appear here only as text
         let structureHtml = '';
         const strText = sections['Structure'] || '';
         const rrM = strText.match(/RR=([\d.]+)/);
@@ -291,7 +398,6 @@ function renderExperienceTable(experiences) {
             structureHtml = `<div class="doc-section-row" style="color:var(--text-muted);font-size:0.78em;">RR&nbsp;${escapeHtml(rrM[1])}</div>`;
         }
 
-        // Post-trade: MFE / MAE
         let postHtml = '';
         const postText = sections['Post-trade'] || '';
         const mfeM = postText.match(/MFE=([+\d.]+%)/);
@@ -310,12 +416,14 @@ function renderExperienceTable(experiences) {
         const meta = exp.metadata || {};
         const outcome = meta.outcome || '--';
         const outcomeClass = outcome === 'WIN' ? 'win' : outcome === 'LOSS' ? 'loss' : '';
-        const pnl = meta.pnl_pct !== undefined ? `${meta.pnl_pct >= 0 ? '+' : ''}${meta.pnl_pct.toFixed(2)}%` : '--';
-        const pnlClass = meta.pnl_pct >= 0 ? 'positive' : 'negative';
+        const pnlValue = toNumber(meta.pnl_pct);
+        const pnl = pnlValue !== null ? `${pnlValue >= 0 ? '+' : ''}${pnlValue.toFixed(2)}%` : '--';
+        const pnlClass = pnlValue === null ? '' : (pnlValue >= 0 ? 'positive' : 'negative');
         const confidence = meta.confidence || '--';
         const direction = meta.direction || '--';
         const symbol = meta.symbol ? `<span style="font-size:0.8em;color:var(--text-muted);">${escapeHtml(meta.symbol)}</span>` : '';
-        const similarity = (exp.similarity !== undefined && exp.similarity > 0) ? `${exp.similarity.toFixed(1)}%` : '--';
+        const similarityValue = toNumber(exp.similarity);
+        const similarity = similarityValue !== null && similarityValue > 0 ? `${similarityValue.toFixed(1)}%` : '--';
         const timestamp = meta.timestamp ? new Intl.DateTimeFormat(navigator.language, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(meta.timestamp)) : '--';
 
         const closeReason = meta.close_reason || '';
@@ -326,10 +434,12 @@ function renderExperienceTable(experiences) {
             : '';
 
         const contextDisplay = formatContextPills(exp.document || '');
+        const expandable = Boolean(exp.match_factors);
+        const toggleMarker = expandable ? '▸ ' : '';
 
         return `
-            <tr title="${escapeHtml(exp.document || '')}">
-                <td style="font-family: 'JetBrains Mono', monospace; font-size: 0.9em;">${escapeHtml((exp.id || '').substring(0, 8))}...</td>
+            <tr class="exp-row${expandable ? ' exp-expandable' : ''}"${expandable ? ' data-expandable="1"' : ''}${expandable ? ' style="cursor: pointer;"' : ''} title="${escapeHtml(exp.document || '')}">
+                <td style="font-family: 'JetBrains Mono', monospace; font-size: 0.9em;">${toggleMarker}${escapeHtml((exp.id || '').substring(0, 8))}...</td>
                 <td style="font-size:0.85em;">${symbol}</td>
                 <td class="context">${contextDisplay}</td>
                 <td class="${outcomeClass}">${escapeHtml(outcome)}${closeBadge}</td>
@@ -339,6 +449,7 @@ function renderExperienceTable(experiences) {
                 <td>${similarity}</td>
                 <td>${timestamp}</td>
             </tr>
+            ${expandable ? `<tr class="exp-detail" style="display: none;"><td colspan="9" style="padding: 6px 10px; color: var(--text-muted); font-size: 0.82em; white-space: normal;"><strong>Match Factors (vs current context):</strong> ${escapeHtml(exp.match_factors)}</td></tr>` : ''}
         `;
     }).join('');
 

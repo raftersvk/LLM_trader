@@ -27,6 +27,17 @@ class SystemRouter:
 
         if self.multi_pair_manager:
             pair_statuses = self.multi_pair_manager.get_status()
+            for symbol, status in pair_statuses.items():
+                pair_state = self.dashboard_state.pairs.get(symbol)
+                if pair_state is None:
+                    continue
+                # The live analysis count lives in DashboardState; the manager
+                # only owns the loop/task state.
+                status["analysis_count"] = max(
+                    int(status.get("analysis_count", 0)),
+                    pair_state.analysis_count,
+                )
+                status["current_price"] = pair_state.current_price
         else:
             for symbol in pairs:
                 pair_state = self.dashboard_state.pairs.get(symbol)

@@ -1,13 +1,19 @@
 """Provider orchestration for AI model invocation with fallback logic."""
 import io
-from typing import Optional, Dict, Any, List, Union, cast, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from src.logger.logger import Logger
+from src.managers.provider_health import ProviderHealth
+from src.managers.provider_types import (
+    InvocationResult,
+    ProviderClients,
+    ProviderMetadata,
+)
 from src.platforms.ai_providers.response_models import ChatResponseModel
-from src.managers.provider_types import ProviderMetadata, InvocationResult, ProviderClients
+from src.utils.prompt_budget import PromptBudgetExceeded, PromptBudgetPolicy
 
 if TYPE_CHECKING:
-    from src.config.protocol import ConfigProtocol
+    from src.config.loader import Config
 
 
 class ProviderOrchestrator:
@@ -25,93 +31,180 @@ class ProviderOrchestrator:
     def __init__(
         self,
         logger: Logger,
-        config: "ConfigProtocol",
-        clients: ProviderClients
+        config: "Config",
+        clients: ProviderClients,
+        prompt_budget: PromptBudgetPolicy | None = None,
+        provider_health: ProviderHealth | None = None,
     ) -> None:
         """
         Initialize the provider orchestrator.
-
-        Args:
-            logger: Logger instance
-            config: Configuration instance
-            clients: Container with all AI provider clients
         """
         self.logger = logger
         self.config = config
         self.clients = clients
+        self.prompt_budget = prompt_budget
+        self.provider_health = provider_health
         self._providers = self._build_provider_metadata()
+        self._register_litellm_context_windows()
 
-    def _build_provider_metadata(self) -> Dict[str, ProviderMetadata]:
+    def _register_litellm_context_windows(self) -> None:
+        """Give the LiteLLM/vision models a context window for the prompt budget.
+
+        PromptBudgetPolicy refuses unknown targets, so without this the fork's
+        providers could never run through the budgeted request pipeline.
+        """
+        if self.prompt_budget is None:
+            return
+        windows = self.prompt_budget.context_windows
+        litellm_window = getattr(self.config, "LITELLM_CONTEXT_WINDOW", None)
+        vision_window = getattr(self.config, "VISION_CONTEXT_WINDOW", None) or litellm_window
+        candidates = (
+            ("litellm", getattr(self.config, "LITELLM_MODEL", None), litellm_window),
+            (
+                "vision_litellm",
+                getattr(self.config, "VISION_MODEL", None)
+                or getattr(self.config, "LITELLM_MODEL", None),
+                vision_window,
+            ),
+        )
+        for provider, model, window in candidates:
+            if not model or window is None:
+                # No configured capacity: leave it unregistered so the budget
+                # refuses the request instead of guessing.
+                continue
+            try:
+                windows.setdefault(f"{provider}/{model}", int(window))
+            except (TypeError, ValueError):
+                continue
+
+    def _build_provider_metadata(self) -> dict[str, ProviderMetadata]:
         """Build provider metadata registry from clients and config."""
-        return {
-            'googleai': ProviderMetadata(
-                name='Google AI Studio',
+        providers = {
+            "googleai": ProviderMetadata(
+                name="Google AI Studio",
                 client=self.clients.google,
                 paid_client=self.clients.google_paid,
-                default_model=self.config.GOOGLE_STUDIO_MODEL,
-                config=self.config.get_model_config(self.config.GOOGLE_STUDIO_MODEL),
+                default_model=getattr(self.config, "GOOGLE_STUDIO_MODEL", ""),
+                config=self.config.get_model_config(getattr(self.config, "GOOGLE_STUDIO_MODEL", "")),
                 supports_chart=True,
-                has_rate_limits=True
             ),
-            'openrouter': ProviderMetadata(
-                name='OpenRouter',
+            "openrouter": ProviderMetadata(
+                name="OpenRouter",
                 client=self.clients.openrouter,
-                default_model=self.config.OPENROUTER_BASE_MODEL,
-                config=self.config.get_model_config(self.config.OPENROUTER_BASE_MODEL),
+                default_model=getattr(self.config, "OPENROUTER_BASE_MODEL", ""),
+                config=self.config.get_model_config(getattr(self.config, "OPENROUTER_BASE_MODEL", "")),
                 supports_chart=True,
-                has_rate_limits=True
+                fallback_model=getattr(self.config, "OPENROUTER_FALLBACK_MODEL", None),
             ),
-            'litellm': ProviderMetadata(
-                name='LiteLLM',
-                client=self.clients.litellm,
-                default_model=self.config.LITELLM_MODEL,
-                config=self.config.get_model_config(self.config.LITELLM_MODEL),
-                supports_chart=True,
-                has_rate_limits=True
+            "local": ProviderMetadata(
+                name="LM Studio",
+                client=self.clients.lmstudio,
+                default_model=getattr(self.config, "LM_STUDIO_MODEL", ""),
+                config=self.config.get_model_config(getattr(self.config, "LM_STUDIO_MODEL", "")),
+                supports_chart=False,
             ),
-            'blockrun': ProviderMetadata(
-                name='BlockRun.AI',
+            "blockrun": ProviderMetadata(
+                name="BlockRun.AI",
                 client=self.clients.blockrun,
-                default_model=self.config.BLOCKRUN_MODEL,
-                config=self.config.get_model_config(self.config.BLOCKRUN_MODEL),
+                default_model=getattr(self.config, "BLOCKRUN_MODEL", ""),
+                config=self.config.get_model_config(getattr(self.config, "BLOCKRUN_MODEL", "")),
                 supports_chart=True,
-                has_rate_limits=False
             ),
-            'vision_litellm': ProviderMetadata(
-                name='Vision LiteLLM',
-                client=self.clients.vision_litellm,
-                default_model=self.config.VISION_MODEL or self.config.LITELLM_MODEL,
-                config=self.config.get_model_config(self.config.VISION_MODEL or self.config.LITELLM_MODEL),
+            "deepseek": ProviderMetadata(
+                name="DeepSeek",
+                client=self.clients.deepseek,
+                default_model=getattr(self.config, "DEEPSEEK_MODEL", ""),
+                config=self.config.get_model_config(getattr(self.config, "DEEPSEEK_MODEL", "")),
                 supports_chart=True,
-                has_rate_limits=True
-            )
+            ),
+            # Fork: OpenCode Go through the LiteLLM endpoint.
+            "litellm": ProviderMetadata(
+                name="OpenCode Go (LiteLLM)",
+                client=getattr(self.clients, "litellm", None),
+                default_model=getattr(self.config, "LITELLM_MODEL", "deepseek-v4.1-flash"),
+                config=self.config.get_model_config(
+                    getattr(self.config, "LITELLM_MODEL", "deepseek-v4.1-flash")
+                ),
+                supports_chart=True,
+            ),
         }
 
-    def get_metadata(self, provider: str) -> Optional[ProviderMetadata]:
+        # Fork: dedicated vision endpoint (VISION_PROVIDER/VISION_BASE_URL/VISION_MODEL).
+        vision_client = getattr(self.clients, "vision_litellm", None)
+        if vision_client is not None:
+            vision_model = (
+                getattr(self.config, "VISION_MODEL", None)
+                or getattr(self.config, "LITELLM_MODEL", "deepseek-v4.1-flash")
+            )
+            providers["vision_litellm"] = ProviderMetadata(
+                name="Vision LiteLLM",
+                client=vision_client,
+                default_model=vision_model,
+                config=self.config.get_model_config(vision_model),
+                supports_chart=True,
+            )
+
+        return providers
+
+    def prepare_request_messages(
+        self, provider: str, messages: list[dict[str, str]], model: str, *, chart: bool = False,
+    ) -> list[dict[str, str]]:
+        metadata = self._providers[provider]
+        result = (
+            self.prompt_budget.prepare_messages(messages, provider, model, metadata.config, chart=chart)
+            if self.prompt_budget is not None else messages
+        )
+        parts = [
+            ("System instructions: " if message["role"] == "system" else "User query: ") + message["content"]
+            for message in result
+        ]
+        self.logger.info("Full prompt content: %s", "\n\n".join(parts))
+        return result
+
+    def get_metadata(self, provider: str) -> ProviderMetadata | None:
         """Get metadata for a provider."""
         return self._providers.get(provider)
 
-    def resolve_model(self, provider: str, model_override: Optional[str] = None) -> str:
+    def resolve_model(self, provider: str, model_override: str | None = None) -> str:
         """Resolve effective model name for a provider."""
         if model_override:
             return model_override
         metadata = self._providers.get(provider)
-        return metadata.default_model if metadata else "unknown-model"
+        if not metadata:
+            return "unknown-model"
+        return metadata.default_model
 
     def is_available(self, provider: str) -> bool:
         """Check if a provider is available."""
         metadata = self._providers.get(provider)
         return metadata.is_available() if metadata else False
 
+    def _all_text_chain(self) -> list[str]:
+        """Fallback chain for text; the fork's LiteLLM provider is appended when configured."""
+        chain = ["googleai", "deepseek", "local", "openrouter", "blockrun"]
+        if self.is_available("litellm"):
+            chain.append("litellm")
+        return chain
+
+    def _all_chart_chain(self) -> list[str]:
+        """Fallback chain for charts; the dedicated vision client is preferred."""
+        chain = ["googleai", "deepseek", "openrouter", "blockrun"]
+        if self.is_available("vision_litellm"):
+            chain.append("vision_litellm")
+        if self.is_available("litellm"):
+            chain.append("litellm")
+        return chain
+
     def supports_chart(self, provider: str) -> bool:
         """Check if provider supports chart analysis."""
         if provider == "all":
             return (
                 self.is_available("googleai")
+                or self.is_available("deepseek")
                 or self.is_available("openrouter")
                 or self.is_available("blockrun")
                 or self.is_available("litellm")
-                or self.is_available("vision_litellm")
+                or getattr(self.clients, "vision_litellm", None) is not None
             )
         metadata = self._providers.get(provider)
         return metadata.supports_chart if metadata and metadata.is_available() else False
@@ -119,22 +212,14 @@ class ProviderOrchestrator:
     async def invoke(
         self,
         provider: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         *,
         chart: bool = False,
-        chart_image: Optional[Union[io.BytesIO, bytes, str]] = None,
-        model: Optional[str] = None
+        chart_image: io.BytesIO | bytes | str | None = None,
+        model: str | None = None
     ) -> InvocationResult:
         """
         Invoke a single provider and return structured result.
-
-        Args:
-            provider: Provider key (googleai, litellm, openrouter, blockrun)
-            messages: Chat messages
-            chart: Whether this is a chart analysis request
-            chart_image: Optional chart image for analysis
-            model: Optional model override
-
         Returns:
             InvocationResult with success status, response, and metadata
         """
@@ -146,15 +231,36 @@ class ProviderOrchestrator:
                 provider=provider,
                 model=self.resolve_model(provider, model)
             )
+        model_override_provided = model is not None
         effective_model = self.resolve_model(provider, model)
+        if provider != "openrouter":
+            try:
+                messages = self.prepare_request_messages(provider, messages, effective_model, chart=chart)
+            except PromptBudgetExceeded as exc:
+                self.logger.warning("Prompt budget refused %s/%s: %s", provider, effective_model, exc)
+                return InvocationResult(
+                    success=False, response=ChatResponseModel.from_error(str(exc)),
+                    provider=provider, model=effective_model,
+                )
         if provider == "googleai":
             return await self._invoke_google(metadata, messages, effective_model, chart, chart_image)
-        if provider == "litellm":
-            return await self._invoke_litellm(metadata, messages, effective_model, chart, chart_image)
+        if provider == "local":
+            return await self._invoke_local(metadata, messages, effective_model, chart)
         if provider == "openrouter":
-            return await self._invoke_openrouter(metadata, messages, effective_model, chart, chart_image)
+            return await self._invoke_openrouter(
+                metadata,
+                messages,
+                effective_model,
+                chart,
+                chart_image,
+                allow_model_fallback=not model_override_provided
+            )
         if provider == "blockrun":
             return await self._invoke_blockrun(metadata, messages, effective_model, chart, chart_image)
+        if provider == "deepseek":
+            return await self._invoke_deepseek(metadata, messages, effective_model, chart, chart_image)
+        if provider in ("litellm", "vision_litellm"):
+            return await self._invoke_litellm(metadata, messages, effective_model, chart, chart_image)
         return InvocationResult(
             success=False,
             response=ChatResponseModel.from_error(f"Unknown provider '{provider}'"),
@@ -164,35 +270,36 @@ class ProviderOrchestrator:
 
     async def invoke_with_fallback(
         self,
-        providers: List[str],
-        messages: List[Dict[str, str]],
+        providers: list[str],
+        messages: list[dict[str, str]],
         *,
         chart: bool = False,
-        chart_image: Optional[Union[io.BytesIO, bytes, str]] = None,
-        model: Optional[str] = None
+        chart_image: io.BytesIO | bytes | str | None = None,
+        model: str | None = None
     ) -> InvocationResult:
         """
         Try providers in order, returning first successful result.
-
-        Args:
-            providers: List of provider keys to try in order
-            messages: Chat messages
-            chart: Whether this is a chart analysis request
-            chart_image: Optional chart image
-            model: Optional model override
-
         Returns:
             InvocationResult from first successful provider, or last failure
         """
-        last_result: Optional[InvocationResult] = None
-        for provider in providers:
-            if not self.is_available(provider):
-                continue
+        last_result: InvocationResult | None = None
+        for provider in self._circuit_open_providers(providers):
             effective_model = self.resolve_model(provider, model)
             self._log_attempt(provider, effective_model, chart)
             result = await self.invoke(provider, messages, chart=chart, chart_image=chart_image, model=model)
             if result.success and not self._is_rate_limited(result.response):
+                if self.provider_health is not None:
+                    self.provider_health.record_success(provider)
                 return result
+            if self.provider_health is not None:
+                self.provider_health.record_failure(
+                    provider,
+                    category=(
+                        ProviderHealth.RATE_LIMIT_CATEGORY
+                        if self._is_rate_limited(result.response) else "error"
+                    ),
+                    detail=getattr(result.response, "error", None),
+                )
             self._log_failure(provider)
             last_result = result
         return last_result or InvocationResult(
@@ -205,23 +312,17 @@ class ProviderOrchestrator:
     async def get_text_response(
         self,
         effective_provider: str,
-        messages: List[Dict[str, str]],
-        model: Optional[str] = None
+        messages: list[dict[str, str]],
+        model: str | None = None
     ) -> InvocationResult:
         """
         Get text response using single provider or fallback chain.
-
-        Args:
-            effective_provider: Provider key or 'all' for fallback chain
-            messages: Chat messages
-            model: Optional model override
-
         Returns:
             InvocationResult with response
         """
         if effective_provider == "all":
             result = await self.invoke_with_fallback(
-                ["googleai", "litellm", "openrouter", "blockrun"], messages, model=model
+                self._all_text_chain(), messages, model=model
             )
             return result
         if self.is_available(effective_provider):
@@ -239,35 +340,42 @@ class ProviderOrchestrator:
     async def get_chart_response(
         self,
         effective_provider: str,
-        messages: List[Dict[str, str]],
-        chart_image: Union[io.BytesIO, bytes, str],
-        model: Optional[str] = None
+        messages: list[dict[str, str]],
+        chart_image: io.BytesIO | bytes | str,
+        model: str | None = None
     ) -> InvocationResult:
         """
         Get chart analysis response using single provider or fallback chain.
-
-        Args:
-            effective_provider: Provider key or 'all' for fallback chain
-            messages: Chat messages
-            chart_image: Chart image for analysis
-            model: Optional model override
-
         Returns:
             InvocationResult with response
         """
+        vision = self._providers.get("vision_litellm")
+        vision_available = vision is not None and vision.is_available()
+
         if effective_provider == "all":
-            if self.clients.vision_litellm:
-                vision_model = self.config.VISION_MODEL
-                self.logger.info("Using dedicated vision LiteLLM (model: %s)", vision_model)
-                return await self._invoke_litellm(
-                    self._providers["vision_litellm"],
-                    messages,
-                    vision_model or self.config.VISION_MODEL or self.config.LITELLM_MODEL,
-                    chart=True,
-                    chart_image=chart_image
-                )
+            chain = self._all_chart_chain()
+            if vision_available:
+                chain = ["vision_litellm"] + [p for p in chain if p != "vision_litellm"]
             return await self.invoke_with_fallback(
-                ["googleai", "openrouter", "blockrun", "litellm"], messages, chart=True, chart_image=chart_image, model=model
+                chain, messages, chart=True, chart_image=chart_image, model=model
+            )
+
+        if effective_provider == "litellm" and vision_available:
+            # The fork's usual provider setting: try the vision endpoint first, then
+            # the text LiteLLM client, through the budgeted/health-tracked chain.
+            return await self.invoke_with_fallback(
+                ["vision_litellm", "litellm"],
+                messages,
+                chart=True,
+                chart_image=chart_image,
+                model=model,
+            )
+        if effective_provider == "local":
+            return InvocationResult(
+                success=False,
+                response=ChatResponseModel.from_error("Chart analysis unavailable - local models don't support images"),
+                provider="local",
+                model=self.resolve_model("local", model)
             )
         if self.is_available(effective_provider):
             effective_model = self.resolve_model(effective_provider, model)
@@ -284,21 +392,21 @@ class ProviderOrchestrator:
     async def _invoke_google(
         self,
         metadata: ProviderMetadata,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         effective_model: str,
         chart: bool,
-        chart_image: Optional[Union[io.BytesIO, bytes, str]]
+        chart_image: io.BytesIO | bytes | str | None
     ) -> InvocationResult:
         """Invoke Google AI with free/paid tier fallback logic."""
         is_free_tier_model = "flash" in effective_model.lower()
         tier_info = "free tier" if is_free_tier_model else "paid tier"
         self.logger.info("Attempting with Google AI %s API (model: %s)", tier_info, effective_model)
         if chart and chart_image:
-            response = await metadata.client.chat_completion_with_chart_analysis(
+            response = await metadata.client.chat_completion_with_chart_analysis(  # type: ignore
                 effective_model, messages, cast(Any, chart_image), metadata.config
             )
         else:
-            response = await metadata.client.chat_completion(effective_model, messages, metadata.config)
+            response = await metadata.client.chat_completion(effective_model, messages, metadata.config)  # type: ignore
         error_type = response.error if response else None
         if error_type and ("overloaded" in error_type or "rate_limit" in error_type) and metadata.paid_client:
             error_reason = "rate limited" if error_type == "rate_limit" else "overloaded"
@@ -325,7 +433,8 @@ class ProviderOrchestrator:
                 response=response,
                 provider="google",
                 model=effective_model,
-                used_paid_tier=True
+                used_paid_tier=True,
+                error_message=f"Paid Google AI API failed: {paid_error}"
             )
         if self._is_valid_response(response):
             tier_success = "free tier" if is_free_tier_model else "paid tier"
@@ -337,70 +446,115 @@ class ProviderOrchestrator:
                 model=effective_model,
                 used_paid_tier=not is_free_tier_model
             )
+        err_msg = (
+            response.error
+            if response and response.error
+            else (
+                "No response received from Google AI"
+                if response is None
+                else "Empty or invalid response content from Google AI"
+            )
+        )
         return InvocationResult(
             success=False,
             response=response,
             provider="google",
-            model=effective_model
+            model=effective_model,
+            error_message=err_msg
         )
 
-    async def _invoke_litellm(
+    async def _invoke_local(
         self,
         metadata: ProviderMetadata,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         effective_model: str,
-        chart: bool,
-        chart_image: Optional[Union[io.BytesIO, bytes, str]] = None
+        chart: bool
     ) -> InvocationResult:
-        """Invoke LiteLLM provider."""
+        """Invoke LM Studio local provider."""
+        if chart:
+            return InvocationResult(
+                success=False,
+                response=ChatResponseModel.from_error("Chart analysis unavailable - local models don't support images"),
+                provider="lmstudio",
+                model=effective_model
+            )
         try:
-            if chart and chart_image:
-                response = await metadata.client.chat_completion_with_chart_analysis(
-                    effective_model, messages, chart_image, metadata.config
-                )
-            else:
-                response = await metadata.client.chat_completion(effective_model, messages, metadata.config)
+            response = await metadata.client.chat_completion(effective_model, messages, metadata.config)  # type: ignore
             success = self._is_valid_response(response)
-            provider_name = "vision_litellm" if metadata.name == "Vision LiteLLM" else "litellm"
             return InvocationResult(
                 success=success,
                 response=response,
-                provider=provider_name,
+                provider="lmstudio",
                 model=effective_model
             )
-        except Exception as e:
-            provider_name = "vision_litellm" if metadata.name == "Vision LiteLLM" else "litellm"
+        except Exception as e:  # noqa: BLE001
             return InvocationResult(
                 success=False,
-                response=ChatResponseModel.from_error(f"LiteLLM connection failed: {str(e)}"),
-                provider=provider_name,
+                response=ChatResponseModel.from_error(f"LM Studio connection failed: {e!s}"),
+                provider="lmstudio",
                 model=effective_model
             )
 
     async def _invoke_openrouter(
         self,
         metadata: ProviderMetadata,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         effective_model: str,
         chart: bool,
-        chart_image: Optional[Union[io.BytesIO, bytes, str]]
+        chart_image: io.BytesIO | bytes | str | None,
+        allow_model_fallback: bool
     ) -> InvocationResult:
         """Invoke OpenRouter provider."""
-        if chart and chart_image:
-            response = await metadata.client.chat_completion_with_chart_analysis(
-                effective_model, messages, cast(Any, chart_image), metadata.config
-            )
-        else:
-            response = await metadata.client.chat_completion(effective_model, messages, metadata.config)
+        response = await self._request_openrouter_model(metadata, messages, effective_model, chart, chart_image)
         success = self._is_valid_response(response) and not self._is_rate_limited(response)
+        fallback_model = metadata.fallback_model
+        if not success and allow_model_fallback and fallback_model and fallback_model != effective_model:
+            error_detail = response.error if response else "no response"
+            self.logger.warning(
+                "OpenRouter model %s failed (%s); retrying once with fallback model %s",
+                effective_model,
+                error_detail,
+                fallback_model
+            )
+            response = await self._request_openrouter_model(metadata, messages, fallback_model, chart, chart_image)
+            success = self._is_valid_response(response) and not self._is_rate_limited(response)
+            if success:
+                self.logger.info("OpenRouter fallback model %s succeeded", fallback_model)
+            else:
+                fallback_error = response.error if response else "no response"
+                self.logger.error("OpenRouter fallback model %s failed: %s", fallback_model, fallback_error)
+            return InvocationResult(
+                success=success,
+                response=response,
+                provider="openrouter",
+                model=fallback_model,
+                error_message=None if success else (response.error if response and response.error else "Empty or invalid response content from OpenRouter")
+            )
         return InvocationResult(
             success=success,
             response=response,
             provider="openrouter",
-            model=effective_model
+            model=effective_model,
+            error_message=None if success else (response.error if response and response.error else "Empty or invalid response content from OpenRouter")
         )
 
-    def _is_valid_response(self, response: Optional[ChatResponseModel]) -> bool:
+    async def _request_openrouter_model(
+        self, metadata: ProviderMetadata, messages: list[dict[str, str]], model: str,
+        chart: bool, chart_image: io.BytesIO | bytes | str | None,
+    ) -> ChatResponseModel | None:
+        assert metadata.client is not None
+        try:
+            prepared = self.prepare_request_messages("openrouter", messages, model, chart=chart)
+        except PromptBudgetExceeded as exc:
+            self.logger.warning("Prompt budget refused openrouter/%s: %s", model, exc)
+            return ChatResponseModel.from_error(str(exc))
+        if chart and chart_image:
+            return await metadata.client.chat_completion_with_chart_analysis(
+                model, prepared, chart_image, metadata.config,
+            )
+        return await metadata.client.chat_completion(model, prepared, metadata.config)
+
+    def _is_valid_response(self, response: ChatResponseModel | None) -> bool:
         """Check if response contains valid choices with content."""
         if not response:
             return False
@@ -409,9 +563,9 @@ class ProviderOrchestrator:
         first_choice = response.choices[0]
         if first_choice.error:
             error_detail = first_choice.error
-            error_code = error_detail.get('code', 'unknown') if isinstance(error_detail, dict) else 'unknown'
-            error_msg = error_detail.get('message', 'unknown') if isinstance(error_detail, dict) else str(error_detail)
-            provider = error_detail.get('metadata', {}).get('provider_name', 'unknown') if isinstance(error_detail, dict) else 'unknown'
+            error_code = error_detail.get("code", "unknown")
+            error_msg = error_detail.get("message", "unknown")
+            provider = error_detail.get("metadata", {}).get("provider_name", "unknown")
             self.logger.error("Error in API response choice from %s: [%s] %s", provider, error_code, error_msg)
             self.logger.debug("Full error details: %s", error_detail)
             return False
@@ -421,7 +575,7 @@ class ProviderOrchestrator:
             return False
         return True
 
-    def _is_rate_limited(self, response: Optional[ChatResponseModel]) -> bool:
+    def _is_rate_limited(self, response: ChatResponseModel | None) -> bool:
         """Check if response indicates rate limiting."""
         return bool(response and response.error and "rate_limit" in response.error)
 
@@ -433,14 +587,37 @@ class ProviderOrchestrator:
         noun = "chart analysis" if chart else "request"
         self.logger.info("Attempting %s with %s model: %s", noun, metadata.name, model)
 
+    def _circuit_open_providers(self, providers: list[str]) -> list[str]:
+        """Providers worth asking, with a fail-open last resort.
+
+        All providers open means the breaker itself would silence the bot. In that case
+        the primary is attempted once regardless and the situation is logged CRITICAL:
+        a degraded call is better than a silent HOLD, and the operator must see it.
+        """
+        available = [provider for provider in providers if self.is_available(provider)]
+        if self.provider_health is None:
+            return available
+        allowed = [provider for provider in available if self.provider_health.allows(provider)]
+        if allowed:
+            return allowed
+        if available:
+            self.logger.critical(
+                "All provider circuits are open — forcing one attempt on %s (fail-open)",
+                available[0],
+            )
+            return available[:1]
+        return []
+
     def _log_failure(self, provider: str) -> None:
         """Log provider failure with appropriate message."""
         if provider == "googleai":
             self.logger.warning("Google AI Studio model failed. Trying alternatives...")
-        elif provider == "litellm":
-            self.logger.warning("LiteLLM failed. Falling back to next provider.")
+        elif provider == "local":
+            self.logger.warning("LM Studio failed. Falling back to next provider.")
         elif provider == "openrouter":
             self.logger.warning("OpenRouter failed or rate limited.")
+        elif provider == "blockrun":
+            self.logger.warning("BlockRun.AI failed or rate limited.")
 
     def _log_unavailable_guidance(self, provider: str) -> None:
         """Log guidance when provider is unavailable."""
@@ -450,30 +627,100 @@ class ProviderOrchestrator:
                 self.logger.error("OpenRouter client not initialized. Check OPENROUTER_API_KEY in keys.env")
             elif provider == "googleai":
                 self.logger.error("Google AI client not initialized. Check GOOGLE_STUDIO_API_KEY in keys.env")
-            elif provider == "litellm":
-                self.logger.error("LiteLLM client not initialized. Check LITELLM_BASE_URL in config.ini and LITELLM_API_KEY in keys.env")
+            elif provider == "local":
+                self.logger.error("LM Studio client not initialized. Check LM_STUDIO_BASE_URL in config.ini")
             elif provider == "blockrun":
                 self.logger.error("BlockRun client not initialized. Check BLOCKRUN_WALLET_KEY in keys.env")
+            elif provider == "deepseek":
+                self.logger.error("DeepSeek client not initialized. Check DEEPSEEK_API_KEY in keys.env")
+        elif provider == "local":
+            self.logger.error("Local models don't support image analysis")
+
+    async def _invoke_litellm(
+        self,
+        metadata: ProviderMetadata,
+        messages: list[dict[str, str]],
+        effective_model: str,
+        chart: bool,
+        chart_image: io.BytesIO | bytes | str | None,
+    ) -> InvocationResult:
+        """Invoke the fork's LiteLLM/OpenCode Go client."""
+        is_vision = metadata is self._providers.get("vision_litellm")
+        provider_name = "vision_litellm" if is_vision else "litellm"
+        client = metadata.client
+        if client is None:
+            return InvocationResult(
+                success=False,
+                response=ChatResponseModel.from_error("LiteLLM client is not configured"),
+                provider=provider_name,
+                model=effective_model,
+            )
+        try:
+            if chart and chart_image is not None:
+                response = await client.chat_completion_with_chart_analysis(
+                    effective_model, messages, chart_image, metadata.config
+                )
+            else:
+                response = await client.chat_completion(
+                    effective_model, messages, metadata.config
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("LiteLLM invocation failed")
+            response = ChatResponseModel.from_error(str(exc))
+        success = self._is_valid_response(response) and not self._is_rate_limited(response)
+        return InvocationResult(
+            success=success,
+            response=response,
+            provider=provider_name,
+            model=effective_model,
+            error_message=None if success else (response.error if response else "Empty response from LiteLLM"),
+        )
 
     async def _invoke_blockrun(
         self,
         metadata: ProviderMetadata,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         effective_model: str,
         chart: bool,
-        chart_image: Optional[Union[io.BytesIO, bytes, str]]
+        chart_image: "io.BytesIO | bytes | str | None",
     ) -> InvocationResult:
         """Invoke BlockRun provider."""
         if chart and chart_image:
-            response = await metadata.client.chat_completion_with_chart_analysis(
-                effective_model, messages, cast(Any, chart_image), metadata.config
+            response = await metadata.client.chat_completion_with_chart_analysis(  # type: ignore
+                effective_model, messages, chart_image, metadata.config
             )
         else:
-            response = await metadata.client.chat_completion(effective_model, messages, metadata.config)
-        success = self._is_valid_response(response)
+            response = await metadata.client.chat_completion(effective_model, messages, metadata.config)  # type: ignore
+        success = response is not None and not response.error
         return InvocationResult(
             success=success,
             response=response,
             provider="blockrun",
-            model=effective_model
+            model=effective_model,
+            error_message=None if success else (response.error if response and response.error else "Empty or invalid response content from BlockRun")
         )
+
+    async def _invoke_deepseek(
+        self,
+        metadata: ProviderMetadata,
+        messages: list[dict[str, str]],
+        effective_model: str,
+        chart: bool,
+        chart_image: "io.BytesIO | bytes | str | None",
+    ) -> InvocationResult:
+        """Invoke DeepSeek provider."""
+        if chart and chart_image:
+            response = await metadata.client.chat_completion_with_chart_analysis(  # type: ignore
+                effective_model, messages, chart_image, metadata.config
+            )
+        else:
+            response = await metadata.client.chat_completion(effective_model, messages, metadata.config)  # type: ignore
+        success = self._is_valid_response(response)
+        return InvocationResult(
+            success=success,
+            response=response,
+            provider="deepseek",
+            model=effective_model,
+            error_message=None if success else (response.error if response and response.error else "Empty or invalid response content from DeepSeek")
+        )
+

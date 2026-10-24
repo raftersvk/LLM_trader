@@ -1,0 +1,469 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+// Verified against the repo on 2026-10-20:
+//   python -m pytest tests -q  ->  2419 passed, 0 skipped, 0 failed (2419 collected)
+// Keep these in sync with the code before every deploy.
+const TESTS_TOTAL = '2,419';
+---
+
+<Layout
+	title="Semantic Signal — an LLM trading agent that reads charts | qrak.org"
+	description="Open-source LLM trading agent: 1920×1080 chart vision, 768D semantic memory of closed-trade experiences, and deterministic risk checks. Trades simulated capital by default."
+>
+	<section class="hero">
+		<div class="badge">Open source • Python 3.13 • simulated capital by default</div>
+		<h1>Most trading bots do arithmetic. This one reads the chart, remembers its trades, and has to defend every call.</h1>
+		<p class="hero-sub">
+			Semantic Signal renders a 1920×1080 candlestick chart for a multimodal model, keeps a
+			768-dimensional semantic memory of closed-trade experiences, and applies
+			deterministic risk checks before an order can be sent.
+		</p>
+		<div class="cta-buttons">
+			<a href="/story/" class="btn btn-primary">Read the 9-month story</a>
+			<a href="https://semanticsignal.qrak.org" target="_blank" rel="noopener" class="btn btn-secondary">Live dashboard ↗</a>
+			<a href="https://github.com/qrak/LLM_trader" target="_blank" rel="noopener" class="btn btn-outline">GitHub ↗</a>
+		</div>
+
+		<dl class="status">
+			<div><dt>trading</dt><dd>simulated capital (paper)</dd></div>
+			<div><dt>live executor</dt><dd>exchange testnet only — no real funds</dd></div>
+			<div><dt>test suite</dt><dd>{TESTS_TOTAL} tests · all passing · about two and a half minutes</dd></div>
+			<div><dt>providers</dt><dd>Google AI, DeepSeek, OpenRouter, local — switchable</dd></div>
+		</dl>
+	</section>
+
+	<section class="scoreboard-section">
+		<h2>What this project combines</h2>
+		<p class="table-note">
+			Open-source trading projects solve different parts of the problem. Freqtrade focuses on mature
+			execution and backtesting; TradingAgents explores multi-agent market research; Vibe-Trading combines
+			vision and agent workflows. This project combines chart vision, local trade memory and deterministic
+			risk limits in one experimental, local-first research loop.
+		</p>
+		<p class="table-note small">
+			This is not a claim that no other bot has any individual feature, nor a claim of superior returns.
+			Read the linked source code and the <a href="/disclaimer/">risk disclaimer</a> before using any trading software.
+		</p>
+	</section>
+
+	<section class="features-grid">
+		<div class="card">
+			<div class="card-tag">chart_vision</div>
+			<h3>An image, not just indicator floats</h3>
+			<p>A Plotly candlestick chart at 1920×1080 with SMA, RSI, CMF and OBV goes to the multimodal model
+			alongside the numeric stack. Wick geometry, volume spikes and wedges are read off the picture —
+			but every number the model cites is checked against the computed values.</p>
+		</div>
+
+		<div class="card">
+			<div class="card-tag">vector_memory</div>
+			<h3>768D memory of closed-trade experiences</h3>
+			<p>Closed-trade experiences are embedded with <code>BAAI/bge-base-en-v1.5</code> into ChromaDB. Before each
+			decision the bot retrieves the three most similar past setups, each tagged with a
+			<strong>Surprise Ratio</strong> so a lucky win does not become a rule.</p>
+		</div>
+
+		<div class="card">
+			<div class="card-tag">risk_governance</div>
+			<h3>Deterministic risk limits constrain the model</h3>
+			<p>The model proposes a trade, but symbol restrictions, position caps and stop/target
+			validation remain deterministic checks. Position sizing is capped and uses documented fallback
+			profiles rather than treating model confidence as a guarantee.</p>
+		</div>
+
+		<div class="card">
+			<div class="card-tag">executor</div>
+			<h3>Reasoning and execution are separate processes</h3>
+			<p>The engine emits one atomic JSON decision; a second service does CCXT order placement, leverage
+			and exchange-side stops, and writes a verdict journal the engine reads back. The bot confirms what
+			happened to <em>its own</em> order instead of assuming it.</p>
+		</div>
+	</section>
+
+	<section class="story-preview">
+		<h2>Built in a Wrocław apartment after warehouse shifts</h2>
+		<p>
+			In December 2025 I was working 8-hour warehouse shifts in Poland and testing "AI trading bot"
+			templates in the evenings. Nine months later the project has {TESTS_TOTAL} automated tests, layered
+			agent documentation (a root AGENTS.md plus one per package), and a live executor running
+			against an exchange testnet — not a cent of real money, by design.
+		</p>
+		<a href="/story/" class="read-more-link">Read the full development history →</a>
+	</section>
+
+	<section class="articles-section">
+		<h2>From the blog</h2>
+		<div class="articles-grid">
+			<a href="/articles/chart-vision/" class="article-card">
+				<h3>How the bot reads charts</h3>
+				<p>Market history, 79 Numba indicator functions, a 1920×1080 chart image — and a model prompted to defend its call.</p>
+			</a>
+			<a href="/articles/vector-memory/" class="article-card">
+				<h3>Vector memory</h3>
+				<p>How 768D embeddings turn closed trades into lessons the bot retrieves before every decision.</p>
+			</a>
+			<a href="/articles/executor-separation/" class="article-card">
+				<h3>Paper → live: the executor</h3>
+				<p>Why reasoning and order placement are separate services, and what is still missing before real capital.</p>
+			</a>
+		</div>
+	</section>
+
+	<section class="verify">
+		<h2>Where every number on this page comes from</h2>
+		<p>
+			Nothing here is a screenshot from a course. All of it lives in
+			<a href="https://github.com/qrak/LLM_trader" target="_blank" rel="noopener">github.com/qrak/LLM_trader</a>:
+		</p>
+		<pre><code>chart image 1920x1080    src/analyzer/pattern_engine/chart_generator.py
+market data, 50 lvls     config/config.ini · src/analyzer/data_fetcher.py
+trade memory 768D        src/trading/vector_memory.py (BAAI/bge-base-en-v1.5)
+risk limits, pre-entry   src/trading/position_management.py
+agent docs, 9 files    AGENTS.md + one per package (src/trading, src/analyzer, ...)
+tests {TESTS_TOTAL}            python -m pytest tests -q   -&gt; all passing, 0 skipped</code></pre>
+	</section>
+
+	<section class="risk-disclaimer">
+		<p><strong>⚠️ Risk disclaimer:</strong> Semantic Signal is an experimental, open-source software project — not financial advice, not a money machine. It trades <strong>simulated capital by default</strong>, it has lost money on paper during development, and trading cryptocurrencies carries substantial risk of loss. <a href="/disclaimer/">Read the full disclaimer</a>.</p>
+	</section>
+</Layout>
+
+<style>
+	.hero {
+		text-align: center;
+		padding: 2.5rem 1rem 3rem;
+	}
+
+	.badge {
+		display: inline-block;
+		background: rgba(16, 185, 129, 0.1);
+		color: var(--accent-emerald);
+		border: 1px solid var(--border-accent);
+		padding: 0.35rem 1rem;
+		border-radius: 9999px;
+		font-size: 0.85rem;
+		font-weight: 600;
+		margin-bottom: 1.5rem;
+	}
+
+	h1 {
+		font-size: 2.6rem;
+		font-weight: 800;
+		line-height: 1.22;
+		margin: 0 auto 1.25rem;
+		max-width: 21ch;
+		color: var(--text-main);
+	}
+
+	.hero-sub {
+		font-size: 1.15rem;
+		color: var(--text-muted);
+		max-width: 720px;
+		margin: 0 auto 2.25rem;
+	}
+
+	.cta-buttons {
+		display: flex;
+		justify-content: center;
+		gap: 1rem;
+		flex-wrap: wrap;
+	}
+
+	.status {
+		max-width: 760px;
+		margin: 2.75rem auto 0;
+		border-top: 1px solid var(--border-color);
+		border-bottom: 1px solid var(--border-color);
+		padding: 0.5rem 0;
+		font-family: 'Fira Code', monospace;
+		font-size: 0.82rem;
+		text-align: left;
+	}
+
+	.status > div {
+		display: flex;
+		gap: 0.75rem;
+		padding: 0.3rem 0.25rem;
+	}
+
+	.status dt {
+		color: var(--text-dim);
+		min-width: 9.5rem;
+	}
+
+	.status dt::after {
+		content: ":";
+	}
+
+	.status dd {
+		color: var(--text-muted);
+		margin: 0;
+	}
+
+	.btn {
+		padding: 0.75rem 1.5rem;
+		border-radius: 8px;
+		font-weight: 600;
+		font-size: 1rem;
+		transition: all 0.2s ease;
+	}
+
+	.btn-primary {
+		background: var(--accent-emerald);
+		color: #0b0f19;
+	}
+
+	.btn-primary:hover {
+		background: #059669;
+		color: #0b0f19;
+		box-shadow: 0 0 20px rgba(16, 185, 129, 0.35);
+	}
+
+	.btn-secondary {
+		background: rgba(6, 182, 212, 0.15);
+		color: var(--accent-cyan);
+		border: 1px solid rgba(6, 182, 212, 0.3);
+	}
+
+	.btn-secondary:hover {
+		background: rgba(6, 182, 212, 0.25);
+		color: var(--accent-cyan);
+	}
+
+	.btn-outline {
+		background: rgba(255, 255, 255, 0.05);
+		color: #fff;
+		border: 1px solid var(--border-color);
+	}
+
+	.btn-outline:hover {
+		background: rgba(255, 255, 255, 0.1);
+		color: #fff;
+	}
+
+	.scoreboard-section {
+		margin: 4rem 0;
+	}
+
+	h2 {
+		font-size: 1.75rem;
+		font-weight: 700;
+		margin-bottom: 1.25rem;
+		text-align: center;
+	}
+
+	.table-note {
+		color: var(--text-muted);
+		font-size: 0.95rem;
+		max-width: 780px;
+		margin: 0 auto 1.5rem;
+		text-align: center;
+	}
+
+	.table-note.small {
+		font-size: 0.85rem;
+		margin: 1rem auto 0;
+		color: var(--text-dim);
+	}
+
+	.table-container {
+		overflow-x: auto;
+		border: 1px solid var(--border-color);
+		border-radius: 12px;
+		background: var(--bg-card);
+	}
+
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		text-align: left;
+		font-size: 0.92rem;
+	}
+
+	th, td {
+		padding: 0.85rem 1.1rem;
+		border-bottom: 1px solid var(--border-color);
+	}
+
+	th {
+		background: rgba(255, 255, 255, 0.03);
+		color: var(--text-muted);
+		font-weight: 600;
+		white-space: nowrap;
+	}
+
+	.yes {
+		color: var(--accent-emerald);
+		font-weight: 600;
+		white-space: nowrap;
+	}
+
+	.no {
+		color: #ef4444;
+		white-space: nowrap;
+	}
+
+	.q {
+		color: var(--text-dim);
+		font-family: 'Fira Code', monospace;
+		white-space: nowrap;
+	}
+
+	.mine {
+		background: rgba(16, 185, 129, 0.04);
+	}
+
+	.features-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+		gap: 1.5rem;
+		margin: 4rem 0;
+	}
+
+	.card {
+		background: var(--bg-card);
+		border: 1px solid var(--border-color);
+		padding: 1.6rem;
+		border-radius: 10px;
+		transition: border-color 0.2s ease;
+	}
+
+	.card:hover {
+		border-color: var(--border-accent);
+	}
+
+	.card-tag {
+		font-family: 'Fira Code', monospace;
+		font-size: 0.78rem;
+		letter-spacing: 0.04em;
+		color: var(--accent-emerald);
+		margin-bottom: 0.9rem;
+	}
+
+	.card-tag::before {
+		content: "[ ";
+		color: var(--text-dim);
+	}
+
+	.card-tag::after {
+		content: " ]";
+		color: var(--text-dim);
+	}
+
+	.card h3 {
+		font-size: 1.1rem;
+		margin-bottom: 0.7rem;
+	}
+
+	.card p {
+		color: var(--text-muted);
+		font-size: 0.94rem;
+		line-height: 1.65;
+	}
+
+	.story-preview {
+		background: rgba(16, 185, 129, 0.04);
+		border: 1px solid var(--border-accent);
+		padding: 2.5rem;
+		border-radius: 12px;
+		text-align: center;
+	}
+
+	.story-preview p {
+		color: var(--text-muted);
+		max-width: 720px;
+		margin: 0 auto 1.5rem;
+		font-size: 1.05rem;
+	}
+
+	.read-more-link {
+		font-weight: 700;
+		font-size: 1.05rem;
+	}
+
+	.articles-section {
+		margin: 4rem 0 2rem;
+	}
+
+	.articles-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+		gap: 1.25rem;
+	}
+
+	.article-card {
+		display: block;
+		background: var(--bg-card);
+		border: 1px solid var(--border-color);
+		border-radius: 10px;
+		padding: 1.5rem;
+		transition: border-color 0.2s ease;
+	}
+
+	.article-card:hover {
+		border-color: var(--border-accent);
+	}
+
+	.article-card h3 {
+		color: var(--text-main);
+		font-size: 1.02rem;
+		margin-bottom: 0.5rem;
+	}
+
+	.article-card p {
+		color: var(--text-muted);
+		font-size: 0.9rem;
+		line-height: 1.6;
+		margin: 0;
+	}
+
+	.verify {
+		margin: 3.5rem 0;
+		max-width: 820px;
+	}
+
+	.verify h2 {
+		text-align: left;
+		font-size: 1.4rem;
+	}
+
+	.verify p {
+		color: var(--text-muted);
+		font-size: 0.98rem;
+	}
+
+	.verify pre {
+		font-size: 0.84rem;
+		line-height: 1.75;
+		margin: 0;
+	}
+
+	.risk-disclaimer {
+		margin: 2rem 0 0;
+		background: rgba(245, 158, 11, 0.06);
+		border: 1px solid rgba(245, 158, 11, 0.25);
+		border-radius: 10px;
+		padding: 1.25rem 1.5rem;
+		font-size: 0.95rem;
+		color: var(--text-muted);
+	}
+
+	.risk-disclaimer strong {
+		color: #fbbf24;
+	}
+
+	@media (max-width: 768px) {
+		h1 {
+			font-size: 1.95rem;
+		}
+
+		.status {
+			font-size: 0.78rem;
+		}
+
+		.status dt {
+			min-width: 7.5rem;
+		}
+	}
+</style>

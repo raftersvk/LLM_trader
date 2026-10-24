@@ -1,24 +1,32 @@
 """Trading module for automated trading decisions and position management."""
 
-from .data_models import Position, TradeDecision, TradingMemory
 from .brain import TradingBrainService
+from .data_models import Position, TradeDecision, TradingMemory
+from .executor_handler import ExecutorHandler
+from .exit_monitor import ExitMonitor
+from .market_conditions_extractor import MarketConditionsExtractor
 from .memory import TradingMemoryService
-from .statistics import TradingStatisticsService
 from .position_extractor import PositionExtractor
+from .position_status_monitor import PositionStatusMonitor
+from .statistics import TradingStatisticsService
+from .statistics_calculator import StatisticsCalculator, TradingStatistics
 from .trading_strategy import TradingStrategy
-from .statistics_calculator import TradingStatistics, StatisticsCalculator
 from .vector_memory import VectorMemoryService
 
 __all__ = [
-    'Position',
-    'TradeDecision',
-    'TradingMemory',
-    'TradingStatistics',
-    'StatisticsCalculator',
-    'TradingBrainService',
-    'TradingMemoryService',
-    'TradingStatisticsService',
-    'PositionExtractor',
-    'TradingStrategy',
-    'VectorMemoryService',
+    "ExecutorHandler",
+    "ExitMonitor",
+    "MarketConditionsExtractor",
+    "Position",
+    "PositionExtractor",
+    "PositionStatusMonitor",
+    "StatisticsCalculator",
+    "TradeDecision",
+    "TradingBrainService",
+    "TradingMemory",
+    "TradingMemoryService",
+    "TradingStatistics",
+    "TradingStatisticsService",
+    "TradingStrategy",
+    "VectorMemoryService",
 ]

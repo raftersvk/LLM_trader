@@ -4,14 +4,22 @@ Calculates all-time cumulative statistics including Sharpe/Sortino ratios,
 drawdowns, win rate, and other performance metrics from trade history.
 """
 
+import math
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, Any, List, Optional
+from datetime import datetime, timezone
+from typing import Any
+
 import numpy as np
 
+from src.trading.data_models import (
+    ENTRY_SIGNALS,
+    EXIT_SIGNALS,
+    FILL_DIVERGENCE_MARKER,
+    LONG_ENTRY_SIGNALS,
+    ClosedTradeResult,
+    execution_quality_is_eligible,
+)
 from src.utils.data_utils import SerializableMixin
-from src.trading.data_models import ClosedTradeResult
-
 
 
 @dataclass(slots=True)
@@ -45,7 +53,7 @@ class StatisticsCalculator:
 
     @staticmethod
     def calculate_from_history(
-        trade_history: List[Dict[str, Any]],
+        trade_history: list[dict[str, Any]],
         initial_capital: float = 10000.0
     ) -> TradingStatistics:
         """Calculate all statistics from full trade history using numpy optimization."""
@@ -56,7 +64,6 @@ class StatisticsCalculator:
         if not trades:
             return TradingStatistics()
 
-        # Convert to numpy arrays for vectorized operations
         pnl_percentages = np.array([t.pnl_pct for t in trades])
         pnl_amounts = np.array([t.pnl_quote for t in trades])
 
@@ -74,7 +81,6 @@ class StatisticsCalculator:
         best_trade_pct = float(np.max(pnl_percentages)) if total_trades > 0 else 0.0
         worst_trade_pct = float(np.min(pnl_percentages)) if total_trades > 0 else 0.0
 
-        # Calculate equity curve and drawdowns
         equity_curve = np.zeros(len(pnl_amounts) + 1)
         equity_curve[0] = initial_capital
         equity_curve[1:] = np.cumsum(pnl_amounts) + initial_capital
@@ -104,28 +110,44 @@ class StatisticsCalculator:
             sharpe_ratio=sharpe,
             sortino_ratio=sortino,
             profit_factor=profit_factor,
-            last_updated=datetime.now(),
+            last_updated=datetime.now(timezone.utc),
         )
 
     @staticmethod
-    def _extract_closed_trades(trade_history: List[Dict[str, Any]]) -> List[ClosedTradeResult]:
-        """Extract closed trades with P&L from history."""
-        closed_trades: List[ClosedTradeResult] = []
-        open_position: Optional[Dict[str, Any]] = None
+    def _extract_closed_trades(trade_history: list[dict[str, Any]]) -> list[ClosedTradeResult]:
+        """Extract closed trades with P&L from history.
+
+        A CLOSE whose reasoning carries :data:`FILL_DIVERGENCE_MARKER` is SKIPPED: the
+        venue filled it at a price the real market never made (a sandbox/venue artifact),
+        so it is booked for history pairing but must not move a single statistic. Its
+        entry is dropped with it — the pair never becomes a "trade".
+        """
+        closed_trades: list[ClosedTradeResult] = []
+        open_position: dict[str, Any] | None = None
         for trade in trade_history:
             action = trade.get("action", "").upper()
-            if action in ("BUY", "SELL"):
+            if action in ENTRY_SIGNALS:
                 open_position = trade
-            elif action in ("CLOSE", "CLOSE_LONG", "CLOSE_SHORT") and open_position:
+            elif action in EXIT_SIGNALS and open_position:
+                if (not execution_quality_is_eligible(trade.get("execution_quality"))
+                        or not execution_quality_is_eligible(open_position.get("execution_quality"))
+                        or FILL_DIVERGENCE_MARKER in str(trade.get("reasoning") or "")):
+                    open_position = None
+                    continue
                 entry_price = open_position.get("price", 0)
                 exit_price = trade.get("price", 0)
-                quantity = open_position.get("quantity", 0)
-                if open_position.get("action", "").upper() == "BUY":
-                    pnl_pct = ((exit_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
-                    pnl_quote = (exit_price - entry_price) * quantity
-                else:
-                    pnl_pct = ((entry_price - exit_price) / entry_price) * 100 if entry_price > 0 else 0
-                    pnl_quote = (entry_price - exit_price) * quantity
+                quantity = open_position.get("quantity", 0) or 0.0
+                quote_amount = open_position.get("quote_amount", 0) or 0.0
+                if entry_price is None or not math.isfinite(entry_price) or entry_price <= 0:
+                    open_position = None
+                    continue
+                price_move = (
+                    exit_price - entry_price
+                    if open_position.get("action", "").upper() in LONG_ENTRY_SIGNALS
+                    else entry_price - exit_price
+                )
+                pnl_pct = (price_move / entry_price) * 100
+                pnl_quote = price_move * quantity if quantity > 0 else pnl_pct / 100 * quote_amount
                 closed_trades.append(ClosedTradeResult(
                     entry_price=entry_price,
                     exit_price=exit_price,
@@ -143,11 +165,9 @@ class StatisticsCalculator:
         if len(equity_curve) < 2:
             return 0.0, 0.0
 
-        # Efficient peak calculation using accumulative maximum
         peaks = np.maximum.accumulate(equity_curve)
 
-        # Avoid division by zero
-        with np.errstate(divide='ignore', invalid='ignore'):
+        with np.errstate(divide="ignore", invalid="ignore"):
             drawdowns = np.where(peaks > 0, (equity_curve - peaks) / peaks * 100, 0.0)
 
         max_dd = float(np.min(drawdowns)) if len(drawdowns) > 0 else 0.0
@@ -169,7 +189,6 @@ class StatisticsCalculator:
         mean_return = np.mean(returns)
         std_dev = np.std(returns)
 
-        # Use isclose to handle floating point precision issues near zero
         if np.isclose(std_dev, 0):
             return 0.0
 
@@ -187,15 +206,11 @@ class StatisticsCalculator:
 
         mean_return = np.mean(returns)
 
-        # Standard Sortino Calculation:
-        # Downside Deviation = sqrt(sum(min(0, r)^2) / N)
-        # We replace positive returns with 0, then calculate Root Mean Square
         negative_returns = np.minimum(returns, 0)
         downside_deviation = np.sqrt(np.mean(negative_returns ** 2))
 
-        # Use isclose to handle floating point precision issues near zero
         if np.isclose(downside_deviation, 0):
-            return float('inf') if mean_return > 0 else 0.0
+            return float("inf") if mean_return > 0 else 0.0
 
         sortino = (mean_return - risk_free_rate) / downside_deviation
         return round(float(sortino), 2)
@@ -207,6 +222,7 @@ class StatisticsCalculator:
         gross_loss = abs(np.sum(pnl_amounts[pnl_amounts < 0]))
 
         if gross_loss == 0:
-            return float('inf') if gross_profit > 0 else 0.0
+            return float("inf") if gross_profit > 0 else 0.0
 
         return round(float(gross_profit / gross_loss), 2)
+

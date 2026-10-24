@@ -1,50 +1,42 @@
 """Token counting and cost tracking for AI model usage."""
+from __future__ import annotations
+
+import atexit
 import json
 import os
 import threading
 import time
-import atexit
-import tempfile
-from typing import Dict, Optional, Any
+from datetime import datetime
+from typing import Any
 
 import tiktoken
 
-from src.trading.data_models import ProviderCostStats, SessionCosts, TokenUsageStats
+from src.trading.data_models import ProviderCostStats, SessionCosts
+from src.utils.data_utils import atomic_write_json
+from src.utils.peak_rates import PeakRates
+
 
 class ModelPricing:
-    """Loads and provides model pricing from config/model_pricing.json."""
-    _instance: Optional["ModelPricing"] = None
-    _pricing: Optional[Dict[str, Any]] = None
+    """Loads model pricing from config/model_pricing.json and applies the active billing window."""
 
-    def __new__(cls) -> "ModelPricing":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+    def __init__(self, peak_rates: PeakRates | None = None):
+        self._pricing = self._load_pricing()
+        self.peak_rates = peak_rates if peak_rates is not None else PeakRates()
 
-    def __init__(self):
-        if ModelPricing._pricing is None:
-            ModelPricing._pricing = self._load_pricing()
-
-    def _load_pricing(self) -> Dict[str, Any]:
+    def _load_pricing(self) -> dict[str, Any]:
         """Load pricing data from JSON file."""
         pricing_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "model_pricing.json")
         pricing_path = os.path.normpath(pricing_path)
         try:
-            with open(pricing_path, "r", encoding="utf-8") as f:
+            with open(pricing_path, encoding="utf-8") as f:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return {"google": {}, "openrouter": {}}
 
-    def get_cost(self, provider: str, model: str, input_tokens: int, output_tokens: int) -> Optional[float]:
+    def get_cost(self, provider: str, model: str, input_tokens: int, output_tokens: int,
+                 at: datetime | None = None) -> float | None:
         """
-        Calculate cost for a request based on token counts.
-
-        Args:
-            provider: Provider name (google, openrouter)
-            model: Model name/identifier
-            input_tokens: Number of input tokens
-            output_tokens: Number of output tokens
-
+        Calculate cost for a request based on token counts and the active billing window.
         Returns:
             Cost in USD or None if pricing not available
         """
@@ -62,7 +54,11 @@ class ModelPricing:
             return None
         input_cost = (input_tokens / 1_000_000) * model_pricing.get("input_per_million", 0)
         output_cost = (output_tokens / 1_000_000) * model_pricing.get("output_per_million", 0)
-        return input_cost + output_cost
+        return (input_cost + output_cost) * self.peak_rates.multiplier(provider, model, at)
+
+    def cost_note(self, provider: str, model: str, at: datetime | None = None) -> str | None:
+        """Return the billing window applied to a model, for cost logging."""
+        return self.peak_rates.tier_label(provider, model, at)
 
     def _normalize_model_key(self, model: str) -> str:
         """Normalize model name for lookup."""
@@ -75,9 +71,6 @@ class TokenCounter:
     def __init__(self, encoding_name: str = "cl100k_base"):
         """
         Initialize the TokenCounter.
-
-        Args:
-            encoding_name: The tokenizer encoding name to use (default: cl100k_base for OpenAI models)
         """
         self.tokenizer = tiktoken.get_encoding(encoding_name)
         self.session_tokens = {
@@ -87,30 +80,32 @@ class TokenCounter:
             "total": 0
         }
         self.session_costs = SessionCosts()
-        self.request_usage: Optional[TokenUsageStats] = None
 
     def count_tokens(self, text: str) -> int:
         """
         Count the tokens in the provided text.
-
-        Args:
-            text: The text to count tokens for
-
         Returns:
             Number of tokens
         """
         if not text:
             return 0
-        return len(self.tokenizer.encode(text))
+        return len(self.tokenizer.encode(text, disallowed_special=()))
+
+    def truncate_text(self, text: str, max_tokens: int) -> str:
+        """Keep a Unicode-safe prefix within the local estimated-token budget."""
+        if max_tokens < 0:
+            raise ValueError("max_tokens must be non-negative")
+        tokens = self.tokenizer.encode(text, disallowed_special=())
+        if len(tokens) <= max_tokens:
+            return text
+        prefix = self.tokenizer.decode(tokens[:max_tokens], errors="ignore")
+        while self.count_tokens(prefix) > max_tokens:
+            prefix = prefix[:-1]
+        return prefix
 
     def track_prompt_tokens(self, text: str, message_type: str = "prompt") -> int:
         """
         Count tokens in prompt text and track them in session stats.
-
-        Args:
-            text: The prompt text
-            message_type: Type of message ("prompt", "system", or "completion")
-
         Returns:
             Number of tokens
         """
@@ -127,23 +122,11 @@ class TokenCounter:
         provider: str,
         prompt_tokens: int,
         completion_tokens: int,
-        cost: Optional[float] = None
+        cost: float | None = None
     ) -> None:
         """
         Record actual token usage from API response (replaces tiktoken estimates).
-
-        Args:
-            provider: Provider name (openrouter, google, litellm)
-            prompt_tokens: Actual prompt token count from API
-            completion_tokens: Actual completion token count from API
-            cost: Optional cost from API (only OpenRouter provides this)
         """
-        self.request_usage = TokenUsageStats(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-            cost=cost
-        )
         self.session_tokens["prompt"] += prompt_tokens
         self.session_tokens["completion"] += completion_tokens
         self.session_tokens["total"] += prompt_tokens + completion_tokens
@@ -152,38 +135,34 @@ class TokenCounter:
                 self.session_costs.openrouter += cost
             elif provider == "google":
                 self.session_costs.google += cost
-            elif provider == "litellm":
-                self.session_costs.litellm += cost
+            elif provider == "lmstudio":
+                self.session_costs.lmstudio += cost
+            elif provider == "deepseek":
+                self.session_costs.deepseek += cost
 
     @staticmethod
     def format_cost(cost: float) -> str:
-        """Format cost in human-readable format."""
+        """Format cost in US dollars, with precision scaled to the amount."""
         if cost == 0 or cost is None:
             return "Free"
-        elif cost < 0.0001:
-            return f"${cost:.8f} ({cost * 100:.6f}¢)"
-        elif cost < 0.01:
-            return f"${cost:.6f} ({cost * 100:.4f}¢)"
-        elif cost < 1:
+        if cost < 0.0001:
+            return f"${cost:.8f}"
+        if cost < 0.01:
+            return f"${cost:.6f}"
+        if cost < 1:
             return f"${cost:.4f}"
-        else:
-            return f"${cost:.2f}"
+        return f"${cost:.2f}"
 
     def process_response_usage(
         self,
-        usage: Optional[Dict[str, Any]],
+        usage: dict[str, Any] | None,
         provider: str = "unknown",
         logger=None,
-        fallback_text: Optional[str] = None
+        fallback_text: str | None = None,
+        cost_note: str | None = None
     ) -> None:
         """
         Process API response usage data: record and optionally log.
-
-        Args:
-            usage: Usage dict from API response (with prompt_tokens, completion_tokens, cost)
-            provider: Provider name for cost tracking
-            logger: Optional logger instance to output token counts
-            fallback_text: If usage is None, estimate tokens from this text
         """
         if usage:
             prompt_tokens = int(usage.get("prompt_tokens", 0))
@@ -196,7 +175,8 @@ class TokenCounter:
                 logger.info("Response token count: %s", f"{completion_tokens:,}")
                 logger.info("Total tokens used: %s", f"{total_tokens:,}")
                 if cost is not None:
-                    logger.info("Request cost: %s", self.format_cost(cost))
+                    window = f" ({cost_note})" if cost_note else ""
+                    logger.info("Request cost: %s%s", self.format_cost(cost), window)
         elif fallback_text:
             response_tokens = self.track_prompt_tokens(fallback_text, "completion")
             if logger:
@@ -204,7 +184,7 @@ class TokenCounter:
                 stats = self.get_usage_stats()
                 logger.info("Total tokens used: %s", f"{stats['total']:,}")
 
-    def get_usage_stats(self) -> Dict[str, int]:
+    def get_usage_stats(self) -> dict[str, int]:
         """
         Get current token usage statistics.
 
@@ -222,24 +202,20 @@ class TokenCounter:
             "total": 0
         }
         self.session_costs = SessionCosts()
-        self.request_usage = None
 
 
 class CostStorage:
     """Persistent storage for API costs loaded from/saved to JSON file."""
-    PROVIDERS = ("openrouter", "google", "litellm")
+    PROVIDERS = ("openrouter", "google", "lmstudio", "deepseek")
 
     def __init__(self, file_path: str = "data/trading/api_costs.json"):
         """
         Initialize cost storage.
-
-        Args:
-            file_path: Path to the api_costs.json file
         """
         self.file_path = file_path
         self._ensure_directory()
-        self._providers: Dict[str, ProviderCostStats] = {}
-        self._last_reset: Optional[str] = None
+        self._providers: dict[str, ProviderCostStats] = {}
+        self._last_reset: str | None = None
 
         self._lock = threading.RLock()
         self._last_save_time = 0.0
@@ -258,7 +234,7 @@ class CostStorage:
         """Load existing costs or create default structure."""
         if os.path.exists(self.file_path):
             try:
-                with open(self.file_path, 'r', encoding='utf-8') as f:
+                with open(self.file_path, encoding="utf-8") as f:
                     data = json.load(f)
                 self._last_reset = data.get("last_reset")
                 for provider in self.PROVIDERS:
@@ -272,7 +248,7 @@ class CostStorage:
                     else:
                         self._providers[provider] = ProviderCostStats()
                 return
-            except (json.JSONDecodeError, IOError):
+            except (OSError, json.JSONDecodeError):
                 pass
         self._init_defaults()
 
@@ -290,45 +266,24 @@ class CostStorage:
 
             data = {"last_reset": self._last_reset}
             for provider, stats in self._providers.items():
-                data[provider] = stats.to_dict()
+                data[provider] = stats.to_dict()  # type: ignore[reportAttributeAccessIssue]
 
-            # Atomic write using temporary file
-            temp_path = None
             try:
-                directory = os.path.dirname(self.file_path)
-                with tempfile.NamedTemporaryFile(delete=False, mode='w', encoding='utf-8', dir=directory) as f:
-                    temp_path = f.name
-                    json.dump(data, f, indent=2)
-                    f.flush()
-                    os.fsync(f.fileno())
-
-                os.replace(temp_path, self.file_path)
+                atomic_write_json(self.file_path, data, fsync=True)
                 self._last_save_time = time.time()
                 self._dirty = False
-            except Exception as e:
-                # Fallback to direct print if logging is not available here
+            except Exception as e:  # noqa: BLE001
                 print(f"Error saving cost storage: {e}")
-                if temp_path and os.path.exists(temp_path):
-                    try:
-                        os.remove(temp_path)
-                    except OSError:
-                        pass
 
     def record_usage(
         self,
         provider: str,
         prompt_tokens: int,
         completion_tokens: int,
-        cost: Optional[float] = None
+        cost: float | None = None
     ) -> None:
         """
         Record usage for a provider and save to disk (buffered).
-
-        Args:
-            provider: Provider name
-            prompt_tokens: Input tokens
-            completion_tokens: Output tokens
-            cost: Cost in dollars (for OpenRouter and Google)
         """
         with self._lock:
             if provider not in self._providers:
@@ -341,7 +296,6 @@ class CostStorage:
 
             self._dirty = True
 
-            # Save if enough time has passed
             if time.time() - self._last_save_time >= 5.0:
                 self.save()
 
@@ -349,9 +303,3 @@ class CostStorage:
         """Get costs for a specific provider."""
         return self._providers.get(provider, ProviderCostStats())
 
-    def reset(self) -> None:
-        """Reset all costs and update last_reset timestamp."""
-        from datetime import datetime, timezone
-        self._init_defaults()
-        self._last_reset = datetime.now(timezone.utc).isoformat()
-        self.save()

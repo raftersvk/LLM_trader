@@ -1,311 +1,300 @@
 # 🤖 SEMANTIC SIGNAL LLM (LLM Trader)
 
-> **Status:** BETA / Research Edition
->
-> **Note:** This is the public research branch. It is frequently experimentally updated. The stable production version runs privately.
->
-> **Autonomous, asyncio-first trading bot that turns market + news + chart context into structured BUY/SELL/HOLD decisions.**
+*An autonomous paper-trading agent that reads charts, remembers outcomes and sharpens its strategy from its own closed trades.*
 
-🔗 **[Live Dashboard](https://semanticsignal.qrak.org)** — Real-time view of the neural trading brain
+[![Python 3.13](https://img.shields.io/badge/python-3.13-blue?logo=python&logoColor=white)](https://www.python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
+[![GitHub Stars](https://img.shields.io/github/stars/qrak/LLM_trader?style=flat&logo=github)](https://github.com/qrak/LLM_trader)
 
-## Key Features
+🌐 **[Public Landing Page](https://semanticsignal.qrak.org/landing.html)** — interactive architecture overview & system showcase
+📊 **[Live Dashboard](https://semanticsignal.qrak.org)** — watch the trading brain think
+📖 **[Interactive Web Story](https://semanticsignal.qrak.org/story)**
+💬 **[Join the Discord](https://discord.gg/ZC48aTTqR2)**
 
-- **Vector-Only Trading Brain**: ChromaDB vector store for semantic trade retrieval and adaptive thresholds.
-- **Adaptive Memory System**: Temporal awareness, decay engine, and automated reflection loops generating persistent Semantic Rules.
-- **RAG Engine**: Aggregates news from CryptoCompare and fundamentals from DefiLlama.
-- **AI & LLM Support**: Multi-provider support (Google Gemini, OpenRouter, BlockRun.AI, LM Studio and other OpenAI-compatible endpoints (via LiteLLM)) with fallback logic and vision-assisted trading.
-- **Multi-Exchange Aggregation**: Fetches data via `ccxt` from Binance, KuCoin, Gate.io, MEXC, Hyperliquid.
+---
 
-![Semantic Signal LLM Dashboard - Overview](img/dashboard1.png)
-![Semantic Signal LLM Dashboard - Brain Activity](img/dashboard2.png)
-![Semantic Signal LLM Dashboard - Last Prompt](img/dashboard3.png)
-![Semantic Signal LLM Dashboard - Last Response](img/dashboard4.png)
-![Semantic Signal LLM Dashboard - Statistics](img/dashboard5.png)
-![Semantic Signal LLM Dashboard - Latest News](img/dashboard6.png)
-![Semantic Signal LLM Dashboard - Market Data](img/dashboard7.png)
-![Semantic Signal LLM Dashboard - Memory Bank](img/dashboard8.png)
+> 💡 **Paper trading by default — no real funds are involved.** A decision may be forwarded to a separate, private executor service. Profitability is unproven; see the [Disclaimer](#disclaimer).
 
-## Tech Stack
+---
 
-- **Language**: Python 3.13+
-- **Database (Vector)**: ChromaDB
-- **Dashboard Backend**: FastAPI, WebSockets
-- **Dashboard Frontend**: HTML, Vanilla JS, Vis.js, ApexCharts
-- **AI Integrations**: Google Gemini, OpenRouter, BlockRun.AI, LM Studio and other OpenAI-compatible endpoints (via LiteLLM)
-- **Market Data**: CCXT, CryptoCompare, Alternative.me, DefiLlama
-- **Code Quality**: Ruff, Pylint, Mypy
-
-## Prerequisites
-
-- Python 3.13+
-- [LM Studio](https://lmstudio.ai/) (Optional — for local offline inference)
-
-## Getting Started
-
-### 1. Clone the Repository
+## Quick Start
 
 ```bash
-git clone https://github.com/qrak/LLM_trader.git
-cd LLM_trader
+git clone https://github.com/qrak/LLM_trader.git && cd LLM_trader
+python -m venv .venv && source .venv/bin/activate  # or .venv\Scripts\Activate.ps1 on Windows
+pip install -r requirements.txt -c constraints.txt
+cp keys.env.example keys.env  # optional; alternatively set your selected provider key in the OS environment
+python start.py               # dashboard at http://localhost:8000
 ```
 
-### 2. Setup Virtual Environment
+`constraints.txt` carries the version floors and compatibility caps for packages that only arrive as dependencies; always install with `-c constraints.txt` (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
-```powershell
-# Setup Virtual Environment
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
+<details>
+<summary>Detailed setup for Windows, Linux, macOS →</summary>
 
-### 3. Install Dependencies
+**Platform-specific scripts** live in `scripts/`:
 
-```powershell
-# Install required dependencies
-pip install -r requirements.txt
+| Script | Purpose |
+|--------|---------|
+| `scripts/start_script_main.ps1` | Start the bot (Windows) |
+| `scripts/start_script_main_linux.sh` | Start the bot (Linux) |
+| `scripts/start_script_main_macos.sh` | Start the bot (macOS) |
+| `scripts/run_all_tests.sh` | Run the full test suite in `.venv` |
+| `scripts/query_trade_history.py` | CLI utility to inspect the SQLite trade history |
 
-# For development (linting, testing tools)
-pip install -r requirements-dev.txt
-```
+Each launcher checks `requirements.txt` and `constraints.txt` against the installed environment and only runs pip when something is actually unmet.
+</details>
 
-### 4. Environment Setup
-
-Copy the example keys file:
-
-```powershell
-cp keys.env.example keys.env
-```
-
-Configure the following variables in `keys.env`:
-
-| Variable | Description |
-| --- | --- |
-| `OPENROUTER_API_KEY` | (Required) OpenRouter API key if used as a provider. |
-| `GOOGLE_STUDIO_API_KEY` | (Required) Google AI Studio API key (free tier). |
-| `GOOGLE_STUDIO_PAID_API_KEY` | (Optional) Google AI Studio API key (paid tier). |
-| `CRYPTOCOMPARE_API_KEY` | (Optional but recommended) For News RAG (~150k free requests). |
-| `COINGECKO_API_KEY` | (Optional) Free demo key for market metrics. |
-| `BLOCKRUN_WALLET_KEY` | (Optional) Private key for BlockRun.AI x402 micropayments. |
-
-### 5. Bot Configuration
-
-Copy the example config file:
-
-```powershell
-cp config/config.ini.example config/config.ini
-```
-
-Key sections to configure:
-
-```ini
-[ai_providers]
-# Options: "local", "googleai", "openrouter", "blockrun", "all"
-provider = googleai
-google_studio_model = gemini-3-flash-preview
-openrouter_base_model = google/gemini-3-flash-preview
-
-[general]
-crypto_pair = BTC/USDC
-timeframe = 4h
-
-[model_config]
-google_temperature = 1.0
-google_thinking_level = high
-
-[dashboard]
-host = 0.0.0.0
-port = 8000
-
-[demo_trading]
-demo_quote_capital = 10000
-transaction_fee_percent = 0.00075
-```
-
-### AI Provider Abstraction via LiteLLM
-
-The bot uses **[LiteLLM](https://github.com/BerriAI/litellm)** as a unified abstraction layer for all LLM providers. LiteLLM translates standard OpenAI-format requests to any provider's API, enabling seamless switching and automatic failover between providers.
-
-#### Supported Providers
-
-| Provider | Config Key | Configuration | Notes |
-|----------|-----------|--------------|-------|
-| **Local OpenAI-compatible** (LM Studio, Ollama, etc.) | local | lm_studio_base_url, lm_studio_model | Any OpenAI-compatible local endpoint |
-| **Google AI** | googleai | (API keys via keys.env) | Free tier + paid fallback |
-| **OpenRouter** | openrouter | openrouter_base_url, openrouter_base_model | Many hosted models |
-| **BlockRun.AI** | blockrun | blockrun_base_url, blockrun_model | Pay-per-request |
-
-#### Configuration Examples
-
-**Using a local OpenAI-compatible endpoint (LM Studio, Ollama, vLLM, etc.):**
-```ini
-[ai_providers]
-provider = local
-lm_studio_base_url = http://localhost:1234/v1
-lm_studio_model = gemma4:31b-cloud
-```
-
-**Google Gemini with automatic paid fallback:**
-```ini
-[ai_providers]
-provider = googleai
-```
-
-**OpenRouter:**
-```ini
-[ai_providers]
-provider = openrouter
-openrouter_base_model = google/gemini-4-31b-it:free
-```
-
-**Automatic multi-provider fallback:**
-```ini
-[ai_providers]
-provider = all
-```
-
-No code changes are required when adding new providers — LiteLLM handles the translation layer.
-
-### 6. Start the Bot
-
-Run the bot directly via Python:
-
-```powershell
-python start.py
-```
-
-The dashboard will be available at `http://localhost:8000`.
-
-Cloudflare setup reference: `docs/cloudflare_free_cache_playbook.md`.
-
-### 7. Controls
+### Runtime Controls
 
 | Key | Action |
-| --- | --- |
-| **`a`** | **Force Analysis**: Run immediate market check |
-| **`d`** | **Toggle Dashboard**: Enable or disable the dashboard while the program is running |
-| **`h`** | **Help**: Show available commands |
-| **`q`** | **Quit**: Gracefully shutdown the bot |
+|-----|--------|
+| `a` | Force analysis — run an immediate market check |
+| `d` | Toggle the dashboard on/off |
+| `h` | Help — show available commands |
+| `q` | Quit — graceful shutdown with state preservation |
+| `Shift+R` | In-place reload (relaunches `start.py` through the launcher) |
+
+---
+
+## System Requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| **Python** | 3.13 | 3.13+ |
+| **RAM** | 4 GB | 8+ GB |
+| **Disk** | 3 GB | 8+ GB (a full environment measures ≈2.3 GB, plus browser binaries for news enrichment, logs and trade data) |
+| **CPU** | 2 cores | 4+ cores |
+| **GPU** | Not required | Not required — embeddings run on CPU |
+| **OS** | Windows 10+, Linux, macOS | Linux (WSL2) |
+| **Internet** | Required (API calls) | Required |
+
+---
+
+## Features
+
+- **🧠 Brain with Memory** — ChromaDB stores closed-trade experiences, semantic rules and blocked-trade friction. Before each decision the bot retrieves the **3 nearest past trades**, win-rate and average-P&L statistics over the **20 nearest trades**, the **3 most relevant learned rules** and up to **5 recent post-mortem lessons** — not the whole database — and injects them into the prompt. Closed trades are embedded locally with `BAAI/bge-base-en-v1.5` (768 dimensions).
+
+  The historical MAE reference is the largest observed drawdown of at least five winning trades with valid drawdown metadata; its sample count travels with it. It is not a guaranteed safe limit, not an automatic SL floor and not a reason to widen a stop. Missing or invalid observations never count as a zero drawdown.
+
+  Prompt size is bounded by `[prompt_budget]`: 100,000 estimated tokens per request, a 50,000-token brain context, a 10% model-window safety margin and a 16,384-token image reserve, counted with the shared `TokenCounter` (`cl100k_base` estimates). Oversized contexts drop whole lower-priority blocks while keeping the current position, risk instructions, response format and recent lessons; if protected material still cannot fit, no request is sent.
+
+- **📈 Vision AI Chart Analysis** — Generates a **1920×1080 PNG** candlestick chart with indicators and sends it to a multimodal model for visual pattern recognition. The chart is one input next to the numeric indicator stack, not a replacement for it.
+
+- **🔄 Reflection Engine** — After every *N* closed trades the system synthesises best-practice, anti-pattern and corrective rules annotated with a **surprise ratio**, so the model can discount lucky or unlucky outcomes. Rules persist in vector memory.
+
+- **✅ Claim Validation** — Model claims are cross-checked against computed indicators: reported trend strength is compared with the actual ADX, and pattern quality is replaced by a deterministic scorer. An **expected-value framework** — fees, the position cap and expectancy read from the bot's own closed trades — is injected into every prompt as a decision rule, and the entry gate enforces the stricter of the configured R/R floor and the brain's learned threshold.
+
+- **📰 RAG News Engine** — Free RSS feeds (CoinDesk, CoinTelegraph, Decrypt, CryptoSlate) parsed with `feedparser`/`defusedxml`, optionally enriched through Crawl4AI with trafilatura text extraction, plus market data from CoinGecko, DeFiLlama and Alternative.me.
+
+- **📊 Live Dashboard** — FastAPI + WebSocket SPA on `0.0.0.0:8000` (or [semanticsignal.qrak.org](https://semanticsignal.qrak.org)) with ten tabs: Overview, Brain, Console, Prompt, Response, Stats, News, Market, Memory and Journal.
+
+- **🛡️ Risk Pipeline** — Pre-execution guard pipeline (`src/trading/guards/`: configured symbol, position-size cap), an entry R/R floor resolved by `src/trading/rr_policy.py` (the stricter of `min_rr_entry` and the brain's learned threshold) and dynamic SL/TP scaling. `min_rr_entry = 0.0` starts without a fixed R/R floor; the brain can raise it after enough losing low-R/R trades. Soft exits at candle close, hard exits polled at a configurable interval against the live ticker.
+
+- **🔀 Multi-Provider AI Routing** — Primary: DeepSeek official API (`deepseek-flash`, accepts charts natively). Configurable fallback chain across Google Gemini, OpenRouter, a local LM Studio server and BlockRun; every provider that supports images gets the chart.
+
+- **🧪 Regression Tests** — 2,419 collected tests on the current revision, covering LLM output corruption, async races, rate-limit backoff, closed-loop feedback and spot/futures wiring. Real temporary SQLite and ChromaDB databases are exercised, without live model or exchange calls.
+
+- **🗂️ Layered Agent Documentation** — Root [`AGENTS.md`](AGENTS.md) plus a per-package `AGENTS.md` for each area, so a coding model reads one package instead of the whole manual.
+
+---
 
 ## Architecture
 
-At its core, the Crypto Trading Bot leverages LLMs along with a Retrieval-Augmented Generation (RAG) engine to ingest market news, evaluate technical indicators, pattern recognition, and internal trading history ("brain memory"). By combining statistical indicators with human-like textual evaluation, it formulates `BUY`, `SELL`, `HOLD`, or `CLOSE` decisions.
-
 ```mermaid
-graph TD
-    subgraph Data Sources
-        Ex["Exchanges (CCXT)"] --> |OHLCV/Trades| DC(Market Data Collector)
-        News[CryptoCompare] --> |Articles| RAG(RAG Engine)
-        Sent[Alternative.me] --> |Fear & Greed| DC
-        DeFi[DefiLlama] --> |TVL/Fundamentals| RAG
+flowchart TB
+    subgraph Data["Data Sources"]
+        EX["Exchanges (CCXT) → OHLCV + Order Book + Trade Flow"]
+        NEWS["RSS Feeds + Crawl4AI + trafilatura"]
+        FUND["CoinGecko + DeFiLlama + Alternative.me"]
     end
-
-    subgraph Analysis Core
-        DC --> |Market Data| TC[Technical Calculator]
-        DC --> |Price History| PA[Pattern Analyzer]
-        DC --> |Candles| CG[Chart Generator]
-        
-        RAG --> |News Context| CB[Context Builder]
-        
-        %% Orchestration / Assembly
-        TC --> |Indicators| PB[Prompt Builder]
-        PA --> |Patterns| PB
-        CB --> |RAG Context| PB
-        CG --> |Chart Image| PB
-        
-        PB --> |System & User Prompt| MM{Model Manager}
+    subgraph Analysis["Analysis Engine"]
+        TC["Technical Calculator<br/>79 Numba-compiled indicator functions"]
+        PE["Pattern Engine<br/>Deterministic indicator patterns"]
+        CG["Chart Generator<br/>1920×1080 PNG"]
+        RAG["RAG Engine<br/>News relevance scoring"]
     end
-
-    subgraph AI Processing
-        %% Provider Selection Logic (Sequential / Fallback)
-        MM -.-> |Primary| Google["Google Gemini (Text + Vision)"]
-        MM -.-> |Fallback| OR["OpenRouter (Text + Vision)"]
-        MM -.-> |Pay-per-request| BR["BlockRun.AI"]
-        MM -.-> |Local| Local["LM Studio"]
-        
-        Google --> |Response| ARP[Analysis Result Processor]
-        OR --> |Response| ARP
-        BR --> |Response| ARP
-        Local --> |Response| ARP
+    subgraph Brain["🧠 Brain Layer"]
+        VM["Vector Memory<br/>ChromaDB (3 collections)<br/>Experiences + Rules +<br/>Blocked trades"]
+        REFL["Reflection Engine<br/>Rules from closed trades"]
+        CTX["Context Builder<br/>Similarity retrieval +<br/>surprise ratio + confidence calibration"]
     end
-
-    subgraph Execution ["Execution (Paper Only)"]
-        ARP --> |JSON Signal| TS[Trading Strategy]
-        TS --> |Simulated Order| DP[Data Persistence]
-        TS --> |Notification| DN["Notifier"]
+    subgraph Execution["Paper Execution"]
+        RP["Risk Manager<br/>SL/TP, sizing, R:R,<br/>friction tracking"]
+        GP["Guard Pipeline<br/>Symbol → Size"]
+        STRAT["Trading Strategy<br/>ExitMonitor +<br/>PositionStatusMonitor"]
     end
+    Data --> Analysis
+    Analysis --> Brain
+    Brain --> AI["AI Provider<br/>(DeepSeek / Gemini / OpenRouter / LM Studio / BlockRun)"]
+    AI --> RP --> GP --> STRAT
+    STRAT -.->|Closed trade feedback| Brain
 ```
 
-### Application Entry Points
+### Key Files
 
-- `start.py`
-  - The true entry point implementing the **Composition Root** and Dependency Injection (DI) pattern.
-  - Bootstraps API clients, memory layers, LLM managers, and the RAG engine concurrently.
-  - Instantiates the `DashboardServer`.
-- `src/app.py`
-  - Contains the `CryptoTradingBot` class. Manages the continuous polling rhythm, trading lifecycle, and real-time Discord alerts.
+| Path | Role |
+|------|------|
+| `start.py` | Entry point — 9-stage dependency provisioning, ChromaDB, CoinGecko cache, journal rotation |
+| `src/app.py` | Main async loop, ticker fetch, analysis orchestration, unconfirmed-command alerts |
+| `src/trading/brain.py` | `TradingBrainService` — context assembly, experience recording, reflection triggers |
+| `src/trading/vector_memory.py` | ChromaDB interface — trade experiences, semantic rules, blocked trades, embedding cache |
+| `src/trading/vector_memory_rules.py` | `VectorMemoryRulesMixin` — rule lifecycle: decay scoring, evidence ranking, surprise ratio |
+| `src/trading/executor_handler.py` | Forwards decisions to the executor over HTTP, JSON file fallback, dead-letter queue |
+| `src/trading/executor_reconciliation.py` | Compares bot state with the executor's, resolves positions and late receipts |
+| `src/analyzer/analysis_engine.py` | Market analysis orchestration — indicators, chart, RAG, LLM call |
+| `src/managers/provider_orchestrator.py` | AI provider fallback chain with retry logic and cost tracking |
+| `src/managers/risk_manager.py` | Dynamic SL/TP, position sizing, friction tracking |
+| `src/managers/post_mortem_repository.py` | Stores model-written post-mortems; the brain includes up to five recent ones |
+| `src/trading/trading_strategy.py` | Position lifecycle, guard enforcement, exit monitoring |
+| `src/analyzer/prompts/template_manager.py` | System prompt construction with a falsification-based invalidation step |
+| `src/analyzer/trend_validator.py` | Cross-checks model-reported trend strength against the computed ADX |
+| `src/analyzer/pattern_quality_scorer.py` | Deterministic pattern quality scoring replacing the model's self-reported score |
+| `src/notifiers/notifier.py` | Discord notifications with message-expiration tracking |
 
-### Directory Structure & Subsystems
-
-```text
-src/
-├── analyzer/          # Turns mathematical bounds into descriptive semantic markers
-│   ├── pattern_engine/# Validates topological shapes & regressions (Head & Shoulders, Trenlines)
-│   ├── formatters/    # Converts array flows and objects into markdown strings
-│   └── prompts/       # Dynamic composition of system/user blocks for LLM contexts
-├── rag/               # Retrieval-Augmented Knowledge Engine
-├── trading/           # State, positions, risk metrics & biological "Brain" tracking  
-├── managers/          # Shared state persistence and AI model routing
-├── platforms/         # External REST/GraphQL integrations (CCXT, Gemini, OpenRouter)
-├── dashboard/         # Real-time Web UI telemetry (FastAPI, WebSockets)
-├── indicators/        # Massive suite of NumPy/Numba powered array calculation files
-├── parsing/           # Resilient LLM JSON output bounds checking
-├── notifiers/         # Markdown-styled embedded notifications for Discord/Console
-└── factories/         # Safe DI dependency construction masking internal logic
-tests/                 # Extensive unit and integration validations with API knocking
-docs/                  # Deep technical documentation and component plans
-```
-
-### Request Lifecycle
-
-1. **Pulse Checks**: Every configurable candle/loop wait, `app.py` triggers a market check.
-2. **Data & Vectors**: `rag_engine` pulls recent crypto news directly related to chosen Ticker. Concurrently, `analysis_engine` uses `technical_calculator` on exact timestamp OHLCV.
-3. **Retrieval**: `trading_strategy` and `brain.py` fetch the top comparable historical situations based on technical attributes + PnL success vs failure from ChromaDB. 
-4. **LLM Formulation**: A highly formatted markdown prompt is handed through `model_manager` requesting `BUY`, `SELL`, or `HOLD` along with risk management targets.
-5. **Execution**: Result triggers a change directly translated to trade sizes sent towards the connected `ExchangeManager` and recorded by `statistics.py`. Outputs are streamed via WebSockets toward the `dashboard`.
+---
 
 ## Testing
 
-The codebase contains a rigorous `tests/` directory covering integration logic, mocking, and unit testing validation. This minimizes regressions specifically in LLM parsing behavior.
+```bash
+# Full suite — 2,419 collected tests (measured on the current revision)
+pytest tests/ -q
 
-```powershell
-# Run the test suite using pytest (make sure pytest is installed)
-pytest tests/
+# Focused areas
+pytest tests/domain_trading -q          # position lifecycle, guards, risk, post-mortem
+pytest tests/domain_brain -q            # vector memory, rules, learning, prompt templates
+pytest tests/domain_rag_indicators -q   # RAG/news pipeline and indicator maths
+pytest tests/domain_infra -q            # providers, dashboard, persistence, plumbing
+
+# Lint (passes on src/, scripts/ and start.py)
+ruff check src scripts start.py
 ```
+
+| Test area | Files | `def test_` functions | Notes |
+|-----------|-------|----------------------|-------|
+| `tests/domain_trading` | 9 | 317 | Signals, orders, exits, risk, post-mortem |
+| `tests/domain_brain` | 12 | 271 | ChromaDB operations, rules, scoring, embedding cache |
+| `tests/domain_rag_indicators` | 9 | 274 | RSS/Crawl4AI, news database, indicator maths |
+| `tests/domain_infra` | 17 | 359 | Provider fallback, dashboard routes, persistence |
+| `tests/test_admin_playwright.py` | 1 | 35 | Playwright/browser checks; skipped unless a dashboard is running |
+
+Parametrisation multiplies the function counts, so the collected total is larger than the sum of `def test_`.
+
+---
+
+## Configuration
+
+Key settings in `config/config.ini`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `crypto_pair` | BTC/USDC | Trading pair |
+| `timeframe` | 4h | Analysis candle timeframe (4h or higher; smaller frames degrade signal quality) |
+| `model_verbosity` | full | New-analysis detail: low (~400), medium (~1000), high (~2000), full (~8000 narrative output tokens) |
+| `provider` | deepseek | AI provider (`local`, `googleai`, `openrouter`, `deepseek`, `all`; BlockRun is a fallback-chain member only) |
+| `demo_quote_capital` | 10000 | Simulated capital (USDC) |
+| `max_position_size` | 0.10 | Max position as a fraction of capital |
+| `min_rr_entry` | 0.0 | Baseline R/R floor for the entry gate (0 = no fixed floor; the brain can raise it) |
+| `stop_loss_type` | hard | `hard` (interval polling) or `soft` (candle close) |
+| `stop_loss_check_interval` | 15m | Hard-exit polling interval; must not exceed the timeframe |
+| `reference_exit_check_seconds` | 10 | How often the SL/TP is checked against the REAL market while a position is open and the executor is live (`0` = off). This is the stop that runs; the exchange leg is only a catastrophe backstop |
+
+`[model_config] model_verbosity` controls the **new answer**, not how much history is carried
+forward. `full` requests a complete Markdown research report: metrics, timeframe comparison,
+indicator categories and interpretations, key levels, news impact, chart evidence, educational
+context, scenarios, risks and synthesis. Other modes retain their compact 3/5/13-line formats.
+The token figures are narrative writing targets, excluding decision JSON and hidden reasoning —
+not hard API limits. `max_tokens` / provider-specific output caps still apply; no post-generation
+truncation or extra formatting call is used. Previous reasoning has **no separate length cap**;
+the structured decision thesis is preferred when available, otherwise the sanitized narrative is
+kept without length-based truncation. `[prompt_budget] request_max_tokens` (default **100000
+estimated input tokens**) protects the whole request. Before each provider/model call, including
+fallbacks, the guard also reserves output capacity, an image allowance and a safety margin within
+the configured model context window. Under pressure it omits lower-priority sections rather than
+cutting arbitrary tokens; if protected content still cannot fit, no request is sent. Prior Python
+R/R feedback remains protected. Response-schema/R/R checks validate decisions, not prompt length.
+
+Local token budgets use `tiktoken`'s `cl100k_base` as an **estimate**, not a Gemini/DeepSeek-native
+counter. Upgrading tiktoken does not supply those tokenizers or pricing. Recorded request usage
+comes from the provider API (including Google thinking tokens); OpenRouter cost comes from its
+generation endpoint when available. Google/DeepSeek dollar figures are rate-table estimates,
+not invoice reconciliation; the current calculation does not apply cache-hit discounts.
+
+Secrets come from **OS / service environment variables (recommended)** or an optional `keys.env` in the repository root; process variables take precedence, including explicitly empty values. Both sources are read at startup, so restart after changes (on Windows, reopen the launcher terminal after editing persistent variables). Environment variables are not encrypted — keep them out of logs and shell history. `keys.env.example` lists every variable.
+
+Only the selected provider needs its key. OpenRouter-hosted Google or DeepSeek models use **only `OPENROUTER_API_KEY`**, not the direct-vendor keys. With `provider = all`, unavailable clients are skipped; `provider = local` needs no cloud key.
+
+| Variable | Required | For |
+|----------|----------|-----|
+| `GOOGLE_STUDIO_API_KEY` | Only for `googleai` | Google AI Studio provider |
+| `GOOGLE_STUDIO_PAID_API_KEY` | If used | Paid-tier Google AI |
+| `OPENROUTER_API_KEY` | Only for `openrouter` | Every model served through OpenRouter |
+| `DEEPSEEK_API_KEY` | Only for `deepseek` | DeepSeek official API |
+| `BOT_TOKEN_DISCORD` | If used | Discord notifications |
+| `MAIN_CHANNEL_ID` | If used | Discord notification channel |
+| `COINGECKO_API_KEY` | No | Market metrics (rate-limit boost) |
+| `HF_TOKEN` | No | HuggingFace model download |
+
+### Billing windows (`config/peak_rates.json`)
+
+Some providers charge different rates at different hours — DeepSeek is half price off-peak (Mon–Fri 01:00–04:00 and 06:00–10:00 UTC are peak; nights and the whole weekend are off-peak). The bot applies that window when reporting cost, so the log shows the price actually charged: `Request cost: $0.007000 (off-peak x0.5)`.
+
+Per-token rates live in `config/model_pricing.json` and are treated as the **base (peak)** rates; `peak_rates.json` only declares *when* a window applies and how it scales those rates. The file is optional — copy `config/peak_rates.example.json` to `config/peak_rates.json`; without it the defaults from `src/utils/peak_rates.py` apply and anything unlisted is billed flat. It is read at startup, and each provider entry is merged over its built-in default, so list only what you change:
+
+```json
+{
+  "deepseek": {
+    "models": ["deepseek-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro"],
+    "peak_multiplier": 1.0,
+    "off_peak_multiplier": 0.25,
+    "peak_windows_utc": [
+      {"days": ["mon-fri"], "start_utc": "01:00", "end_utc": "04:00"}
+    ]
+  }
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `models` | Models the entry covers (omitted = every model of that provider) |
+| `peak_multiplier` / `off_peak_multiplier` | Scale applied to the base rates inside / outside the peak windows |
+| `peak_windows_utc` | Peak windows. `days` takes single names or inclusive ranges (`["mon-fri"]`, `["sat","sun"]`); clock values are UTC, start-inclusive and end-exclusive |
+| `_default` | Entry used for providers and models nobody listed (multiplier `1.0` = flat rates) |
+
+---
+
+## Agent Documentation Map
+
+Contributors (human or model) get the rules in layers, so nobody has to read the whole manual:
+
+| File | Scope |
+|------|-------|
+| [`AGENTS.md`](AGENTS.md) | Authority, system overview, data flow, config, operational rules, code/security conventions, verification gates, map |
+| [`src/AGENTS.md`](src/AGENTS.md) | Cross-package regression contracts (`parsing/`, `utils/`, `notifiers/`, `rag/`, `dashboard/`) |
+| [`src/trading/AGENTS.md`](src/trading/AGENTS.md) | Trading brain, strategy, position management, monitors, notifiers |
+| [`src/trading/guards/AGENTS.md`](src/trading/guards/AGENTS.md) | Pre-execution guard pipeline |
+| [`src/analyzer/AGENTS.md`](src/analyzer/AGENTS.md) | Analysis engine, prompt templates, chart vision |
+| [`src/indicators/AGENTS.md`](src/indicators/AGENTS.md) | Indicator computation and caching |
+| [`src/managers/AGENTS.md`](src/managers/AGENTS.md) | Persistence, SQLite history, exchange adapters |
+| [`src/rag/AGENTS.md`](src/rag/AGENTS.md) | Vector memory, Crawl4AI news ingestion, market components |
+| [`src/dashboard/AGENTS.md`](src/dashboard/AGENTS.md) | FastAPI dashboard, auth, UI and accessibility conventions |
+
+Each file links back to the root; the root never duplicates package detail.
+
+---
 
 ## Roadmap
 
-- [x] **Local LLM Support** (LM Studio Integrated)
-- [x] **Vision Analysis** (Chart Image Generation & Processing)
-- [x] **RAG News Relevance Scoring**
-- [x] **Vector Memory System** (ChromaDB + Semantic Search)
-- [x] **Discord Integration** (Real-time signals, positions, and performance stats)
-- [x] **Interactive CLI** (Hotkeys for manual control)
-- [x] **Web Dashboard**: Real-time visualization of synaptic pathways and neural state.
-- [x] **BlockRun.AI Integration**: Pay-per-request AI access via x402 micropayments.
-- [x] **DefiLlama Fundamentals**: On-chain TVL context in the RAG pipeline.
-- [ ] **Multiple Trading Agent Personalities**: Diverse strategist personalities (conservative, aggressive, contrarian, trend-following).
-- [ ] **Multi-Model Consensus Decision-Making**: A "Council of Models" architecture.
-- [ ] **Live Trading**: Execution Layer integration for verified order placement.
-- [ ] **Static Documentation Site**: Transition docs into a browsable static site (e.g. `MkDocs` or `VitePress`).
+- 🔄 **Live trading** — delegated to a separate, private executor service (exchange testnet)
+- ⏳ **Multiple trading-agent personalities** — conservative, aggressive, contrarian, trend-following *(aspirational)*
+- ⏳ **Multi-model consensus** — a "council of models" for collective decision-making *(aspirational)*
 
-## Community & Support
-- **Discord**: [Join our community](https://discord.gg/ZC48aTTqR2) for live signals, development chat, and support.
-- **GitHub Issues**: Report bugs or suggest new features.
+---
 
 ## Disclaimer
-**EDUCATIONAL USE ONLY.** This software is currently in **BETA** and configured for **PAPER TRADING**. No real financial transactions are executed. The authors are not responsible for any financial decisions made based on this software.
 
-## Contributors
-- **Vicky (1bcMax)**: Implementation of BlockRun.AI provider and x402 payment integration.
+**NOT FINANCIAL ADVICE.** This software is experimental and in BETA. It trades a simulated book by default and no real funds are involved. Profitability is unproven, paper results are not live results, and exchange reconciliation is the least-tested part of the live path. No warranty provided. Use at your own risk.
 
 ## License
-Licensed under the [MIT License](LICENSE.md).
+
+[MIT](LICENSE.md)

@@ -1,29 +1,42 @@
-ccxt
-tiktoken>=0.11.0
-aiohttp>=3.13.3
-aiodns>=3.6.1
+# Packages the code imports directly, plus the few that only make sense for an
+# enabled feature (crawl4ai, beautifulsoup4, blockrun-llm).
+# Version floors and compatibility caps for packages that arrive only as
+# dependencies of these live in constraints.txt, which the launchers pass to pip
+# with -c and scripts/check_requirements.py verifies alongside this file.
+ccxt==4.5.89
+tiktoken==0.11.0
+aiohttp==3.14.4
+aiodns==3.6.1
+aiohttp-client-cache==0.13.0
 aiosqlite>=0.21.0
-aiohttp-client-cache>=0.13.0
-rich>=14.1.0
-numpy>=2.2.3
-numba>=0.61.2
+rich==14.1.0
+numpy==2.2.3
+numba==0.61.2
+pandas==2.3.2
 scipy>=1.16.1
-pandas>=2.3.2
-discord.py>=2.6.4
-plotly>=6.3.0
+discord.py==2.6.4
+plotly==6.3.0
+# litellm powers the OpenCode Go / multi-provider integration (fork feature).
 litellm>=1.83.14
-google-genai>=1.61.0
-#openrouter>=0.9.1
-#lmstudio>=1.5.0
-blockrun-llm>=0.3.6
+google-genai>=2.14.0
+openai>=2.49.0
+blockrun-llm==1.4.7
 Pillow>=12.2.0
-python-dotenv>=1.0.0
-kaleido>=1.1.0
-torch>=2.0.0
-chromadb>=1.0.0
+python-dotenv>=1.2.2
+kaleido==1.1.0
+torch>=2.13.0
+chromadb>=1.5.9
 sentence-transformers>=5.2.0
 PyQt6>=6.9.1
-fastapi>=0.128.0
-uvicorn>=0.40.0
+fastapi==0.138.0
+uvicorn==0.40.0
 wsproto>=1.2.0
 jinja2>=3.1.2
+pydantic>=2.12
+crawl4ai>=0.9.5
+feedparser==6.0.14
+trafilatura==2.1.0
+beautifulsoup4>=4.15.0
+httpx>=0.27,<1
+packaging>=24.0
+defusedxml>=0.7.1

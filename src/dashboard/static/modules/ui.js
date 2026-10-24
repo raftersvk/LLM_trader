@@ -1,6 +1,5 @@
-/**
- * UI Controller for Sidebar and Tabs
- */
+
+
 
 export function initUI() {
     setupSidebarNavigation();
@@ -16,7 +15,6 @@ function setupSidebarNavigation() {
     }
     
     navItems.forEach((item, index) => {
-        // Accessibility Setup
         const targetId = item.getAttribute('data-target');
         const isActive = item.classList.contains('active');
         item.setAttribute('role', 'tab');
@@ -48,7 +46,6 @@ function setupSidebarNavigation() {
         item.addEventListener('click', (e) => {
             e.preventDefault();
             
-            // Remove active class from all
             navItems.forEach(nav => {
                 nav.classList.remove('active');
                 nav.setAttribute('aria-selected', 'false');
@@ -56,43 +53,26 @@ function setupSidebarNavigation() {
             });
             document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
             
-            // Add active class to clicked
             item.classList.add('active');
             item.setAttribute('aria-selected', 'true');
             item.setAttribute('tabindex', '0');
             
-            // Show target tab
             const targetId = item.getAttribute('data-target');
             const targetTab = document.getElementById(targetId);
             if (targetTab) {
                 targetTab.classList.add('active');
                 
-                // Trigger resize event for charts/graphs
                 window.dispatchEvent(new Event('resize'));
                 
-                // Specific fix for vis-network graph in Brain Activity tab
                 if (targetId === 'tab-brain') {
                     setTimeout(() => {
-                        if (window.fitSynapseNetwork) window.fitSynapseNetwork();
-                    }, 50);
-                }
-
-                // Refresh relevant data when switching tabs
-                if (targetId === 'tab-portfolio' && window.updateAll) {
-                    window.updateAll();
-                }
-                if (targetId === 'tab-pair-detail' && window.updatePairDetail) {
-                    window.updatePairDetail();
-                }
-                if (targetId === 'tab-memory' && window.updateVectorData) {
-                    window.updateVectorData();
-                }
-                if (targetId === 'tab-performance' && window.updatePerformancePanel) {
-                    window.updatePerformancePanel();
+                        if (window.updateDecisionPathways) {
+                            window.updateDecisionPathways().catch(() => {});
+                        }
+                    }, 300);
                 }
             }
 
-            // Close mobile menu if open
             if (window.closeMobileMenu) {
                 window.closeMobileMenu();
             }
@@ -127,7 +107,6 @@ function setupMobileMenu() {
     toggleBtn.addEventListener('click', openMenu);
     closeBtn.addEventListener('click', closeMenu);
 
-    // Click outside to close
     document.addEventListener('click', (e) => {
         if (sidebar.classList.contains('mobile-open') &&
             !sidebar.contains(e.target) &&
@@ -136,7 +115,6 @@ function setupMobileMenu() {
         }
     });
 
-    // Press Escape to close
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && sidebar.classList.contains('mobile-open')) {
             closeMenu();
@@ -144,6 +122,5 @@ function setupMobileMenu() {
         }
     });
 
-    // Make closeMenu available for navigation clicks
     window.closeMobileMenu = closeMenu;
 }

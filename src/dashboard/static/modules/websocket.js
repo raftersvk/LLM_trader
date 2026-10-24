@@ -1,33 +1,20 @@
-/**
- * WebSocket client for real-time dashboard updates.
- */
 
 let ws = null;
 let reconnectAttempts = 0;
 const maxReconnectAttempts = 10;
 const reconnectDelay = 3000;
 
-/**
- * Initialize WebSocket connection.
- */
 export function initWebSocket() {
     connect();
 }
 
-/**
- * Connect to WebSocket server.
- */
 function connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${location.host}/ws`);
-    window.ws = ws;
     ws.onopen = () => {
         reconnectAttempts = 0;
         updateConnectionStatus('connected');
         console.log('WebSocket connected');
-        if (window.state?.currentPair && window.state.currentPair !== '__global__') {
-            ws.send(JSON.stringify({ type: 'subscribe', symbol: window.state.currentPair }));
-        }
     };
     ws.onmessage = (event) => {
         try {
@@ -46,9 +33,6 @@ function connect() {
     };
 }
 
-/**
- * Schedule a reconnection attempt.
- */
 function scheduleReconnect() {
     if (reconnectAttempts >= maxReconnectAttempts) {
         console.warn('Max WebSocket reconnection attempts reached');
@@ -59,9 +43,6 @@ function scheduleReconnect() {
     setTimeout(connect, delay);
 }
 
-/**
- * Handle incoming WebSocket updates.
- */
 function handleUpdate(data) {
     switch (data.type) {
         case 'countdown':
@@ -73,51 +54,50 @@ function handleUpdate(data) {
         case 'analysis_complete':
             triggerRefreshAll();
             break;
+        case 'brain_rebuild_started':
+        case 'brain_rebuild_completed':
+        case 'brain_rebuild_failed':
+            dispatchBrainLifecycle(data.data);
+            break;
+        case 'brain_state_updated':
+            dispatchBrainStateUpdated(data.data);
+            break;
         default:
             console.log('Unknown WS message type:', data.type);
     }
 }
 
-/**
- * Update countdown display from WebSocket data.
- */
 function updateCountdownFromWS(data) {
-    if (data.symbol && data.next_check_utc) {
-        if (!window._nextCheckUTC) window._nextCheckUTC = {};
-        window._nextCheckUTC[data.symbol] = new Date(data.next_check_utc);
-        const currentPair = window.state?.currentPair;
-        if (!currentPair || currentPair === data.symbol || currentPair === '__global__') {
-            window._nextCheckUTC.__current = new Date(data.next_check_utc);
-        }
-    } else if (data.next_check_utc) {
+    if (data.next_check_utc) {
         window._nextCheckUTC = new Date(data.next_check_utc);
     }
 }
 
-/**
- * Update position from WebSocket data.
- */
 function updatePositionFromWS(data) {
     const event = new CustomEvent('position-update', { detail: data.data });
     document.dispatchEvent(event);
 }
 
-/**
- * Trigger a full refresh of all panels.
- */
 function triggerRefreshAll() {
     const event = new CustomEvent('analysis-complete');
     document.dispatchEvent(event);
 }
 
-/**
- * Update connection status indicator.
- */
+function dispatchBrainLifecycle(lifecycle) {
+    const event = new CustomEvent('brain-lifecycle-update', { detail: lifecycle || {} });
+    document.dispatchEvent(event);
+}
+
+function dispatchBrainStateUpdated(data) {
+    const event = new CustomEvent('brain-state-updated', { detail: data || {} });
+    document.dispatchEvent(event);
+}
+
 function updateConnectionStatus(status) {
     const indicator = document.getElementById('connection-status');
     const statusDot = document.querySelector('.status-dot');
     if (!indicator) return;
-    
+
     if (status === 'connected') {
         indicator.textContent = 'Connected';
         indicator.classList.remove('status-text', 'disconnected');
@@ -139,9 +119,6 @@ function updateConnectionStatus(status) {
     }
 }
 
-/**
- * Format duration to human-readable string (e.g., "2h 35m").
- */
 export function formatDuration(seconds) {
     if (seconds < 0) seconds = 0;
     const hours = Math.floor(seconds / 3600);
@@ -152,24 +129,14 @@ export function formatDuration(seconds) {
     return `${secs}s`;
 }
 
-/**
- * Start countdown timer loop.
- */
 export function startCountdownLoop() {
     fetchInitialCountdown();
     setInterval(updateCountdownDisplay, 1000);
 }
 
-/**
- * Fetch initial countdown from REST API.
- */
 async function fetchInitialCountdown() {
     try {
-        const symbol = window.state?.currentPair;
-        const url = symbol && symbol !== '__global__'
-            ? `/api/status/countdown?symbol=${encodeURIComponent(symbol)}`
-            : '/api/status/countdown';
-        const response = await fetch(url);
+        const response = await fetch('/api/status/countdown');
         const data = await response.json();
         if (data.next_check_utc) {
             window._nextCheckUTC = new Date(data.next_check_utc);
@@ -179,9 +146,6 @@ async function fetchInitialCountdown() {
     }
 }
 
-/**
- * Update countdown display every second.
- */
 function updateCountdownDisplay() {
     const element = document.getElementById('next-analysis');
     if (!element) return;

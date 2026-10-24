@@ -66,8 +66,11 @@ class PortfolioRouter:
             }
 
             pair_state = self.dashboard_state.pairs.get(symbol)
-            if pair_state:
+            if pair_state and pair_state.current_price is not None:
                 pair_stats["current_price"] = pair_state.current_price
+            elif len(pairs) == 1:
+                # Single-pair state may only have been published globally.
+                pair_stats["current_price"] = self.dashboard_state.current_price
 
             prev_response_file = pair_dir / "previous_response.json"
             prev_data = await asyncio.to_thread(self._load_json_file, prev_response_file)

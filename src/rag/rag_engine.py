@@ -1,15 +1,18 @@
+"""Rag Engine module.
+
+Provides functionality for rag.rag_engine.py.
+"""
+from __future__ import annotations
+
 import asyncio
 from datetime import datetime, timedelta, timezone
-import re
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.logger.logger import Logger
 from src.utils.profiler import profile_performance
-from src.utils.token_counter import TokenCounter
-
 
 if TYPE_CHECKING:
-    from src.config.protocol import ConfigProtocol
+    from src.config.loader import Config
     from src.platforms.coingecko import CoinGeckoAPI
 
 
@@ -17,190 +20,214 @@ class RagEngine:
     def __init__(
         self,
         logger: Logger,
-        token_counter: TokenCounter,
-        config: "ConfigProtocol",
-        coingecko_api: Optional["CoinGeckoAPI"] = None,
-        exchange_manager=None,
-        file_handler=None,
+        config: Config,
+        coingecko_api: CoinGeckoAPI | None = None,
         news_manager=None,
         market_data_manager=None,
         index_manager=None,
         category_fetcher=None,
         category_processor=None,
         ticker_manager=None,
-        news_category_analyzer=None,
         context_builder=None,
     ):
-        """Initialize RagEngine with injected dependencies (DI pattern).
-
-        Args:
-            logger: Logger instance
-            token_counter: TokenCounter instance
-            config: ConfigProtocol instance for RAG update intervals
-            coingecko_api: CoinGecko API client (optional)
-            exchange_manager: Exchange manager (optional)
-            file_handler: RagFileHandler instance (injected from app.py)
-            news_manager: NewsManager instance (injected from app.py)
-            market_data_manager: MarketDataManager instance (injected from app.py)
-            index_manager: IndexManager instance (injected from app.py)
-            category_fetcher: CategoryFetcher instance (injected from app.py)
-            category_processor: CategoryProcessor instance (injected from app.py)
-            ticker_manager: TickerManager instance (injected from app.py)
-            news_category_analyzer: NewsCategoryAnalyzer instance (injected from app.py)
-            context_builder: ContextBuilder instance (injected from app.py)
-        """
+        """Initialize RagEngine with injected dependencies (DI pattern)."""
 
 
         self.logger = logger
         self.config = config
-        self.token_counter = token_counter
 
-        # Store injected components
-        self.file_handler = file_handler
         self.news_manager = news_manager
         self.market_data_manager = market_data_manager
         self.index_manager = index_manager
         self.category_fetcher = category_fetcher
         self.category_processor = category_processor
         self.ticker_manager = ticker_manager
-        self.news_category_analyzer = news_category_analyzer
         self.context_builder = context_builder
 
         self.coingecko_api = coingecko_api
-        self.exchange_manager = exchange_manager
 
-        # Update timestamps
-        self.last_update: Optional[datetime] = None
+        self.last_update: datetime | None = None
 
-        # Update intervals from config
         self.update_interval = timedelta(hours=config.RAG_UPDATE_INTERVAL_HOURS)
 
-        # Task management
         self._periodic_update_task = None
 
-        # Async lock to prevent concurrent updates
         self._update_lock = asyncio.Lock()
 
-        # Closure flag
+        self._last_update_attempt: datetime | None = None
+        self._minimum_retry_interval = timedelta(minutes=5)
+
         self._is_closed = False
+
+        self._latest_article_urls: dict[str, str] = {}
 
     async def initialize(self) -> None:
         """Initialize RAG engine and load cached data"""
         try:
-            # Load known tickers
-            await self.ticker_manager.load_known_tickers()
+            await self.ticker_manager.load_known_tickers()  # type: ignore
 
-            # Ensure categories are up to date
             await self._ensure_categories_updated()
 
-            # Load news database
-            await self.news_manager.load_cached_news()
+            await self.news_manager.load_cached_news()  # type: ignore
 
-            if self.news_manager.get_database_size() > 0:
+            if self.news_manager.get_database_size() > 0:  # type: ignore
                 self.last_update = datetime.now(timezone.utc)
                 self._build_indices()
-                self.logger.debug("Loaded %s recent news articles", self.news_manager.get_database_size())
+                self.logger.debug("Loaded %s recent news articles", self.news_manager.get_database_size())  # type: ignore
 
-            await self.ticker_manager.update_known_tickers(self.news_manager.news_database)
+            await self.ticker_manager.update_known_tickers(self.news_manager.news_database)  # type: ignore
 
-            if self.news_manager.get_database_size() < 10:
+            if self.news_manager.get_database_size() < 10:  # type: ignore
                 await self.refresh_market_data()
                 self.last_update = datetime.now(timezone.utc)
-        except Exception as e:
-            self.logger.exception("Error initializing RAG engine: %s", e)
-            self.news_manager.clear_database()
+        except Exception:
+            self.logger.exception("Error initializing RAG engine")
 
     def _build_indices(self) -> None:
         """Build search indices from news database"""
-        self.index_manager.build_indices(
-            self.news_manager.news_database,
-            self.ticker_manager.get_known_tickers(),
-            self.category_processor.category_word_map
+        self.index_manager.build_indices(  # type: ignore
+            self.news_manager.news_database,  # type: ignore
+            self.ticker_manager.get_known_tickers(),  # type: ignore
         )
+
+    async def _refresh_market_knowledge(self) -> bool:
+        """Refresh market data and stamp the update time; False when the refresh fails."""
+        try:
+            await self.refresh_market_data()
+            self.last_update = datetime.now(timezone.utc)
+            return True
+        except Exception as e:  # noqa: BLE001
+            self.logger.error("Failed to update market knowledge: %s", e)
+            return False
 
     async def update_if_needed(self, force_update: bool = False) -> bool:
         """Update market data if needed based on time intervals or forced update"""
+        self._last_update_attempt = datetime.now(timezone.utc)
         async with self._update_lock:
             if not self.last_update:
                 self.logger.debug("No previous update, refreshing market knowledge base")
-                try:
-                    await self.refresh_market_data()
-                    self.last_update = datetime.now(timezone.utc)
-                    return True
-                except Exception as e:
-                    self.logger.error("Failed to update market knowledge: %s", e)
-                    return False
+                return await self._refresh_market_knowledge()
 
             time_since_update = datetime.now(timezone.utc) - self.last_update
             if force_update or time_since_update > self.update_interval:
                 reason = "forced update" if force_update else f"{time_since_update.total_seconds()/60:.1f} minutes since last update"
                 self.logger.debug("Refreshing market knowledge: %s", reason)
-                try:
-                    await self.refresh_market_data()
-                    self.last_update = datetime.now(timezone.utc)
-                    return True
-                except Exception as e:
-                    self.logger.error("Failed to update market knowledge: %s", e)
-                    return False
+                return await self._refresh_market_knowledge()
 
             try:
                 categories_updated = await self._ensure_categories_updated()
                 if categories_updated:
                     self._build_indices()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 self.logger.error("Failed to update categories: %s", e)
 
             return False
 
     async def refresh_market_data(self) -> None:
-        """Refresh all market data from external sources"""
-        await self._ensure_categories_updated()
+        """Refresh all market data from external sources in parallel where possible."""
+        _, articles, _ = await asyncio.gather(
+            self._ensure_categories_updated(),
+            self._safe_fetch_news(),
+            self._safe_update_market_overview(),
+            return_exceptions=True
+        )
 
-        # Fetch news
-        try:
-            articles = await self.news_manager.fetch_fresh_news(
-                self.ticker_manager.get_known_tickers()
-            )
-        except Exception as e:
-            self.logger.error("Error fetching crypto news: %s", e)
-            articles = []
-
-        # Update market overview if needed
-        try:
-            await self.market_data_manager.update_market_overview_if_needed(max_age_hours=24)
-        except Exception as e:
-            self.logger.error("Error updating market overview: %s", e)
-
-        # Process articles
-        if articles:
-            updated = self.news_manager.update_news_database(articles)
+        if isinstance(articles, list) and articles:
+            updated = await asyncio.to_thread(self.news_manager.update_news_database, articles)  # type: ignore
             if updated:
                 self._build_indices()
                 self.logger.debug("News database updated; rebuilt indices")
 
+    async def _safe_fetch_news(self) -> list:
+        """Fetch news articles with error isolation."""
+        try:
+            return await self.news_manager.fetch_fresh_news(  # type: ignore
+                self.ticker_manager.get_known_tickers()  # type: ignore
+            )
+        except Exception as e:  # noqa: BLE001
+            self.logger.error("Error fetching crypto news: %s", e)
+            return []
+
+    async def _safe_update_market_overview(self) -> None:
+        """Update market overview with error isolation."""
+        try:
+            await self.market_data_manager.update_market_overview_if_needed(max_age_hours=24)  # type: ignore
+        except Exception as e:  # noqa: BLE001
+            self.logger.error("Error updating market overview: %s", e)
+
+    def _resolve_retrieval_limits(self, k: int | None, max_tokens: int | None) -> tuple[int, int]:
+        """Resolve retrieval limits from explicit values or config with safe fallbacks.
+
+        Default token budget is derived from per-article config:
+        ``RAG_ARTICLE_MAX_TOKENS * RAG_NEWS_LIMIT``.
+        """
+        resolved_k = k
+        if resolved_k is None:
+            resolved_k = self.config.RAG_NEWS_LIMIT
+
+        resolved_max_tokens = max_tokens
+        if resolved_max_tokens is None:
+            resolved_max_tokens = self.config.RAG_ARTICLE_MAX_TOKENS * resolved_k
+
+        return resolved_k, resolved_max_tokens
+
+    def _expand_candidate_indices_for_symbol(
+        self,
+        symbol: str,
+        k: int,
+        relevant_indices: list[int],
+    ) -> list[int]:
+        """Add symbol-linked candidates when ranked results are sparse."""
+        if not symbol or len(relevant_indices) >= k:
+            return relevant_indices
+
+        coin = self.category_processor.extract_base_coin(symbol)  # type: ignore
+        coin_indices = self.index_manager.search_by_coin(coin)  # type: ignore
+        for idx in coin_indices:
+            if idx not in relevant_indices:
+                relevant_indices.append(idx)
+                if len(relevant_indices) >= k * 10:
+                    break
+
+        return relevant_indices
+
+    def _prioritize_full_body_candidates(self, relevant_indices: list[int]) -> list[int]:
+        """Move full-body articles ahead of short summaries while preserving relative order."""
+        min_body_chars = self.config.RAG_NEWS_ENRICH_MIN_CHARS
+        full_body_indices = [
+            idx for idx in relevant_indices
+            if len(str(self.news_manager.news_database[idx].get("body", ""))) >= min_body_chars  # type: ignore
+        ]
+        short_body_indices = [idx for idx in relevant_indices if idx not in full_body_indices]
+        return full_body_indices + short_body_indices
+
+    def build_context_query(self, symbol: str) -> str:
+        """Build a default semantic query string for RAG retrieval based on the trading symbol."""
+        base_coin = symbol
+        if self.category_processor:
+            base_coin = self.category_processor.extract_base_coin(symbol).upper()
+        elif "/" in symbol:
+            base_coin = symbol.split("/")[0].upper()
+        else:
+            base_coin = symbol.upper()
+
+        coin_name = base_coin.lower()
+        if self.context_builder:
+            coin_name = self.context_builder.symbol_name_map.get(base_coin, coin_name)
+
+        return f"{coin_name} price analysis market trends"
+
     @profile_performance
-    async def retrieve_context(self, query: str, symbol: str, k: Optional[int] = None, max_tokens: Optional[int] = None) -> str:
+    async def retrieve_context(self, query: str, symbol: str, k: int | None = None, max_tokens: int | None = None) -> str:
         """Retrieve relevant context for a query with token limiting.
 
         If `k` is None, the configured RAG news limit (`[rag] news_limit`) will be used.
         Note: Market overview data is handled separately by PromptBuilder._build_market_overview_section()
         This method only returns news articles and market context to avoid redundancy.
         """
-        if k is None:
-            try:
-                k = int(self.config.RAG_NEWS_LIMIT)
-            except Exception:
-                k = 3
+        k, max_tokens = self._resolve_retrieval_limits(k, max_tokens)
 
-        if max_tokens is None:
-            try:
-                # article_max_tokens is per-article budget, so multiply by number of articles
-                article_max = int(self.config.RAG_ARTICLE_MAX_TOKENS)
-                max_tokens = article_max * k
-            except Exception:
-                max_tokens = 250 * k  # Fallback: 250 tokens per article
-
-        if self.news_manager.get_database_size() == 0:
+        if self.news_manager.get_database_size() == 0:  # type: ignore
             self.logger.warning("News database is empty")
             return ""
 
@@ -210,93 +237,61 @@ class RagEngine:
                 self._build_indices()
 
             if not self.last_update or datetime.now(timezone.utc) - self.last_update > timedelta(minutes=30):
-                await self.update_if_needed()
+                if (not self._last_update_attempt
+                        or datetime.now(timezone.utc) - self._last_update_attempt > self._minimum_retry_interval):
+                    await self.update_if_needed()
+                else:
+                    self.logger.debug("Skipping redundant retrieve-path update — last attempt was within backoff window")
 
-            # Extract keywords from query for smart sentence selection
-            keywords = set(re.findall(r'\b\w{3,15}\b', query.lower()))
-
-            # Use context builder for keyword search
-            scores = await self.context_builder.keyword_search(
-                query, self.news_manager.news_database, symbol,
-                self.index_manager.get_coin_indices(),
-                self.category_processor.category_word_map,
-                self.category_processor.important_categories
+            scores = await self.context_builder.keyword_search(  # type: ignore
+                query, self.news_manager.news_database, symbol,  # type: ignore
+                self.category_processor.category_word_map,  # type: ignore
+                self.category_processor.important_categories  # type: ignore
             )
-            relevant_indices = [idx for idx, _ in scores[:k*2]]
+            relevant_indices = [idx for idx, _ in scores[:k*10]]
             scores_dict = {idx: score for idx, score in scores}
 
-            # Add coin-specific articles if needed
-            if symbol and len(relevant_indices) < k:
-                coin = self.category_processor.extract_base_coin(symbol)
-                coin_indices = self.index_manager.search_by_coin(coin)
-                for idx in coin_indices:
-                    if idx not in relevant_indices:
-                        relevant_indices.append(idx)
-                        if len(relevant_indices) >= k*2:
-                            break
+            relevant_indices = self._expand_candidate_indices_for_symbol(symbol, k, relevant_indices)
+            relevant_indices = self._prioritize_full_body_candidates(relevant_indices)
 
-            # Build context using context builder (pass keywords and scores for smart selection)
-            context_text, total_tokens = self.context_builder.add_articles_to_context(
-                relevant_indices, self.news_manager.news_database, max_tokens, k, keywords, scores_dict
+            context_text, total_tokens = self.context_builder.add_articles_to_context(  # type: ignore
+                relevant_indices, self.news_manager.news_database, max_tokens, k, scores_dict  # type: ignore
             )
+            self._latest_article_urls = self.context_builder.get_latest_article_urls()  # type: ignore
             self.logger.debug("Retrieved context with %s tokens", total_tokens)
 
             return context_text
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Error retrieving context: %s", e)
-            return "Error retrieving market context."
+            self._latest_article_urls = {}
+            return ""
 
-    async def get_market_overview(self) -> Optional[Dict[str, Any]]:
+    def get_news_cache_snapshot(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """Return a copy of cached news articles for read-only external consumption."""
+        if not self.news_manager:
+            return []
+
+        articles = self.news_manager.news_database
+        if limit is not None and limit > 0:
+            articles = articles[:limit]
+
+        return [dict(article) for article in articles]
+
+    def get_latest_article_urls_snapshot(self) -> dict[str, str]:
+        """Return a copy of article URLs captured during the latest retrieve_context call."""
+        return dict(self._latest_article_urls)
+
+    async def get_market_overview(self) -> dict[str, Any] | None:
         """Get current market overview data using MarketDataManager (aggregates CoinGecko + DefiLlama)"""
         try:
-            # Delegate to MarketDataManager which handles aggregation of all sources
             if self.market_data_manager:
-                 # Check/Update if needed
                  await self.market_data_manager.update_market_overview_if_needed(max_age_hours=1)
                  return self.market_data_manager.get_current_overview()
 
             return None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Error getting market overview: %s", e)
             return None
-
-    async def update_known_tickers(self) -> None:
-        """Update known cryptocurrency ticker symbols"""
-        try:
-            await self.ticker_manager.update_known_tickers(self.news_manager.news_database)
-        except Exception as e:
-            self.logger.error("Error updating known tickers: %s", e)
-
-    async def start_periodic_updates(self) -> None:
-        """Start periodic data update task"""
-        async def update_loop():
-            while True:
-                try:
-                    await asyncio.sleep(self.update_interval.total_seconds())
-                    await self.update_if_needed()
-                except asyncio.CancelledError:
-                    self.logger.debug("Periodic updates cancelled")
-                    break
-                except Exception as e:
-                    self.logger.error("Error in periodic update: %s", e)
-                    await asyncio.sleep(60)
-
-        if self._periodic_update_task is None:
-            self._periodic_update_task = asyncio.create_task(update_loop())
-            update_mins = self.update_interval.total_seconds() / 60
-            self.logger.debug("Started periodic news updates every %.1f minutes", update_mins)
-
-    async def stop_periodic_updates(self) -> None:
-        """Stop periodic data update task"""
-        if self._periodic_update_task:
-            self._periodic_update_task.cancel()
-            try:
-                await self._periodic_update_task
-            except asyncio.CancelledError:
-                pass
-            self._periodic_update_task = None
-            self.logger.debug("Stopped periodic news updates")
-
 
     async def close(self) -> None:
         """Close resources and mark as closed"""
@@ -305,20 +300,18 @@ class RagEngine:
 
         self._is_closed = True
 
-        # Cancel periodic update task if running
         if self._periodic_update_task and not self._periodic_update_task.done():
             self.logger.debug("Cancelling periodic update task")
             self._periodic_update_task.cancel()
             try:
-                await self._periodic_update_task
+                await self._periodic_update_task  # type: ignore
             except asyncio.CancelledError:
                 pass
 
-        # Close API clients if they have close methods
         if self.coingecko_api:
             try:
                 await self.coingecko_api.close()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 self.logger.error("Error closing CoinGecko API client: %s", e)
 
         self.logger.info("RAG Engine resources released")
@@ -330,11 +323,12 @@ class RagEngine:
             True if categories were updated, False otherwise
         """
         try:
-            categories = await self.category_fetcher.fetch_cryptocompare_categories(force_refresh)
+            categories = await self.category_fetcher.fetch_categories(force_refresh)  # type: ignore
             if categories:
-                self.category_processor.process_api_categories(categories)
+                self.category_processor.process_api_categories(categories)  # type: ignore
                 return True
             return False
-        except Exception as e:
-            self.logger.exception("Error ensuring categories updated: %s", e)
+        except Exception:
+            self.logger.exception("Error ensuring categories updated")
             return False
+

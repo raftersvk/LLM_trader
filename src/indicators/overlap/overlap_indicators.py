@@ -1,15 +1,12 @@
+"""Overlap Indicators module.
+
+Provides functionality for indicators.overlap.overlap_indicators.py.
+"""
 import math
+
 import numpy as np
 from numba import njit
 
-@njit(cache=True)
-def ewma_numba(data, span):
-    alpha = 2 / (span + 1)
-    out = np.empty_like(data)
-    out[0] = data[0]
-    for i in range(1, len(data)):
-        out[i] = alpha * data[i] + (1 - alpha) * out[i - 1]
-    return out
 
 @njit(cache=True)
 def ema_numba(arr, length):
@@ -44,14 +41,6 @@ def sma_numba(arr, length):
     if n < length:
         return sma_values
 
-    # Check for NaNs in the first window
-    # If using sliding window, NaNs can propagate if not careful.
-    # Numba's sum propagates NaNs correctly (returns NaN).
-    # But removing a NaN from sum is tricky (NaN - NaN is NaN).
-    # For performance, we assume clean data or let NaN propagate.
-    # If we need to handle NaNs robustly like pandas (ignoring them), it's O(N*L) or complex O(N).
-    # Standard technical analysis libraries usually propagate NaN or assume filled data.
-    # The existing implementation assumes standard behavior.
 
     window_sum = 0.0
     for i in range(length):
