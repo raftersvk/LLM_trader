@@ -425,6 +425,7 @@ class CompositionRoot(ProvisioningMixin):
             )
 
         multi_pair_manager = getattr(self, "multi_pair_manager", None)
+        multi_pair_keyboard_task = None
         bot = None
         if multi_pair_manager is None:
             bot = CryptoTradingBot(
@@ -471,6 +472,14 @@ class CompositionRoot(ProvisioningMixin):
                 bot.keyboard_handler.register_command(
                     "d", _toggle_dashboard, "Toggle dashboard on/off"
                 )
+            elif multi_pair_manager is not None:
+                # No bot exists in multi-pair mode, so its hotkeys were never
+                # registered and the listener never started.
+                keyboard_handler = dependencies.get("keyboard_handler")
+                if keyboard_handler is not None:
+                    multi_pair_keyboard_task = self._register_multi_pair_keyboard(
+                        keyboard_handler, _toggle_dashboard
+                    )
 
             if dashboard_server and self.config.DASHBOARD_ENABLED:
                 await dashboard_server.start()
@@ -483,15 +492,70 @@ class CompositionRoot(ProvisioningMixin):
 
             if multi_pair_manager is not None:
                 # Stay alive until shutdown; pair loops own the trading cadence.
-                await asyncio.Event().wait()
+                await self._supervise_multi_pair(multi_pair_manager)
             else:
                 await bot.run(symbol, timeframe)
 
         except asyncio.CancelledError:
             self.logger.info("Trading cancelled, shutting down...")
         finally:
+            if multi_pair_keyboard_task is not None and not multi_pair_keyboard_task.done():
+                multi_pair_keyboard_task.cancel()
             if dashboard_server:
                 await dashboard_server.stop()
+
+    def _register_multi_pair_keyboard(
+        self, keyboard_handler, toggle_dashboard
+    ):
+        """Register the multi-pair hotkeys and start the listener.
+
+        Returns the listener task (or None when there is no shutdown manager to
+        drive the quit command).
+        """
+        keyboard_handler.register_command(
+            "d", toggle_dashboard, "Toggle dashboard on/off"
+        )
+
+        async def _quit_multi_pair() -> None:
+            if self.shutdown_manager is not None:
+                await self.shutdown_manager.shutdown_gracefully()
+
+        keyboard_handler.register_command("q", _quit_multi_pair, "Quit the application")
+        if self.shutdown_manager is not None:
+            self.shutdown_manager.register_shutdown_callback(
+                keyboard_handler.stop_listening
+            )
+        return asyncio.create_task(keyboard_handler.start_listening())
+
+    async def _supervise_multi_pair(self, multi_pair_manager) -> None:
+        """Wait for shutdown, then stop every pair loop and return normally.
+
+        Without an explicit event, ``run_until_complete`` never returns after
+        ``q``/SIGTERM because nothing owns the per-pair tasks. The graceful
+        shutdown manager gets a callback that stops the pairs and releases the
+        wait, so the process exits instead of needing a kill.
+        """
+        shutdown_event = asyncio.Event()
+        stopped = False
+
+        async def _stop_multi_pair() -> None:
+            nonlocal stopped
+            try:
+                await multi_pair_manager.stop_all_pairs()
+                stopped = True
+            finally:
+                shutdown_event.set()
+
+        if self.shutdown_manager is not None:
+            self.shutdown_manager.register_shutdown_callback(_stop_multi_pair)
+            if self.shutdown_manager.is_shutting_down:
+                shutdown_event.set()
+        try:
+            await shutdown_event.wait()
+        finally:
+            # Cancellation or a missing/failed callback must still stop the loops.
+            if not stopped:
+                await multi_pair_manager.stop_all_pairs()
 
     def start(self) -> int:
         """Main entry point with clean shutdown delegation.
