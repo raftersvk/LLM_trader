@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from argparse import Namespace
 from pathlib import Path
 from typing import Any, Dict
 
@@ -216,6 +217,78 @@ def test_write_observations_emits_one_line_per_scored_state(tmp_path):
     assert payload["candle_open_time"] == "2026-10-15T09:00:00Z"
     assert payload["forward_1h"] == 0.02
     assert payload["cost_pct"] == 0.1
+
+
+def test_payload_preserves_metric_inputs_at_full_precision():
+    """noul, ATR and forward returns must not be rounded in the payload."""
+    record = CalibrationRecord(
+        index=0,
+        as_of="2026-10-15T09:00:00Z",
+        noul=0.45000000001,
+        atr_pct=0.00123456789,
+        forward_returns={1: 1e-9, 2: -1e-9, 3: 0.0, 4: 0.0000000002},
+        worth_trading={1: False, 2: False, 3: False, 4: False},
+        base_action="BUY",
+        base_direction_correct={1: True, 2: False, 3: False, 4: True},
+    )
+
+    payload = record.to_payload()
+
+    assert payload["noul"] == 0.45000000001
+    assert payload["atr_pct"] == 0.00123456789
+    assert payload["forward_returns"]["1"] == 1e-9
+    assert payload["forward_returns"]["2"] == -1e-9
+    assert payload["forward_returns"]["4"] == 0.0000000002
+
+
+def test_aggregate_from_payload_reproduces_embedded_metrics():
+    """A saved report rebuilt from its payload must match its own metrics."""
+    records = [
+        CalibrationRecord(
+            index=index,
+            as_of="2026-10-15T09:00:00Z",
+            noul=noul,
+            atr_pct=atr,
+            bias=bias,
+            regime=regime,
+            forward_returns={1: forward, 2: forward * 2, 3: forward * 3, 4: forward * 4},
+            worth_trading={horizon: abs(forward * horizon) * 100 >= 1.0
+                           for horizon in (1, 2, 3, 4)},
+            base_action=action,
+            base_direction_correct={
+                1: (action == "BUY" and forward > 0) or (action == "SELL" and forward < 0)
+                if action in ("BUY", "SELL") else None,
+                2: None, 3: None, 4: None,
+            },
+        )
+        for index, (noul, atr, bias, regime, action, forward) in enumerate([
+            (0.19999999999, 0.001, "long", "trend", "BUY", 1e-9),
+            (0.45, 0.002, "long", "trend", "BUY", -1e-9),
+            (0.45000000001, 0.003, "short", "range", "SELL", -1e-9),
+            (0.9, 0.004, "none", "high_vol", "HOLD", 0.02),
+        ])
+    ]
+    args = Namespace(
+        candles="synthetic", symbol="BTC/USDT", timeframe="1h", candle_count=10,
+        move_threshold_pct=1.0, delay_seconds=0.0, horizon=1,
+        thresholds=(0.2, 0.45, 0.5),
+    )
+    metric_keys = ("noul", "brier", "reliability", "worth_rate", "base",
+                   "threshold_curve", "by_horizon")
+
+    first = jev_calibration.build_report(
+        records, args, (1, 2, 3, 4), "2026-10-15T00:00:00Z", 0.0, False, None, "test"
+    )
+    rebuilt = jev_calibration.records_from_payload(first["states"])
+    second = jev_calibration.build_report(
+        rebuilt, args, (1, 2, 3, 4), "2026-10-15T00:00:00Z", 0.0, False, None, "test"
+    )
+
+    for key in metric_keys:
+        assert second[key] == first[key], key
+    # The exact 0.45 boundary state and the tiny positive return survive.
+    assert first["states"][2]["noul"] == 0.45000000001
+    assert first["states"][0]["forward_returns"]["1"] == 1e-9
 
 
 def test_record_payload_is_json_friendly():

@@ -97,15 +97,22 @@ class CalibrationRecord:
     base_direction_correct: Dict[int, Optional[bool]] = field(default_factory=dict)
 
     def to_payload(self) -> Dict[str, Any]:
-        """Serialize the record without any secret or raw prompt."""
+        """Serialize the record without any secret or raw prompt.
+
+        ``noul``, ``atr_pct`` and ``forward_returns`` are metric inputs and
+        must keep full precision. Rounding them would make a saved report
+        disagree with a later ``--aggregate-from`` rebuild: a tiny positive
+        return could become ``0.0`` and move out of the positive class, or a
+        value just below a threshold could land exactly on it.
+        """
         return {
             "index": self.index,
             "as_of": self.as_of,
             "candle_open_time": self.candle_open_time,
-            "noul": _rounded(self.noul),
+            "noul": self.noul,
             "bias": self.bias,
             "regime": self.regime,
-            "atr_pct": _rounded(self.atr_pct),
+            "atr_pct": self.atr_pct,
             "atr_percentile": _rounded(self.atr_percentile),
             "confidence": _rounded(self.confidence),
             "score_raw": _rounded(self.score_raw),
@@ -114,7 +121,7 @@ class CalibrationRecord:
             "error": self.error,
             "error_kind": self.error_kind,
             "forward_returns": {
-                str(horizon): _rounded(value)
+                str(horizon): value
                 for horizon, value in sorted(self.forward_returns.items())
             },
             "worth_trading": {
@@ -361,16 +368,16 @@ def observation_line(record: CalibrationRecord, pair: str) -> Dict[str, Any]:
     line: Dict[str, Any] = {
         "candle_open_time": record.candle_open_time or record.as_of,
         "pair": pair,
-        "noul": _rounded(record.noul),
+        "noul": record.noul,
         "bias": record.bias,
         "regime": record.regime,
-        "atr_pct": _rounded(record.atr_pct),
+        "atr_pct": record.atr_pct,
         "atr_percentile": _rounded(record.atr_percentile),
         "base_action": record.base_action,
         "cost_pct": record.cost_pct,
     }
     for horizon, value in sorted(record.forward_returns.items()):
-        line[f"forward_{horizon}h"] = _rounded(value)
+        line[f"forward_{horizon}h"] = value
     return line
 
 

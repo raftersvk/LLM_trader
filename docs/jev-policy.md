@@ -122,9 +122,9 @@ trade-P&L threshold yet and the policy correctly keeps 0.5.
   },
   "offset_rules": {
     "high_vol": {"offset": 0.05, "regimes": ["high_vol"],
-                 "atr_cutoff": {"BTC/USDT": 0.0056, "ETH/USDT": 0.00842}},
+                 "atr_cutoff": {"BTC/USDT": 0.005621, "ETH/USDT": 0.008409}},
     "low_vol":  {"offset": -0.05, "regimes": ["range"],
-                 "atr_cutoff": {"BTC/USDT": 0.00358, "ETH/USDT": 0.0059}}
+                 "atr_cutoff": {"BTC/USDT": 0.003594, "ETH/USDT": 0.005914}}
   },
   "metrics": {
     "brier": 0.2391,
