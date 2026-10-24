@@ -9,7 +9,7 @@ calibration rules and the planned (not yet wired) integration.
 
 | Path | Tracked | Purpose |
 | --- | --- | --- |
-| `runtime/jev_bench/observations.jsonl` | no (gitignored) | One JSON line per calibrated state |
+| `runtime/jev_bench/observations.jsonl` | no (gitignored) | Merged JSONL log, one line per calibrated state |
 | `runtime/jev_calibration/policy.json` | no (gitignored) | Current weekly policy |
 | `scripts/jev_calibration.py` | yes | Produces observations (`--observations`) |
 | `scripts/jev_calibrate.py` | yes | Reads observations, writes the policy |
@@ -38,6 +38,12 @@ Both runtime paths are configurable through `--observations` / `--policy`.
 
 Forward returns are fractions; `cost_pct` is a round-trip percentage (default
 0.10 %). Observations are written only for states with a real `noul` answer.
+
+Each calibration run merges into the existing log: new records are appended and
+a duplicate `(pair, candle_open_time)` replaces the older line in place. An
+aborted run never replaces a non-empty log with its partial states. Running the
+harness per symbol therefore accumulates a cross-pair history; no manual
+concatenation is required.
 
 ## Trade-P&L label
 

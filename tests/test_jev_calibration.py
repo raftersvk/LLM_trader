@@ -230,6 +230,68 @@ def test_write_observations_emits_one_line_per_scored_state(tmp_path):
     assert payload["cost_pct"] == 0.1
 
 
+
+def test_write_observations_merges_pairs_instead_of_truncating(tmp_path):
+    """A BTC run followed by an ETH run keeps both pairs in the log."""
+    path = tmp_path / "observations.jsonl"
+    btc = _report([
+        _full_record(0, 0.4, "2026-10-15T09:00:00Z"),
+        _full_record(1, 0.5, "2026-10-15T10:00:00Z"),
+    ], "BTC/USDT")
+    eth = _report([
+        _full_record(2, 0.3, "2026-10-15T09:00:00Z"),
+        _full_record(3, 0.6, "2026-10-15T10:00:00Z"),
+    ], "ETH/USDT")
+
+    assert jev_calibration.write_observations(btc, str(path)) == 2
+    assert jev_calibration.write_observations(eth, str(path)) == 4
+
+    payloads = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [payload["pair"] for payload in payloads] == ["BTC/USDT", "BTC/USDT", "ETH/USDT", "ETH/USDT"]
+    assert len({(payload["pair"], payload["candle_open_time"]) for payload in payloads}) == 4
+
+
+def test_write_observations_dedupes_on_pair_and_candle_time(tmp_path):
+    """Re-scoring the same state replaces its line in place."""
+    path = tmp_path / "observations.jsonl"
+    first = _report([_full_record(0, 0.4, "2026-10-15T09:00:00Z")], "BTC/USDT")
+    second = _report([_full_record(0, 0.9, "2026-10-15T09:00:00Z")], "BTC/USDT")
+
+    jev_calibration.write_observations(first, str(path))
+    assert jev_calibration.write_observations(second, str(path)) == 1
+
+    payloads = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert len(payloads) == 1
+    assert payloads[0]["noul"] == 0.9
+
+
+def test_aborted_run_does_not_replace_an_existing_log(tmp_path):
+    """A partial aborted run leaves a non-empty observation log untouched."""
+    path = tmp_path / "observations.jsonl"
+    good = _report([
+        _full_record(0, 0.4, "2026-10-15T09:00:00Z"),
+        _full_record(1, 0.5, "2026-10-15T10:00:00Z"),
+    ], "BTC/USDT")
+    jev_calibration.write_observations(good, str(path))
+    before = path.read_text(encoding="utf-8")
+
+    aborted = _report([_full_record(5, 0.8, "2026-10-16T00:00:00Z")], "BTC/USDT")
+    aborted["aborted"] = True
+    written = jev_calibration.write_observations(aborted, str(path))
+
+    assert written == 2
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_aborted_run_writes_when_no_log_exists(tmp_path):
+    """A first aborted run may create the log; later runs merge into it."""
+    path = tmp_path / "observations.jsonl"
+    aborted = _report([_full_record(0, 0.4, "2026-10-15T09:00:00Z")], "BTC/USDT")
+    aborted["aborted"] = True
+
+    assert jev_calibration.write_observations(aborted, str(path)) == 1
+    assert path.exists()
+
 def test_payload_preserves_metric_inputs_at_full_precision():
     """noul, ATR and forward returns must not be rounded in the payload."""
     record = CalibrationRecord(
@@ -302,14 +364,16 @@ def test_aggregate_from_payload_reproduces_embedded_metrics():
     assert first["states"][0]["forward_returns"]["1"] == 1e-9
 
 
-def _full_record(index: int, noul: float) -> Any:
+def _full_record(
+    index: int, noul: float, opened: str = "2026-10-15T09:00:00Z"
+) -> Any:
     """Record carrying every horizon so report validation succeeds."""
     forward = 0.01 * (index + 1)
     return CalibrationRecord(
         index=index,
-        as_of="2026-10-15T09:00:00Z",
+        as_of=opened,
         noul=noul,
-        candle_open_time="2026-10-15T09:00:00Z",
+        candle_open_time=opened,
         bias="long",
         regime="trend",
         atr_pct=0.01,
@@ -317,6 +381,14 @@ def _full_record(index: int, noul: float) -> Any:
         worth_trading={horizon: False for horizon in (1, 2, 3, 4)},
         base_action="BUY",
         base_direction_correct={1: True, 2: True, 3: True, 4: True},
+    )
+
+
+def _report(records, symbol: str) -> Dict[str, Any]:
+    """Build a minimal valid report for observation-log tests."""
+    return jev_calibration.build_report(
+        records, _source_args(symbol=symbol), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
     )
 
 

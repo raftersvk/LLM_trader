@@ -387,8 +387,36 @@ def observation_line(record: CalibrationRecord, pair: str) -> Dict[str, Any]:
     return line
 
 
+def _observation_key(line: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """Return the dedupe key ``(pair, candle_open_time)`` when available."""
+    pair = line.get("pair")
+    opened = line.get("candle_open_time")
+    if isinstance(pair, str) and pair and isinstance(opened, str) and opened:
+        return (pair, opened)
+    return None
+
+
+def _read_observation_lines(path: str) -> List[str]:
+    """Read non-empty JSONL lines, preserving their order and content."""
+    if not os.path.exists(path):
+        return []
+    lines: List[str] = []
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw in handle:
+            raw = raw.strip()
+            if raw:
+                lines.append(raw)
+    return lines
+
+
 def write_observations(report: Dict[str, Any], path: str) -> int:
-    """Write one JSONL line per scored state; return the line count."""
+    """Merge scored states into the JSONL log; return the total line count.
+
+    The calibration harness runs once per symbol, so the log must accumulate:
+    new records are appended and a duplicate ``(pair, candle_open_time)``
+    replaces the older line in place. An aborted run never replaces a
+    non-empty log with its partial states.
+    """
     pair = str(report.get("dataset", {}).get("symbol") or "")
     payloads = [
         payload for payload in report.get("states") or []
@@ -396,12 +424,44 @@ def write_observations(report: Dict[str, Any], path: str) -> int:
     ]
     records = records_from_payload(payloads)
     assign_atr_percentiles(records)
+    new_lines = [json.dumps(observation_line(record, pair)) for record in records]
+
+    existing = _read_observation_lines(path)
+    if report.get("aborted") and existing:
+        logger.warning(
+            "aborted run: keeping the existing observation log %s unchanged",
+            path,
+        )
+        return len(existing)
+
+    merged: List[str] = list(existing)
+    positions: Dict[Tuple[str, str], int] = {}
+    for index, line in enumerate(merged):
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            continue
+        key = _observation_key(payload) if isinstance(payload, dict) else None
+        if key is not None and key not in positions:
+            positions[key] = index
+    for line in new_lines:
+        payload = json.loads(line)
+        key = _observation_key(payload)
+        if key is not None and key in positions:
+            merged[positions[key]] = line
+        else:
+            if key is not None:
+                positions[key] = len(merged)
+            merged.append(line)
+
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(observation_line(record, pair)) + "\n")
-    return len(records)
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        for line in merged:
+            handle.write(line + "\n")
+    os.replace(temporary, path)
+    return len(merged)
 
 
 def records_from_payload(payloads: Sequence[Dict[str, Any]]) -> List[CalibrationRecord]:
