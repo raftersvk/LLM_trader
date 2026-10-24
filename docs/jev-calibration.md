@@ -8,7 +8,7 @@ is calibrated, using the production no-look-ahead state and the production
   states were scored (`BTC/USDT`, `ETH/USDT`).
 - Provider: Decision 3.0 `vllm-sr/d3-flash`, one call per state, 0.5 s pacing.
 - Calls: 400/400 succeeded. 0 errors, 0 rate-limit (429) responses.
-- Latency: BTC p50 159 ms / p95 476 ms; ETH p50 154 ms / p95 163 ms.
+- Latency: BTC p50 159 ms / p95 204 ms; ETH p50 153 ms / p95 160 ms.
 - Worth-trading label: `abs(forward_return_h1) >= 1.0 %`.
 - Base decision: rule-based 4-candle momentum proxy, **not an LLM**.
 - Repro: `scripts/jev_calibration.py`; machine reports in
@@ -33,8 +33,8 @@ is calibrated, using the production no-look-ahead state and the production
 | 0.8-0.9 | 9 | 14 |
 | 0.9-1.0 | 16 | 10 |
 | **min** | 0.0639 | 0.0488 |
-| **median** | 0.3538 | 0.3090 |
-| **mean** | 0.4337 | 0.4047 |
+| **median** | 0.3538 | 0.3089 |
+| **mean** | 0.4336 | 0.4047 |
 | **max** | 0.9672 | 0.9631 |
 
 JEV is confident: mean noul is 0.43 / 0.40 while only 1 % / 4 % of states meet
@@ -47,10 +47,10 @@ at the base rate `p(1-p)` is the no-skill reference.
 
 | Horizon | Worth rate | Brier | Constant baseline |
 | --- | ---: | ---: | ---: |
-| BTC h1 | 0.010 | 0.2505 | 0.0099 |
-| BTC h2 | 0.035 | 0.2573 | 0.0338 |
-| BTC h3 | 0.080 | 0.2742 | 0.0736 |
-| BTC h4 | 0.135 | 0.2693 | 0.1168 |
+| BTC h1 | 0.010 | 0.2504 | 0.0099 |
+| BTC h2 | 0.035 | 0.2572 | 0.0338 |
+| BTC h3 | 0.080 | 0.2741 | 0.0736 |
+| BTC h4 | 0.135 | 0.2692 | 0.1168 |
 | ETH h1 | 0.040 | 0.2271 | 0.0384 |
 | ETH h2 | 0.115 | 0.2495 | 0.1018 |
 | ETH h3 | 0.195 | 0.2676 | 0.1570 |
@@ -82,15 +82,15 @@ decisions. False-hold rate is computed over base trades that the gate blocked.
 
 | Threshold | Coverage | Trades | Base-trade precision | False-hold rate | Directional AUC |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0.20 | 0.7550 | 21 | 0.4286 | 0.0000 | 0.4615 |
-| 0.25 | 0.6550 | 21 | 0.4286 | 0.0000 | 0.4689 |
-| 0.30 | 0.5950 | 21 | 0.4286 | 0.0000 | 0.4561 |
-| 0.35 | 0.5100 | 20 | 0.4500 | 0.0000 | 0.4577 |
-| 0.40 | 0.4550 | 17 | 0.4706 | 0.0000 | 0.4762 |
-| 0.45 | 0.4000 | 17 | 0.4706 | 0.0000 | 0.4685 |
-| 0.50 | 0.3500 | 16 | 0.5000 | 0.0000 | 0.4733 |
-| 0.55 | 0.3200 | 15 | 0.5333 | 0.0000 | 0.5127 |
-| 0.60 | 0.2700 | 14 | 0.5000 | 0.0000 | 0.4783 |
+| 0.20 | 0.7550 | 21 | 0.4286 | 0.0000 | 0.4809 |
+| 0.25 | 0.6550 | 21 | 0.4286 | 0.0000 | 0.4878 |
+| 0.30 | 0.5950 | 21 | 0.4286 | 0.0000 | 0.4744 |
+| 0.35 | 0.5100 | 20 | 0.4500 | 0.0000 | 0.4744 |
+| 0.40 | 0.4550 | 17 | 0.4706 | 0.0000 | 0.4882 |
+| 0.45 | 0.4000 | 17 | 0.4706 | 0.0000 | 0.4770 |
+| 0.50 | 0.3500 | 16 | 0.5000 | 0.0000 | 0.4802 |
+| 0.55 | 0.3200 | 15 | 0.5333 | 0.0000 | 0.5170 |
+| 0.60 | 0.2700 | 14 | 0.5000 | 0.0000 | 0.4792 |
 | 0.65 | 0.2400 | 13 | 0.5385 | 0.0667 | 0.5000 |
 | 0.70 | 0.2150 | 13 | 0.5385 | 0.0667 | 0.5000 |
 
@@ -100,12 +100,12 @@ Unfiltered base precision: 0.5000 over 28 trades.
 
 | Threshold | Coverage | Trades | Base-trade precision | False-hold rate | Directional AUC |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0.20 | 0.7200 | 37 | 0.5135 | 0.0000 | 0.5410 |
+| 0.20 | 0.7200 | 37 | 0.5135 | 0.0000 | 0.5296 |
 | 0.25 | 0.5950 | 35 | 0.5143 | 0.0000 | 0.5163 |
 | 0.30 | 0.5050 | 32 | 0.4688 | 0.0000 | 0.5143 |
 | 0.35 | 0.4650 | 30 | 0.5000 | 0.0000 | 0.5464 |
 | 0.40 | 0.4300 | 29 | 0.5172 | 0.0476 | 0.5344 |
-| 0.45 | 0.3800 | 27 | 0.5185 | 0.0435 | 0.5325 |
+| 0.45 | 0.3750 | 26 | 0.5385 | 0.0417 | 0.5449 |
 | 0.50 | 0.3500 | 26 | 0.5385 | 0.0417 | 0.5265 |
 | 0.55 | 0.2950 | 22 | 0.5000 | 0.0357 | 0.4676 |
 | 0.60 | 0.2400 | 19 | 0.5263 | 0.0323 | 0.4500 |
@@ -125,9 +125,9 @@ is 1-2 correct trades and sits well inside sampling noise; 0.50 remains
 defensible when coverage is the priority.
 
 The stronger conclusion is that **0.5 is not a calibrated probability for this
-label**. Directional AUC stays at 0.46-0.51 (BTC) and 0.45-0.55 (ETH) across the whole curve, so the
-threshold mostly trades coverage for a marginal precision change rather than
-separating genuinely tradeable states.
+label**. Directional AUC stays at 0.474-0.517 (BTC) and 0.450-0.546 (ETH)
+across the whole curve, so the threshold mostly trades coverage for a marginal
+precision change rather than separating genuinely tradeable states.
 
 Even at the high end, observed worth rate is far below noul: at 0.9 the worth
 rate is 6.25 % (BTC) and 30 % (ETH) on 16 / 10 states. Tightening the threshold

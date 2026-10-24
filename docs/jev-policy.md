@@ -127,10 +127,10 @@ trade-P&L threshold yet and the policy correctly keeps 0.5.
                  "atr_cutoff": {"BTC/USDT": 0.003594, "ETH/USDT": 0.005914}}
   },
   "metrics": {
-    "brier": 0.2391,
-    "raw_brier": 0.3033,
+    "brier": 0.2396,
+    "raw_brier": 0.3030,
     "coverage": 0.33,
-    "net_benefit": -1.89,
+    "net_benefit": -1.8728,
     "trades": 41,
     "sample": 400,
     "label_states_used": 78,
@@ -145,14 +145,14 @@ Diagnostic per-horizon trade P&L on the same window (41 surviving trades):
 
 | Horizon | States used | Brier | Net benefit | Mean net % | Win rate |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| h1 | 78 | 0.2391 | -1.89 | -0.046 | 0.415 |
-| h2 | 78 | 0.3093 | -3.34 | -0.082 | 0.488 |
+| h1 | 78 | 0.2396 | -1.87 | -0.046 | 0.415 |
+| h2 | 78 | 0.3081 | -3.39 | -0.083 | 0.488 |
 | h3 | 78 | 0.2992 | -1.24 | -0.030 | 0.537 |
-| h4 | 78 | 0.3141 | -1.43 | -0.035 | 0.561 |
+| h4 | 78 | 0.3168 | -1.42 | -0.035 | 0.585 |
 
 Even if the 200-state minimum were waived, no threshold with coverage >= 40 %
-has a positive trade-P&L net benefit: at 0.30-0.40 the net benefit is -6.07 to
--2.90. The only positive points (0.65/0.70: +0.35) sit at ~20 % coverage.
+has a positive trade-P&L net benefit: at 0.30-0.40 the net benefit is -6.06 to
+-2.88. The only positive points (0.65/0.70: +0.36) sit at ~20 % coverage.
 
 ## Planned signal-service integration (not in this PR)
 
