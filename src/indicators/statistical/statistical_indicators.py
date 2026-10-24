@@ -1,55 +1,10 @@
+"""Statistical Indicators module.
+
+Provides functionality for indicators.statistical.statistical_indicators.py.
+"""
 import numpy as np
 from numba import njit
-from .utils import (
-    f_ess, f_hp,
-    calculate_correlation_matrix,
-    calculate_spectral_components,
-    smooth_power_spectrum,
-    calculate_dominant_cycle
-)
 
-@njit(cache=True)
-def apa_adaptive_eot_numba(closeprices, q1_=0.8, q2_=0.4, minlen=10, maxlen=48, avelen=3):
-    masterdom = _auto_dom_imp(closeprices, minlen, maxlen, avelen)
-    dcout = max(minlen, min(maxlen, int(round(masterdom))))
-
-    qup = _eot(closeprices, dcout, q1_)
-    qdn = _eot(closeprices, dcout, q2_)
-
-    return qup, qdn
-
-@njit(cache=True)
-def _eot(closeprices, lpperiod, k):
-    n = len(closeprices)
-    pk = np.zeros(n)
-    filt = f_ess(f_hp(closeprices, lpperiod), lpperiod)
-    x = np.zeros(n)
-    q = np.zeros(n)
-
-    for i in range(1, n):
-        pk[i] = np.maximum(abs(filt[i]), 0.99 * pk[i - 1])
-        x[i] = filt[i] / pk[i] if pk[i] != 0 else 0
-        q[i] = (x[i] + k) / (k * x[i] + 1) if x[i] != 0 else np.nan
-
-    return q
-
-@njit(cache=True)
-def _auto_dom_imp(source, minlen, maxlen, avelen):
-    """Simplified auto-dominant impulse using extracted utilities"""
-    # Apply filtering
-    filt = f_ess(f_hp(source, maxlen), minlen)
-
-    # Calculate correlation matrix
-    corr = calculate_correlation_matrix(filt, maxlen, avelen)
-
-    # Calculate spectral components
-    sqsum = calculate_spectral_components(corr, minlen, maxlen, avelen)
-
-    # Smooth power spectrum
-    r1 = smooth_power_spectrum(sqsum, minlen, maxlen)
-
-    # Calculate dominant cycle
-    return calculate_dominant_cycle(r1, minlen, maxlen, avelen)
 
 @njit(cache=True)
 def kurtosis_numba(arr, length):
@@ -62,10 +17,9 @@ def kurtosis_numba(arr, length):
 
     length_reciprocal = 1.0 / length
 
-    # Constants for unbiased estimator (matching original implementation)
     n_val = float(length)
-    factor1 = (n_val * (n_val + 1)) / ((n_val - 1) * (n_val - 2) * (n_val - 3))
-    factor2 = 3 * (n_val - 1) / ((n_val - 2) * (n_val - 3))
+    factor1 = (n_val + 1) * (n_val - 1) / (n_val * (n_val - 2) * (n_val - 3))
+    factor2 = 3 * (n_val - 1) ** 2 / ((n_val - 2) * (n_val - 3))
 
     offset = arr[0]
     s1 = 0.0
@@ -73,7 +27,6 @@ def kurtosis_numba(arr, length):
     s3 = 0.0
     s4 = 0.0
 
-    # Initialize first window
     for i in range(length):
         val = arr[i] - offset
         val2 = val * val
@@ -82,7 +35,6 @@ def kurtosis_numba(arr, length):
         s3 += val2 * val
         s4 += val2 * val2
 
-    # Compute for first window
     mean = s1 * length_reciprocal
     sum_sq_diff = s2 - length * mean * mean
     if sum_sq_diff < 0:
@@ -96,14 +48,11 @@ def kurtosis_numba(arr, length):
         kurtosis = factor1 * kurtosis_sum - factor2
         kurtosis_values[length - 1] = kurtosis
 
-    # Sliding window
     for i in range(length, n):
         old_val = arr[i - length] - offset
         new_val = arr[i] - offset
 
-        # Re-calculate every 1000 steps to maintain precision
         if i % 1000 == 0:
-            # Update offset to current window start to ensure numerical stability
             offset = arr[i - length + 1]
             window = arr[i - length + 1: i + 1] - offset
             s1 = 0.0
@@ -252,19 +201,16 @@ def zscore_numba(close, length=30, std=1.0):
     if n < length:
         return zscore_values
 
-    # To avoid precision loss on large values, shift by the first value
     offset = close[0]
 
     sum_x = 0.0
     sum_x2 = 0.0
 
-    # Initial window setup
     for i in range(length):
         val = close[i] - offset
         sum_x += val
         sum_x2 += val * val
 
-    # Calculate initial values
     if length > 0:
         mean = sum_x / length
         var = (sum_x2 - (sum_x * sum_x) / length) / (length - 1)
@@ -279,7 +225,6 @@ def zscore_numba(close, length=30, std=1.0):
         new_val = close[i] - offset
 
         if i % 1000 == 0:
-            # Recalculate to prevent drift
             window = close[i - length + 1 : i + 1] - offset
             sum_x = np.sum(window)
             sum_x2 = np.sum(window * window)
@@ -299,29 +244,6 @@ def zscore_numba(close, length=30, std=1.0):
     return zscore_values
 
 @njit(cache=True)
-def mad_numba(close, length=30):
-    n = len(close)
-    mad_values = np.full(n, np.nan)
-
-    if n < length:
-        return mad_values
-
-    for i in range(length - 1, n):
-        # Calculate mean manually to avoid np.mean on slices which allocates arrays
-        sum_val = 0.0
-        for j in range(i - length + 1, i + 1):
-            sum_val += close[j]
-        mean = sum_val / length
-
-        sum_abs_dev = 0.0
-        for j in range(i - length + 1, i + 1):
-            sum_abs_dev += abs(close[j] - mean)
-
-        mad_values[i] = sum_abs_dev / length
-
-    return mad_values
-
-@njit(cache=True)
 def quantile_numba(close, length=30, q=0.5):
     n = len(close)
     quantile_values = np.full(n, np.nan)
@@ -334,14 +256,17 @@ def quantile_numba(close, length=30, q=0.5):
 
 @njit(cache=True)
 def entropy_numba(close, length=10, base=2.0):
-    """O(N) Price Entropy using sliding window sums."""
+    """
+    O(N) Shannon entropy (default base 2) of the window's normalized prices
+    p_i = x_i / sum(x): H = -sum(p_i * log(p_i)); a flat window yields
+    log2(length) and a constant price scale factor cancels out.
+    """
     n = len(close)
     entropy = np.full(n, np.nan)
 
     safe_close = np.copy(close)
     for k in range(n):
-        if safe_close[k] <= 1e-10:
-            safe_close[k] = 1e-10
+        safe_close[k] = max(1e-10, safe_close[k])
 
     x_ln_x = safe_close * np.log(safe_close)
     sum_x = 0.0
@@ -380,46 +305,43 @@ def entropy_numba(close, length=10, base=2.0):
 
 @njit(cache=True)
 def hurst_numba(ts: np.ndarray, max_lag: int = 20) -> np.ndarray:
+    """
+    Hurst exponent from the log-log slope of the structure function
+    tau(lag) = sqrt(mean((ts[j] - ts[j - lag])**2)) over lags 2..max_lag - 1.
+
+    Expanding-window estimate: each value uses only the bars up to that index
+    (first finite at max_lag + 2); ~0.5 random walk, >0.5 trending, <0.5
+    mean-reverting.
+    """
     n = len(ts)
     hurst_values = np.full(n, np.nan, dtype=np.float64)
 
-    # Initialize state for O(N) update
-    # sum_diff_sq[k] will store sum of squared diffs for lag k
     sum_diff_sq = np.zeros(max_lag)
 
-    # Iterate through the time series once
     for i in range(n):
-        # incremental update for all lags
-        # lags are 2, 3, ..., max_lag-1 (since range(2, max_lag) excludes max_lag)
         for lag in range(2, max_lag):
             if i >= lag:
                 diff = ts[i] - ts[i - lag]
                 sum_diff_sq[lag] += diff * diff
 
-        # Calculate Hurst if we have enough data (matching original loop start)
         if i >= max_lag + 2:
             lags = np.arange(2, max_lag)
             tau = np.zeros(len(lags))
 
             for j, lag in enumerate(lags):
-                # count is the number of diffs accumulated so far
-                # terms are at indices: lag, lag+1, ..., i
                 count = i - lag + 1
                 if count > 0:
                     tau[j] = np.sqrt(sum_diff_sq[lag] / count)
                 else:
                     tau[j] = 0.0
 
-            # Filter out zero values
             non_zero_tau = tau[tau > 0]
             if len(non_zero_tau) < 2:
                 continue
 
-            # Calculate slope using valid values
             log_lags = np.log(lags[tau > 0])
             log_tau = np.log(non_zero_tau)
 
-            # Linear regression using method of moments
             n_points = len(log_lags)
             sum_xy = np.sum(log_lags * log_tau)
             sum_x = np.sum(log_lags)
@@ -488,34 +410,3 @@ def linreg_numba(close, length=14, r=False):
                 linreg[i] = m
 
     return linreg
-
-@njit(cache=True)
-def calculate_eot_numba(close_prices, period=21, q1=0.8, q2=0.4):
-    angle = 0.707 * 2 * np.pi / 100
-    alpha1 = (np.cos(angle) + np.sin(angle) - 1) / np.cos(angle)
-    a1 = np.exp(-1.414 * np.pi / period)
-    b1 = 2 * a1 * np.cos(1.414 * np.pi / period)
-    c2 = b1
-    c3 = -a1 * a1
-    c1 = 1 - c2 - c3
-    n = len(close_prices)
-    hp = np.zeros(n)
-    filt = np.zeros(n)
-    pk = np.zeros(n)
-    x = np.zeros(n)
-    quotient1 = np.full(n, np.nan)
-    quotient2 = np.full(n, np.nan)
-
-    for i in range(period, n):
-        hp[i] = (1 - alpha1 / 2) ** 2 * (close_prices[i] - 2 * close_prices[i - 1] + close_prices[i - 2]) + \
-                2 * (1 - alpha1) * hp[i - 1] - (1 - alpha1) ** 2 * hp[i - 2]
-        filt[i] = c1 * (hp[i] + hp[i - 1]) / 2 + c2 * filt[i - 1] + c3 * filt[i - 2]
-        if abs(filt[i]) > 0.991 * pk[i - 1]:
-            pk[i] = abs(filt[i])
-        else:
-            pk[i] = 0.991 * pk[i - 1]
-        x[i] = filt[i] / pk[i] if pk[i] != 0 else 0
-        quotient1[i] = (x[i] + q1) / (q1 * x[i] + 1) if x[i] != 0 else np.nan
-        quotient2[i] = (x[i] + q2) / (q2 * x[i] + 1) if x[i] != 0 else np.nan
-
-    return quotient1, quotient2

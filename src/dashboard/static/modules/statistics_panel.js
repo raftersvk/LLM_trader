@@ -1,6 +1,3 @@
-/**
- * Statistics panel module - Displays trading statistics with annotations.
- */
 
 const STAT_ANNOTATIONS = {
     total_trades: "Number of completed trades (entries that have been closed). Higher volume indicates more active trading.",
@@ -24,11 +21,7 @@ export async function updateStatisticsData() {
     const container = document.getElementById('statistics-content');
     if (!container) return;
     try {
-        const symbol = window.state?.currentPair;
-        const url = symbol && symbol !== '__global__'
-            ? `/api/performance/stats?symbol=${encodeURIComponent(symbol)}`
-            : '/api/performance/stats';
-        const response = await fetch(url);
+        const response = await fetch('/api/performance/stats');
         const stats = await response.json();
         if (!stats || Object.keys(stats).length === 0) {
             container.innerHTML = `
@@ -42,7 +35,8 @@ export async function updateStatisticsData() {
             `;
             return;
         }
-        container.innerHTML = renderStatistics(stats);
+        const statsHtml = renderStatistics(stats);
+        container.innerHTML = window.DOMPurify ? DOMPurify.sanitize(statsHtml) : statsHtml;
     } catch (e) {
         container.innerHTML = `
             <div class="empty-state">

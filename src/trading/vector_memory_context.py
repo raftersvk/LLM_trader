@@ -1,19 +1,63 @@
 """Context and retrieval helpers for vector memory."""
 
 import math
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
 
-from src.utils.indicator_classifier import classify_rsi_label
+from src.utils.indicator_classifier import (
+    build_exit_execution_context,
+    classify_rsi_label,
+    format_exit_execution_context,
+)
 
-from .data_models import VectorSearchResult
+from .data_models import ExitExecutionContext, VectorSearchResult
 
 
 class VectorMemoryContextMixin:
     """Document building, retrieval, and prompt formatting behavior."""
 
+    if TYPE_CHECKING:
+        logger: Any
+        _collection: Any
+        _embedding_model: Any
+        _decay_half_life_days: int
+        _max_age_days: int
+        RETRIEVAL_OVERFETCH_MULTIPLIER: int
+        MIN_EVIDENCE_TRADES: int
+
+        @property
+        def trade_count(self) -> int: ...
+
+        def _ensure_initialized(self) -> bool: ...
+
+        def _encode_embedding(self, text: str) -> list[float]: ...
+
+        def get_anti_patterns_for_prompt(self, k: int = 3) -> str: ...
+
+    @staticmethod
+    def _sanitize_prompt_text(text: str) -> str:
+        """Sanitize retrieved text from ChromaDB to prevent prompt injection."""
+        if not text:
+            return ""
+        clean = text.replace("---", "-").replace("###", "").replace("##", "").replace("#", "")
+        for keyword in ("System:", "User:", "Assistant:", "<USER_REQUEST>", "</USER_REQUEST>"):
+            clean = clean.replace(keyword, "")
+        clean = "".join(ch for ch in clean if ch in ("\n", "\r", "\t") or (ord(ch) >= 32 and ord(ch) != 127))
+        return clean.strip()
+
+    @staticmethod
+    def _parse_trade_timestamp(timestamp: str) -> datetime:
+        """Parse trade timestamp safely and normalize to UTC."""
+        try:
+            parsed = datetime.fromisoformat(timestamp)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        except (TypeError, ValueError):
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+    @staticmethod
     def _build_experience_document(
-        self,
         direction: str,
         symbol: str,
         outcome: str,
@@ -22,41 +66,73 @@ class VectorMemoryContextMixin:
         reasoning: str,
         close_reason: str,
         market_context: str,
-        adx: Optional[float],
-        rsi: Optional[float],
-        atr_pct: Optional[float],
+        adx: float | None,
+        rsi: float | None,
+        atr_pct: float | None,
         volatility: str,
         macd_signal: str,
         bb_position: str,
-        rr_ratio: Optional[float],
-        sl_pct: Optional[float],
-        tp_pct: Optional[float],
+        rr_ratio: float | None,
+        sl_pct: float | None,
+        tp_pct: float | None,
         market_sentiment: str,
         order_book_bias: str,
-        max_profit_pct: Optional[float],
-        max_drawdown_pct: Optional[float],
-        factor_scores: Dict[str, float],
+        max_profit_pct: float | None,
+        max_drawdown_pct: float | None,
+        factor_scores: dict[str, float],
+        exit_execution_context: ExitExecutionContext | None = None,
+        atr_percentage: float | None = None,
+        choppiness: float | None = None,
+        volume_state: str = "",
+        trend_strength: float | None = None,
+        rsi_level: str = "",
+        bb_percent_b: float | None = None,
+        pfe: float | None = None,
+        vwap_distance: float | None = None,
+        chandelier_distance: float | None = None,
+        mfi: float | None = None,
+        cmf: float | None = None,
+        supertrend_signal: str = "",
+        social_sentiment_reddit: str = "",
+        portfolio_pnl_pct: float | None = None,
     ) -> str:
         """Build the discriminative text document embedded for semantic search."""
         symbol_str = f" [{symbol}]" if symbol else ""
         header = f"{direction} trade{symbol_str}. {market_context}."
 
-        indicator_parts: List[str] = []
+        indicator_parts: list[str] = []
         if adx is not None:
-            indicator_parts.append(f"ADX={adx:.1f} ({self._adx_label(adx)})")
+            indicator_parts.append(f"ADX={adx:.1f} ({VectorMemoryContextMixin._adx_label(adx)})")
         if rsi is not None:
             indicator_parts.append(f"RSI={rsi:.1f} ({classify_rsi_label(rsi)})")
         if atr_pct is not None:
             indicator_parts.append(f"ATR=${atr_pct:.0f}")
+        if atr_percentage is not None and atr_percentage > 0:
+            indicator_parts.append(f"ATR%={atr_percentage:.1f}%")
         if volatility:
             indicator_parts.append(f"Vol={volatility}")
         if macd_signal:
             indicator_parts.append(f"MACD={macd_signal}")
         if bb_position:
             indicator_parts.append(f"BB={bb_position}")
+        if bb_percent_b is not None:
+            indicator_parts.append(f"BB%B={bb_percent_b:.2f}")
+        if choppiness is not None and choppiness > 0:
+            chop_label = "Trending" if choppiness < 38 else "Choppy" if choppiness > 62 else "Transitional"
+            indicator_parts.append(f"Chop={choppiness:.0f} ({chop_label})")
+        if volume_state and volume_state != "NORMAL":
+            indicator_parts.append(f"VolState={volume_state}")
+        if trend_strength is not None and trend_strength > 0:
+            indicator_parts.append(f"TrendStr={trend_strength:.0f}")
+        if rsi_level and rsi_level != "NEUTRAL":
+            indicator_parts.append(f"RSI={rsi_level}")
+        if supertrend_signal and supertrend_signal != "NEUTRAL":
+            indicator_parts.append(f"STrend={supertrend_signal}")
+        if pfe is not None:
+            indicator_parts.append(f"PFE={pfe:+.2f}")
         indicators_str = " | ".join(indicator_parts)
 
-        structure_parts: List[str] = []
+        structure_parts: list[str] = []
         if rr_ratio is not None:
             structure_parts.append(f"RR={rr_ratio:.1f}")
         if sl_pct is not None:
@@ -67,9 +143,24 @@ class VectorMemoryContextMixin:
             structure_parts.append(f"Sentiment={market_sentiment}")
         if order_book_bias:
             structure_parts.append(f"OB={order_book_bias}")
+        exit_execution_text = format_exit_execution_context(exit_execution_context)
+        if exit_execution_text:
+            structure_parts.append(exit_execution_text)
+        if vwap_distance is not None:
+            structure_parts.append(f"VWAPDist={vwap_distance * 100:+.2f}%")
+        if chandelier_distance is not None:
+            structure_parts.append(f"ChandDist={chandelier_distance * 100:+.2f}%")
+        if mfi is not None:
+            structure_parts.append(f"MFI={mfi:.1f}")
+        if cmf is not None:
+            structure_parts.append(f"CMF={cmf:+.3f}")
+        if social_sentiment_reddit in ("BULLISH", "BEARISH", "MIXED"):
+            structure_parts.append(f"Reddit={social_sentiment_reddit}")
+        if portfolio_pnl_pct is not None:
+            structure_parts.append(f"PortfolioPnL={portfolio_pnl_pct:+.1f}%")
         structure_str = " | ".join(structure_parts)
 
-        factor_parts: List[str] = []
+        factor_parts: list[str] = []
         for key, score in sorted(factor_scores.items()):
             name = key.replace("_score", "")
             bucket = "HIGH" if score > 69 else "MED" if score > 30 else "LOW"
@@ -80,7 +171,7 @@ class VectorMemoryContextMixin:
         if close_reason:
             result_str += f" via {close_reason}"
 
-        post_parts: List[str] = []
+        post_parts: list[str] = []
         if max_profit_pct is not None and max_profit_pct > 0:
             post_parts.append(f"MFE=+{max_profit_pct:.1f}%")
         if max_drawdown_pct is not None and max_drawdown_pct > 0:
@@ -114,7 +205,7 @@ class VectorMemoryContextMixin:
     def _calculate_recency_score(
         self,
         trade_timestamp: str,
-        half_life_days: int = 90,
+        half_life_days: int = 30,
     ) -> float:
         """Calculate recency weight using exponential decay."""
         try:
@@ -133,9 +224,10 @@ class VectorMemoryContextMixin:
         current_context: str,
         k: int = 5,
         use_decay: bool = True,
-        decay_half_life_days: int = 90,
-        where: Optional[Dict[str, Any]] = None,
-    ) -> List[VectorSearchResult]:
+        decay_half_life_days: int | None = None,
+        max_age_days: int | None = None,
+        where: dict[str, Any] | None = None,
+    ) -> list[VectorSearchResult]:
         """Retrieve past experiences similar to the current market context."""
         if not self._ensure_initialized():
             return []
@@ -144,17 +236,26 @@ class VectorMemoryContextMixin:
             if self._collection.count() == 0:
                 return []
 
-            query_embedding = self._embedding_model.encode(current_context).tolist()
+            query_embedding = self._encode_embedding(current_context)
+            effective_half_life_days = (
+                decay_half_life_days
+                if decay_half_life_days is not None else self._decay_half_life_days
+            )
+            effective_max_age_days = (
+                max_age_days
+                if max_age_days is not None else self._max_age_days
+            )
+            overfetch_k = max(1, k * self.RETRIEVAL_OVERFETCH_MULTIPLIER)
 
             query_kwargs = {
                 "query_embeddings": [query_embedding],
-                "n_results": min(k, self._collection.count()),
+                "n_results": min(overfetch_k, self._collection.count()),
             }
             if where:
                 query_kwargs["where"] = where
             results = self._collection.query(**query_kwargs)
 
-            experiences: List[VectorSearchResult] = []
+            experiences: list[VectorSearchResult] = []
             if results and results["ids"] and results["ids"][0]:
                 for i, doc_id in enumerate(results["ids"][0]):
                     similarity = 1 - results["distances"][0][i] if results["distances"] else 0
@@ -162,7 +263,7 @@ class VectorMemoryContextMixin:
 
                     if use_decay:
                         timestamp = meta.get("timestamp", "")
-                        recency = self._calculate_recency_score(timestamp, decay_half_life_days)
+                        recency = self._calculate_recency_score(timestamp, effective_half_life_days)
                         hybrid_score = similarity * 0.7 + recency * 0.3
                     else:
                         recency = 1.0
@@ -178,12 +279,17 @@ class VectorMemoryContextMixin:
                     ))
 
             if use_decay:
+                cutoff_dt = datetime.now(timezone.utc) - timedelta(days=effective_max_age_days)
+                experiences = [
+                    item for item in experiences
+                    if self._parse_trade_timestamp(item.metadata.get("timestamp", "")) >= cutoff_dt
+                ]
                 experiences.sort(key=lambda item: item.hybrid_score, reverse=True)
                 experiences = experiences[:k]
 
             return experiences
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Failed to retrieve experiences: %s", e)
             return []
 
@@ -192,8 +298,10 @@ class VectorMemoryContextMixin:
         current_context: str,
         k: int = 5,
         display_context: str = "",
+        current_atr_percentage: float | None = None,
+        include_rules: bool = True,
     ) -> str:
-        """Get formatted context string for prompt injection."""
+        """Render experiences, optionally including rules for standalone use."""
         display = display_context or current_context
         experiences = self.retrieve_similar_experiences(
             current_context, k, where={"outcome": {"$ne": "UPDATE"}}
@@ -203,16 +311,33 @@ class VectorMemoryContextMixin:
             return ""
 
         max_similarity = max(exp.similarity for exp in experiences)
-        if len(experiences) <= 2 and max_similarity < 50:
+        shown = len(experiences)
+        brain_trades = self.trade_count
+        context_header = (
+            f"RELEVANT PAST EXPERIENCES (Context: {display}, active window: last {self._max_age_days} days):"
+        )
+        thin_sample = shown <= 2 and (
+            max_similarity < 50 or brain_trades < self.MIN_EVIDENCE_TRADES
+        )
+        if thin_sample:
+            reason = (
+                f"only {brain_trades} trade(s) closed in total"
+                if brain_trades < self.MIN_EVIDENCE_TRADES
+                else "below 50% similarity"
+            )
             lines = [
-                f"RELEVANT PAST EXPERIENCES (Context: {display}):",
+                context_header,
                 "",
-                f"⚠️ LIMITED DATA: Only {len(experiences)} trade(s) with <50% similarity. Standard analysis recommended.",
+                (
+                    f"⚠️ LIMITED DATA: {shown} retrieved trade(s), {reason}. Treat these as ANECDOTES, "
+                    "not as an established pattern — do NOT call an anti-pattern match on this basis. "
+                    "Standard analysis recommended."
+                ),
                 "",
             ]
         else:
             lines = [
-                f"RELEVANT PAST EXPERIENCES (Context: {display}):",
+                context_header,
                 "",
             ]
 
@@ -221,32 +346,33 @@ class VectorMemoryContextMixin:
             outcome = meta.get("outcome", "UNKNOWN")
             pnl = meta.get("pnl_pct", 0)
             direction = meta.get("direction", "?")
+            raw_context = self._sanitize_prompt_text(meta.get("market_context", "N/A"))
 
             lines.append(f"{i}. [SIMILARITY {exp.similarity:.0f}%] {direction} trade")
             lines.append(f"   - Result: {outcome} ({pnl:+.2f}%)")
-            lines.append(f"   - Context: {meta.get('market_context', 'N/A')}")
+            lines.append(f"   - Context: {raw_context}")
 
-            match_factors = self._build_match_factors(meta, display)
+            match_factors = self._build_match_factors(meta, display, current_atr_percentage)
             if match_factors:
                 lines.append(f"   - Match Factors: {match_factors}")
 
-            reasoning = meta.get("reasoning", "")
-            if reasoning and reasoning != "N/A":
-                lines.append(f'   - Key Insight: "{reasoning}"')
+            raw_reasoning = self._sanitize_prompt_text(meta.get("reasoning", ""))
+            if raw_reasoning and raw_reasoning != "N/A":
+                lines.append(f'   - Key Insight: "{raw_reasoning}"')
             else:
                 lines.append(f'   - Key Insight: "{self._generate_synthetic_insight(meta)}"')
             lines.append("")
 
-        anti_patterns = self.get_anti_patterns_for_prompt(k=2)
+        anti_patterns = self.get_anti_patterns_for_prompt(k=2) if include_rules else ""
         if anti_patterns:
             lines.append("")
             lines.append(anti_patterns)
 
         return "\n".join(lines)
 
-    def _generate_synthetic_insight(self, meta: Dict[str, Any]) -> str:
+    def _generate_synthetic_insight(self, meta: dict[str, Any]) -> str:
         """Generate synthetic insight from trade metadata when reasoning is unavailable."""
-        parts: List[str] = []
+        parts: list[str] = []
 
         symbol = meta.get("symbol", "")
         if symbol:
@@ -271,6 +397,17 @@ class VectorMemoryContextMixin:
         if rr is not None:
             parts.append(f"R/R: {rr:.1f}")
 
+        exit_execution_text = format_exit_execution_context(
+            build_exit_execution_context(
+                stop_loss_type=meta.get("stop_loss_type"),
+                stop_loss_check_interval=meta.get("stop_loss_check_interval"),
+                take_profit_type=meta.get("take_profit_type"),
+                take_profit_check_interval=meta.get("take_profit_check_interval"),
+            )
+        )
+        if exit_execution_text:
+            parts.append(exit_execution_text)
+
         max_profit = meta.get("max_profit_pct")
         max_dd = meta.get("max_drawdown_pct")
         if max_profit is not None and max_profit > 0:
@@ -278,11 +415,36 @@ class VectorMemoryContextMixin:
         if max_dd is not None and max_dd > 0:
             parts.append(f"MaxDD: -{max_dd:.1f}%")
 
+        chop = meta.get("choppiness_at_entry")
+        if chop is not None and chop > 0:
+            chop_label = "Trending" if chop < 38 else "Choppy" if chop > 62 else "Transitional"
+            parts.append(f"Chop: {chop:.0f}({chop_label})")
+
+        vol_state = meta.get("volume_state", "")
+        if vol_state and vol_state != "NORMAL":
+            parts.append(f"Vol: {vol_state}")
+
+        mfi_val = meta.get("mfi_at_entry")
+        cmf_val = meta.get("cmf_at_entry")
+        if mfi_val is not None:
+            parts.append(f"MFI: {mfi_val:.0f}")
+        if cmf_val is not None:
+            parts.append(f"CMF: {cmf_val:+.2f}")
+
+        st_signal = meta.get("supertrend_signal", "")
+        if st_signal and st_signal != "NEUTRAL":
+            parts.append(f"ST: {st_signal}")
+
         return " | ".join(parts) if parts else "No additional data"
 
-    def _build_match_factors(self, meta: Dict[str, Any], current_context: str) -> str:
+    def _build_match_factors(
+        self,
+        meta: dict[str, Any],
+        current_context: str,
+        current_atr_percentage: float | None = None,
+    ) -> str:
         """Build a match factors line showing stored numeric features vs current context."""
-        parts: List[str] = []
+        parts: list[str] = []
         ctx_upper = current_context.upper()
 
         adx = meta.get("adx_at_entry")
@@ -328,6 +490,10 @@ class VectorMemoryContextMixin:
             flag = " ⚠️" if bb_mismatch else ""
             parts.append(f"BB={bb}{flag}")
 
+        bb_pct_b = meta.get("bb_percent_b")
+        if bb_pct_b is not None:
+            parts.append(f"BB%B={bb_pct_b:.2f}")
+
         ob = meta.get("order_book_bias", "")
         if ob and ob not in ("BALANCED", ""):
             ob_mismatch = f"ORDERBOOK {ob.upper()}" not in ctx_upper
@@ -342,8 +508,90 @@ class VectorMemoryContextMixin:
         if atr is not None:
             parts.append(f"ATR=${atr:.0f}")
 
+        atr_pct_val = meta.get("atr_percentage_at_entry")
+        if atr_pct_val is not None and atr_pct_val > 0:
+            atr_scale_mismatch = (
+                current_atr_percentage is not None
+                and current_atr_percentage > 0
+                and (
+                    atr_pct_val > current_atr_percentage * 1.5
+                    or atr_pct_val < current_atr_percentage / 1.5
+                )
+            )
+            if atr_scale_mismatch:
+                parts.append(
+                    f"ATR%={atr_pct_val:.1f}% ⚠️ vs current {current_atr_percentage:.1f}% "
+                    "(different volatility scale)"
+                )
+            else:
+                parts.append(f"ATR%={atr_pct_val:.1f}%")
+
+        chop = meta.get("choppiness_at_entry")
+        if chop is not None and chop > 0:
+            chop_label = "Trending" if chop < 38 else "Choppy" if chop > 62 else "Transitional"
+            ctx_has_trending = "Trending" in ctx_upper
+            ctx_has_choppy = "Choppy" in ctx_upper
+            chop_mismatch = (ctx_has_trending or ctx_has_choppy) and chop_label.upper() not in ctx_upper
+            flag = " ⚠️" if chop_mismatch else ""
+            parts.append(f"Chop={chop:.0f}({chop_label}){flag}")
+
+        vol_state = meta.get("volume_state", "")
+        if vol_state and vol_state != "NORMAL":
+            vol_state_mismatch = f"VolState={vol_state}".upper() not in ctx_upper and f"VOLUME {vol_state}" not in ctx_upper
+            flag = " ⚠️" if vol_state_mismatch else ""
+            parts.append(f"VolState={vol_state}{flag}")
+
+        trend_str = meta.get("trend_strength")
+        if trend_str is not None and trend_str > 0:
+            parts.append(f"TrendStr={trend_str:.0f}")
+
+        st_signal = meta.get("supertrend_signal", "")
+        if st_signal and st_signal != "NEUTRAL":
+            parts.append(f"ST={st_signal}")
+
+        pfe_val = meta.get("pfe_at_entry")
+        if pfe_val is not None:
+            parts.append(f"PFE={pfe_val:+.2f}")
+
+        mfi_val = meta.get("mfi_at_entry")
+        if mfi_val is not None:
+            parts.append(f"MFI={mfi_val:.0f}")
+
+        cmf_val = meta.get("cmf_at_entry")
+        if cmf_val is not None:
+            parts.append(f"CMF={cmf_val:+.2f}")
+
+        vwap_dist = meta.get("vwap_distance_pct")
+        if vwap_dist is not None:
+            parts.append(f"VWAPDist={vwap_dist * 100:+.2f}%")
+
+        chand_dist = meta.get("chandelier_distance_pct")
+        if chand_dist is not None:
+            parts.append(f"ChandDist={chand_dist * 100:+.2f}%")
+
         if meta.get("is_weekend", False):
             parts.append("Weekend ⚠️")
+
+        exit_execution_text = format_exit_execution_context(
+            build_exit_execution_context(
+                stop_loss_type=meta.get("stop_loss_type"),
+                stop_loss_check_interval=meta.get("stop_loss_check_interval"),
+                take_profit_type=meta.get("take_profit_type"),
+                take_profit_check_interval=meta.get("take_profit_check_interval"),
+            )
+        )
+        if exit_execution_text:
+            parts.append(exit_execution_text)
+
+        reddit_sent = meta.get("social_sentiment_reddit", "")
+        if reddit_sent and reddit_sent not in ("NEUTRAL", "NO_DATA"):
+            reddit_mismatch = f"Reddit={reddit_sent}" not in ctx_upper and reddit_sent.upper() not in ctx_upper
+            flag = " ⚠️" if reddit_mismatch else ""
+            parts.append(f"Reddit={reddit_sent}{flag}")
+
+        pf_pnl = meta.get("portfolio_pnl_pct")
+        if pf_pnl is not None:
+            parts.append(f"PortfolioPnL={pf_pnl:+.1f}%")
 
         return " | ".join(parts)
 
@@ -351,7 +599,7 @@ class VectorMemoryContextMixin:
         self,
         current_context: str,
         k: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Calculate statistics from similar past experiences."""
         experiences = self.retrieve_similar_experiences(
             current_context, k, where={"outcome": {"$ne": "UPDATE"}}
@@ -368,3 +616,4 @@ class VectorMemoryContextMixin:
             "avg_pnl": sum(pnls) / len(pnls) if pnls else 0,
             "total_trades": len(experiences),
         }
+

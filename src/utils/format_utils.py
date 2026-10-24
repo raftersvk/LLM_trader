@@ -11,10 +11,10 @@ Formatting Strategy:
     2. Large values (e.g., BTC price) are not cluttered with unnecessary decimals
     3. Scientific notation is used only for microscopic values (< 1e-7)
 """
-from datetime import datetime
-from typing import List, Any, Optional
-
 import math
+from datetime import datetime, timezone
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
@@ -28,22 +28,16 @@ CENT_VALUE_THRESHOLD = 1e-2
 DIME_VALUE_THRESHOLD = 0.1
 FULL_PRECISION_THRESHOLD = 10.0
 
-# Characters to remove when cleaning number strings
-CLEAN_NUMBER_CHARS = ('$', '€', '£', '%', ',')
+CLEAN_NUMBER_CHARS = ("$", "€", "£", "%", ",")
 
 
-def timestamps_from_ms_array(timestamps_ms: np.ndarray) -> List[datetime]:
+def timestamps_from_ms_array(timestamps_ms: np.ndarray) -> list[datetime]:
     """Convert numpy array of millisecond timestamps to list of datetime objects.
 
     Uses pandas for ~10x faster vectorized conversion compared to list comprehension.
-
-    Args:
-        timestamps_ms: Numpy array of timestamps in milliseconds
-
-    Returns:
-        List of datetime objects
+    Returns: list of datetime objects
     """
-    return pd.to_datetime(timestamps_ms, unit='ms', utc=True).to_pydatetime().tolist()
+    return pd.to_datetime(timestamps_ms, unit="ms", utc=True).to_pydatetime().tolist()  # type: ignore[reportAttributeAccessIssue]
 
 
 class FormatUtils:
@@ -55,30 +49,13 @@ class FormatUtils:
     """
 
     def __init__(self, default_precision: int = 8) -> None:
-        """Initialize the formatting utilities.
-
-        Args:
-            default_precision: Default decimal places for numeric formatting (default: 8)
-        """
+        """Initialize the formatting utilities."""
         self.default_precision = default_precision
 
     def parse_value(self, value: Any, default: Any = None) -> float:
-        """Parse various numeric formats into a clean float.
+        """Parse '$1,234.50'-style input into a float, or return `default` on failure.
 
-        Handles:
-        - Currency symbols ($, €, £, etc.)
-        - Percentages (%)
-        - Commas (1,000.00)
-        - Whitespace
-        - Strings containing only numbers
-        - Already numeric values
-
-        Args:
-            value: The input value to parse (str, int, float, or None)
-            default: Value to return if parsing fails (defaults to None)
-
-        Returns:
-            Float representation of the value, or default if parsing fails
+        Strips currency symbols, '%', commas and whitespace; accepts int/float/None.
         """
         if isinstance(value, (int, float)):
             return float(value)
@@ -86,12 +63,10 @@ class FormatUtils:
         if not isinstance(value, str):
             return default
 
-        # Clean string
         clean = value.strip()
 
-        # Remove common currency/percentage symbols and separators
         for char in CLEAN_NUMBER_CHARS:
-            clean = clean.replace(char, '')
+            clean = clean.replace(char, "")
 
         try:
             return float(clean)
@@ -102,11 +77,6 @@ class FormatUtils:
         """Format a value with appropriate precision based on its magnitude.
 
         Applies adaptive formatting rules defined by module-level constants.
-
-        Args:
-            val: Numeric value to format (None returns 'N/A')
-            precision: Decimal places for full precision range, defaults to instance default_precision
-
         Returns:
             Formatted string representation of the value
         """
@@ -120,77 +90,72 @@ class FormatUtils:
             abs_val = abs(val)
 
             if 0 < abs_val < SCIENTIFIC_NOTATION_THRESHOLD:
-                return f"{val:.{effective_precision}e}"  # Scientific notation for very small values
+                return f"{val:.{effective_precision}e}"
             if abs_val < CRYPTO_DUST_THRESHOLD:
-                return f"{val:.8f}"  # 8 decimal places for small crypto values
+                return f"{val:.8f}"
             if abs_val < MICRO_VALUE_THRESHOLD:
-                return f"{val:.7f}"  # 7 decimal places
+                return f"{val:.7f}"
             if abs_val < MILLI_VALUE_THRESHOLD:
-                return f"{val:.6f}"  # 6 decimal places
+                return f"{val:.6f}"
             if abs_val < CENT_VALUE_THRESHOLD:
-                return f"{val:.5f}"  # 5 decimal places
+                return f"{val:.5f}"
             if abs_val < DIME_VALUE_THRESHOLD:
-                return f"{val:.4f}"  # 4 decimal places
+                return f"{val:.4f}"
             if abs_val < FULL_PRECISION_THRESHOLD:
-                return f"{val:.{effective_precision}f}"  # Respect original precision for indicators
+                return f"{val:.{effective_precision}f}"
 
-            return f"{val:.2f}"  # 2 decimal places for larger values
+            return f"{val:.2f}"
         return "N/A"
 
-    def fmt_ta(self, td: dict, key: str, precision: int | None = None, default: str = 'N/A') -> str:
+    def fmt_ta(self, td: dict, key: str, precision: int | None = None, default: str = "N/A") -> str:
         """Format technical-analysis indicator values.
 
         Handles Union[float, str] return from get_indicator_value() which uses
         'N/A' string sentinel for missing/invalid indicators.
-
-        Args:
-            td: Technical data dictionary
-            key: Indicator key to retrieve
-            precision: Number of decimal places, defaults to instance default_precision
-            default: Default value if indicator not found
-
         Returns:
             Formatted numeric string or default value
         """
-        effective_precision = precision if precision is not None else self.default_precision
         val = get_indicator_value(td, key)
-        if isinstance(val, (int, float)) and not math.isnan(val):  # Polymorphic check - legitimate
-            return self.fmt(val, effective_precision)
+        if isinstance(val, (int, float)) and not math.isnan(val):
+            abs_val = abs(val)
+            eff_prec = precision if precision is not None else self.default_precision
+            if 0 < abs_val < SCIENTIFIC_NOTATION_THRESHOLD:
+                return f"{val:.{eff_prec}e}"
+            if abs_val < CRYPTO_DUST_THRESHOLD:
+                return f"{val:.8f}"
+            if abs_val < MICRO_VALUE_THRESHOLD:
+                return f"{val:.7f}"
+            if abs_val < MILLI_VALUE_THRESHOLD:
+                return f"{val:.6f}"
+            if abs_val < CENT_VALUE_THRESHOLD:
+                return f"{val:.5f}"
+            if abs_val < DIME_VALUE_THRESHOLD:
+                return f"{val:.4f}"
+            if abs_val < FULL_PRECISION_THRESHOLD:
+                return f"{val:.{eff_prec}f}"
+            return f"{val:.2f}"
         return default
 
     def format_current_time(self, format_str: str = "%Y-%m-%d %H:%M:%S") -> str:
         """Format current time with specified format.
-
-        Args:
-            format_str: strftime format string
-
         Returns:
             Formatted current time string
         """
-        return datetime.now().strftime(format_str)
+        return datetime.now(timezone.utc).strftime(format_str)
 
     def format_timestamp_seconds(self, timestamp_sec: float, format_str: str = "%Y-%m-%d") -> str:
         """Format timestamp in seconds (not milliseconds) to human-readable string.
-
-        Args:
-            timestamp_sec: Timestamp in seconds since epoch
-            format_str: strftime format string
-
         Returns:
             Formatted datetime string or 'N/A' if invalid
         """
         try:
-            dt = datetime.fromtimestamp(timestamp_sec)
+            dt = datetime.fromtimestamp(timestamp_sec)  # noqa: DTZ006
             return dt.strftime(format_str)
         except (ValueError, TypeError, OSError):
             return "N/A"
 
     def format_date_from_timestamp(self, timestamp_sec: float) -> str:
         """Format timestamp to date only (YYYY-MM-DD).
-
-        Args:
-            timestamp_sec: Timestamp in seconds since epoch
-
         Returns:
             Formatted date string or 'N/A' if invalid
         """
@@ -198,26 +163,18 @@ class FormatUtils:
 
     def timestamp_from_iso(self, iso_str: str) -> float:
         """Convert ISO format string to Unix timestamp in seconds.
-
-        Args:
-            iso_str: ISO format datetime string (supports 'Z' suffix)
-
         Returns:
             Unix timestamp in seconds, or 0.0 if conversion fails
         """
         try:
-            if iso_str.endswith('Z'):
-                iso_str = iso_str[:-1] + '+00:00'
+            if iso_str.endswith("Z"):
+                iso_str = iso_str[:-1] + "+00:00"
             return datetime.fromisoformat(iso_str).timestamp()
         except (ValueError, TypeError, AttributeError):
             return 0.0
 
     def parse_timestamp(self, timestamp_field) -> float:
         """Universal timestamp parser supporting int/float/str formats.
-
-        Args:
-            timestamp_field: Timestamp as int, float, or ISO string
-
         Returns:
             Unix timestamp in seconds as float, or 0.0 if conversion fails
         """
@@ -231,31 +188,27 @@ class FormatUtils:
             return self.timestamp_from_iso(timestamp_field)
         return 0.0
 
-    def parse_timestamp_ms(self, timestamp_ms: float) -> Optional[datetime]:
+    def parse_timestamp_ms(self, timestamp_ms: float) -> datetime | None:
         """Parse timestamp in milliseconds to datetime object.
-
-        Args:
-            timestamp_ms: Timestamp in milliseconds
-
         Returns:
             datetime object or None if invalid
         """
         try:
-            return datetime.fromtimestamp(timestamp_ms / 1000)
+            return datetime.fromtimestamp(timestamp_ms / 1000)  # noqa: DTZ006
         except (ValueError, TypeError, OSError):
             return None
 
     def get_supertrend_direction_string(self, direction) -> str:
         """Get supertrend direction as string."""
         if direction > 0:
-            return 'Bullish'
+            return "Bullish"
         if direction < 0:
-            return 'Bearish'
-        return 'Neutral'
+            return "Bearish"
+        return "Neutral"
 
     def format_bollinger_interpretation(self, td: dict) -> str:
         """Format Bollinger Bands interpretation."""
-        bb_position = get_indicator_value(td, 'bb_position')
+        bb_position = get_indicator_value(td, "bb_position")
         if isinstance(bb_position, (int, float)):
             if bb_position > 0.8:
                 return " [Near upper band - possible overbought]"
@@ -266,7 +219,7 @@ class FormatUtils:
 
     def format_cmf_interpretation(self, td: dict) -> str:
         """Format Chaikin Money Flow interpretation."""
-        cmf_val = get_indicator_value(td, 'cmf')
+        cmf_val = get_indicator_value(td, "cmf")
         if isinstance(cmf_val, (int, float)):
             if cmf_val > 0.1:
                 return " [Accumulation phase]"
@@ -274,3 +227,4 @@ class FormatUtils:
                 return " [Distribution phase]"
             return " [Neutral]"
         return ""
+

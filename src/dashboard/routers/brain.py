@@ -1,144 +1,41 @@
 """Router for brain state, memory vectors, and positions."""
 import asyncio
-import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Union
+from time import monotonic
+from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
-from src.utils.indicator_classifier import (
-    build_context_string_from_technical_data,
-    build_query_document_from_technical_data,
-    classify_adx_label,
-    classify_trend_direction,
+from src.dashboard.decision_presenter import (
+    RULE_METADATA_FIELDS,
+    build_current_market_context,
+    build_decision_graph,
+    build_decision_synopsis,
+    build_decision_synopsis_data,
+    build_risk_management,
+    distance_pct_or_fallback,
+    excerpt_text,
+    extract_current_atr_percentage,
+    extract_market_status,
+    read_json_file,
 )
-
-
-def _read_json_file(file_path: Path) -> Optional[Union[Dict[str, Any], List[Any]]]:
-    """Helper to read JSON file synchronously for offloading to a thread."""
-    if not file_path.exists():
-        return None
-    with open(file_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _extract_persisted_technical_data(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Return persisted indicator values from new or legacy previous_response shapes."""
-    technical_data = data.get("technical_data")
-    if isinstance(technical_data, dict) and technical_data:
-        return technical_data
-
-    response = data.get("response", {})
-    if not isinstance(response, dict):
-        return {}
-
-    return {
-        key: value
-        for key, value in response.items()
-        if key != "text_analysis"
-    }
-
-
-def _distance_pct_or_fallback(stored_pct: Optional[float], entry_price: float, target_price: float) -> float:
-    """Return stored distance percent or derive it from entry and target prices."""
-    if stored_pct and stored_pct > 0:
-        return stored_pct
-    if entry_price <= 0:
-        return 0.0
-    return abs(target_price - entry_price) / entry_price
-
-def _extract_market_status(data: Dict[str, Any], unified_parser=None) -> Dict[str, Any]:
-    """Helper to extract market status from previous_response data."""
-    response = data.get("response", {})
-    text = response.get("text_analysis", "")
-    technical_data = _extract_persisted_technical_data(data)
-    status = {
-        "trend": "NEUTRAL",
-        "action": "--",
-        "confidence": "--",
-        "adx": response.get("adx"),
-        "rsi": response.get("rsi")
-    }
-
-    if technical_data:
-        status["adx"] = technical_data.get("adx", status["adx"])
-        status["rsi"] = technical_data.get("rsi", status["rsi"])
-        status["trend"] = classify_trend_direction(technical_data)
-
-    signal_match = re.search(r'\bSIGNAL\s*:\s*([A-Z_]+)\b', text, re.IGNORECASE)
-    if signal_match:
-        status["action"] = signal_match.group(1).upper()
-
-    confidence_match = re.search(r'\bConfidence\s*:\s*(\d+(?:\.\d+)?)\s*%', text, re.IGNORECASE)
-    if confidence_match:
-        confidence_value = float(confidence_match.group(1))
-        status["confidence"] = int(confidence_value) if confidence_value.is_integer() else confidence_value
-
-    if status["trend"] == "NEUTRAL":
-        if "BEARISH" in text.upper():
-            status["trend"] = "BEARISH"
-        elif "BULLISH" in text.upper():
-            status["trend"] = "BULLISH"
-    return status
-
-def _build_current_market_context(config, logger, unified_parser=None, symbol: Optional[str] = None) -> tuple[str, str]:
-    """Build rich context query string from current market conditions.
-
-    Reads ``technical_data`` from ``previous_response.json`` (persisted by the
-    analysis engine after each run) and applies the same indicator classification
-    logic used during live trading so that similarity queries are semantically
-    identical to the documents stored in vector memory.
-
-    Returns:
-        Tuple of (display_context, query_document). display_context is the
-        categorical string for display; query_document is the enriched string
-        for embedding search. Both are empty strings on failure.
-    """
-    data_dir = config.DATA_DIR
-    if symbol:
-        safe_symbol = symbol.replace("/", "_").replace("-", "_")
-        prev_response_file = Path(data_dir) / "trading" / f"pair_{safe_symbol}" / "previous_response.json"
-    else:
-        prev_response_file = Path(data_dir) / "trading" / "previous_response.json"
-    if not prev_response_file.exists():
-        return "", ""
-    try:
-        data = _read_json_file(prev_response_file)
-        if not data:
-            return "", ""
-        technical_data = _extract_persisted_technical_data(data)
-        if not technical_data:
-            status = _extract_market_status(data, unified_parser)
-            adx = status["adx"] or 0
-            adx_label = classify_adx_label(adx)
-            fallback = f"{status['trend']} + {adx_label} + MEDIUM Volatility"
-            return fallback, fallback
-        current_price: Optional[float] = None
-        response = data.get("response", {})
-        if isinstance(response, dict):
-            current_price = response.get("current_price")
-        sentiment_data: Optional[Dict[str, Any]] = data.get("sentiment")
-        is_weekend = datetime.now().weekday() >= 5
-        shared_kwargs: Dict[str, Any] = {
-            "technical_data": technical_data,
-            "current_price": current_price,
-            "sentiment_data": sentiment_data,
-            "is_weekend": is_weekend,
-        }
-        display_context = build_context_string_from_technical_data(**shared_kwargs)
-        query_document = build_query_document_from_technical_data(**shared_kwargs)
-        return display_context, query_document
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.error("Failed to build market context", exc_info=True)
-        return "", ""
+from src.utils.indicator_classifier import (
+    build_exit_execution_context,
+    build_exit_execution_context_from_config,
+    build_exit_execution_context_from_position,
+    format_exit_execution_context,
+)
 
 
 class BrainRouter:
     """Handles endpoints for the trading brain status, rules, and memory."""
+    UNKNOWN_EXIT_PROFILE = "SL unknown/unknown | TP unknown/unknown"
+    PRICE_REFRESH_TTL_SECONDS = 10.0
+
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-instance-attributes
-    def __init__(self, config, logger, dashboard_state, vector_memory, unified_parser, persistence, exchange_manager, vector_memory_registry=None):
+    def __init__(self, config, logger, dashboard_state, vector_memory, unified_parser, persistence, exchange_manager, post_mortem_repo=None):
         self.router = APIRouter(prefix="/api/brain", tags=["brain"])
         self.config = config
         self.logger = logger
@@ -147,160 +44,244 @@ class BrainRouter:
         self.unified_parser = unified_parser
         self.persistence = persistence
         self.exchange_manager = exchange_manager
-        self.vector_memory_registry = vector_memory_registry
+        self.post_mortem_repo = post_mortem_repo
+        self._price_refresh_lock = asyncio.Lock()
+        self._price_refresh_result: dict[str, Any] | None = None
+        self._price_refresh_expires_at = 0.0
 
         self.router.add_api_route("/status", self.get_brain_status, methods=["GET"])
-        self.router.add_api_route("/memory", self.get_vector_memory, methods=["GET"])
         self.router.add_api_route("/rules", self.get_active_rules, methods=["GET"])
         self.router.add_api_route("/vectors", self.get_vector_details, methods=["GET"])
         self.router.add_api_route("/position", self.get_current_position, methods=["GET"])
         self.router.add_api_route("/refresh-price", self.refresh_current_price, methods=["GET"])
+        self.router.add_api_route("/blocked-trades", self.get_blocked_trades, methods=["GET"])
+        self.router.add_api_route("/lifecycle", self.get_brain_lifecycle, methods=["GET"])
+        self.router.add_api_route("/refresh", self.refresh_brain_state, methods=["POST"])
+        self.router.add_api_route("/post-mortems", self.get_post_mortems, methods=["GET"])
+        self.router.add_api_route("/decision-summary", self.get_decision_summary, methods=["GET"])
 
-    def _get_persistence_for_symbol(self, symbol: Optional[str]):
-        """Get a PersistenceManager instance for a specific symbol or the primary one."""
-        from src.managers.persistence_manager import PersistenceManager
+    def _resolve_rule_exit_profile(self, metadata: dict[str, Any]) -> str:
+        """Resolve semantic-rule exit profile using stored metadata plus config fallback."""
+        timeframe = self.config.TIMEFRAME
+        default_context = build_exit_execution_context_from_config(self.config, timeframe)
+        context = build_exit_execution_context(
+            stop_loss_type=metadata.get("dominant_stop_loss_type") or metadata.get("stop_loss_type"),
+            stop_loss_check_interval=(
+                metadata.get("dominant_stop_loss_interval") or metadata.get("stop_loss_check_interval")
+            ),
+            take_profit_type=metadata.get("dominant_take_profit_type") or metadata.get("take_profit_type"),
+            take_profit_check_interval=(
+                metadata.get("dominant_take_profit_interval") or metadata.get("take_profit_check_interval")
+            ),
+        )
+        resolved = context.with_defaults(default_context)
+        return format_exit_execution_context(resolved, include_unknown=True).removeprefix("Exit Execution: ")
 
-        if symbol:
-            safe_symbol = symbol.replace("/", "_").replace("-", "_")
-            pair_data_dir = Path(f"data/trading/pair_{safe_symbol}")
-        else:
-            pair_data_dir = Path(self.config.DATA_DIR) / "trading"
+    def _render_rule_text(self, rule_text: str, metadata: dict[str, Any]) -> str:
+        """Return dashboard rule text with unknown exit profile corrected."""
+        if self.UNKNOWN_EXIT_PROFILE not in rule_text:
+            return rule_text
+        replacement_profile = self._resolve_rule_exit_profile(metadata)
+        if replacement_profile == self.UNKNOWN_EXIT_PROFILE:
+            return rule_text
+        return rule_text.replace(self.UNKNOWN_EXIT_PROFILE, replacement_profile)
 
-        return PersistenceManager(logger=self.logger, data_dir=str(pair_data_dir))
-
-    def _get_vector_memory_for_symbol(self, symbol: Optional[str]):
-        """Get vector_memory for a specific symbol via registry, falling back to default."""
-        if self.vector_memory_registry and symbol:
-            vm = self.vector_memory_registry.get(symbol)
-            if vm:
-                return vm
-        return self.vector_memory
-
-    def _get_prev_response_path(self, symbol: Optional[str]) -> Path:
-        """Resolve the previous_response.json path for a given symbol."""
-        data_dir = self.config.DATA_DIR
-        if symbol:
-            safe_symbol = symbol.replace("/", "_").replace("-", "_")
-            pair_dir = Path(data_dir) / "trading" / f"pair_{safe_symbol}"
-            if (pair_dir / "previous_response.json").exists():
-                return pair_dir / "previous_response.json"
-        return Path(data_dir) / "trading" / "previous_response.json"
-
-    def _get_stats_path(self, symbol: Optional[str]) -> Path:
-        """Resolve the statistics.json path for a given symbol."""
-        data_dir = self.config.DATA_DIR
-        if symbol:
-            safe_symbol = symbol.replace("/", "_").replace("-", "_")
-            pair_dir = Path(data_dir) / "trading" / f"pair_{safe_symbol}"
-            if (pair_dir / "statistics.json").exists():
-                return pair_dir / "statistics.json"
-        return Path(data_dir) / "trading" / "statistics.json"
-
-    def _get_trade_history_path(self, symbol: Optional[str]) -> Path:
-        """Resolve the trade_history.json path for a given symbol."""
-        data_dir = self.config.DATA_DIR
-        if symbol:
-            safe_symbol = symbol.replace("/", "_").replace("-", "_")
-            pair_dir = Path(data_dir) / "trading" / f"pair_{safe_symbol}"
-            if (pair_dir / "trade_history.json").exists():
-                return pair_dir / "trade_history.json"
-        return Path(data_dir) / "trading" / "trade_history.json"
-
-    async def get_brain_status(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+    async def get_brain_status(self) -> dict[str, Any]:
         """Get the current thought process/status of the brain."""
-        cache_key = f"brain_status_{symbol}" if symbol else "brain_status"
-        cached = self.dashboard_state.get_cached(cache_key, ttl_seconds=30.0)
+        cached = self.dashboard_state.get_cached("brain_status", ttl_seconds=30.0)
         if cached:
-            return cached
-        prev_response_file = self._get_prev_response_path(symbol)
-        stats_file = self._get_stats_path(symbol)
-        status = {"status": "active", "trend": "--", "confidence": "--", "action": "--", "adx": None, "rsi": None}
+            result = dict(cached)
+            result["brain_lifecycle"] = self.dashboard_state.get_brain_lifecycle()
+            return result
         try:
-            prev_data = await asyncio.to_thread(_read_json_file, prev_response_file)
-            if prev_data is not None:
-                extracted = _extract_market_status(prev_data, self.unified_parser)
+            data_dir = self.config.DATA_DIR
+        except AttributeError:
+            data_dir = "data"
+        try:
+            timeframe = self.config.TIMEFRAME
+        except AttributeError:
+            timeframe = "unknown"
+        prev_response_file = Path(data_dir) / "trading" / "previous_response.json"
+        stats_file = Path(data_dir) / "trading" / "statistics.json"
+        status = {
+            "status": "active",
+            "trend": "--",
+            "confidence": "--",
+            "action": "--",
+            "adx": None,
+            "rsi": None,
+            "exit_management": build_exit_execution_context_from_config(self.config, timeframe).to_dict(),
+            "brain_lifecycle": self.dashboard_state.get_brain_lifecycle(),
+        }
+        try:
+            if prev_response_file.exists():
+                prev_data = await asyncio.to_thread(read_json_file, prev_response_file)
+                extracted = extract_market_status(prev_data, self.unified_parser)
                 status.update(extracted)
         except Exception:
-            self.logger.error("Failed to load brain status", exc_info=True)
+            self.logger.error("Failed to load brain status", exc_info=True)  # noqa: G201
 
         try:
-            stats = await asyncio.to_thread(_read_json_file, stats_file)
-            if stats is not None:
+            if stats_file.exists():
+                stats = await asyncio.to_thread(read_json_file, stats_file)
                 status.update({
                     "total_trades": stats.get("total_trades", 0),
                     "win_rate": stats.get("win_rate", 0),
                     "current_capital": stats.get("current_capital", 0)
                 })
         except Exception:
-            self.logger.error("Failed to load statistics", exc_info=True)
-        self.dashboard_state.set_cached(cache_key, status)
+            self.logger.error("Failed to load statistics", exc_info=True)  # noqa: G201
+        self.dashboard_state.set_cached("brain_status", status)
         return status
 
-    async def get_vector_memory(self, limit: int = Query(default=100, ge=1, le=500), symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Get recent vector memories (synapses)."""
-        cache_key = f"memory_{limit}_{symbol}" if symbol else f"memory_{limit}"
-        cached = self.dashboard_state.get_cached(cache_key, ttl_seconds=30.0)
-        if cached:
-            return cached
-        vm = self._get_vector_memory_for_symbol(symbol)
-        result = {
-            "experience_count": 0,
-            "trades": [],
-            "stats": {}
+    async def get_brain_lifecycle(self) -> dict[str, Any]:
+        """Get current brain rebuild lifecycle state."""
+        return self.dashboard_state.get_brain_lifecycle()
+
+    async def refresh_brain_state(self) -> dict[str, Any]:
+        """Invalidate brain-bound dashboard caches and notify clients to refetch."""
+        self.dashboard_state.invalidate_brain_caches()
+        await self.dashboard_state.broadcast_brain_state_updated("Brain dashboard caches refreshed")
+        return {
+            "success": True,
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            "lifecycle": self.dashboard_state.get_brain_lifecycle(),
         }
-        if vm:
-            result["experience_count"] = vm.experience_count
-            result["stats"] = vm.compute_confidence_stats()
-        trade_history_file = self._get_trade_history_path(symbol)
-        try:
-            trades = await asyncio.to_thread(_read_json_file, trade_history_file)
-            if trades is not None:
-                result["trades"] = [
-                    {
-                        "id": f"trade_{i}",
-                        "timestamp": t.get("timestamp"),
-                        "action": t.get("action"),
-                        "price": t.get("price"),
-                        "confidence": t.get("confidence"),
-                        "reasoning": t.get("reasoning", "")[:100]
-                    }
-                    for i, t in enumerate(trades[-limit:])
-                ]
-        except Exception:
-            self.logger.error("Failed to load trade history for memory", exc_info=True)
 
-        self.dashboard_state.set_cached(cache_key, result)
-        return result
-
-    async def get_active_rules(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_active_rules(self) -> list[dict[str, Any]]:
         """Get currently active semantic rules."""
-        cache_key = f"rules_{symbol}" if symbol else "rules"
-        cached = self.dashboard_state.get_cached(cache_key, ttl_seconds=30.0)
+        cached = self.dashboard_state.get_cached("rules", ttl_seconds=30.0)
         if cached:
             return cached
-        vm = self._get_vector_memory_for_symbol(symbol)
-        if not vm:
+        if not self.vector_memory:
             return []
         try:
-            raw_rules = vm.get_active_rules(n_results=20)
+            raw_rules = self.vector_memory.get_active_rules(n_results=20)
             rules = []
             for r in raw_rules:
                 mapped_rule = dict(r)
-                mapped_rule["rule_text"] = r.get("text", "")
                 meta = r.get("metadata", {})
-                mapped_rule["win_rate"] = meta.get("win_rate")
-                mapped_rule["source_trades"] = meta.get("source_trades")
+                mapped_rule["rule_text"] = self._render_rule_text(r.get("text", ""), meta)
+                mapped_rule["source_trades"] = (
+                    meta.get("source_trades")
+                    or meta.get("source_loss_count")
+                    or meta.get("support_count")
+                )
+                for field in RULE_METADATA_FIELDS:
+                    mapped_rule[field] = meta.get(field)
+                mapped_rule["final_score"] = mapped_rule.get("final_score") or r.get("final_score")
+                if mapped_rule.get("dominant_exit_profile") in (None, "", self.UNKNOWN_EXIT_PROFILE):
+                    resolved_exit_profile = self._resolve_rule_exit_profile(meta)
+                    mapped_rule["dominant_exit_profile"] = resolved_exit_profile
+                mapped_rule["rule_type"] = mapped_rule["rule_type"] or "best_practice"
                 rules.append(mapped_rule)
-            self.dashboard_state.set_cached(cache_key, rules)
+            self.dashboard_state.set_cached("rules", rules)
             return rules
         except Exception:
-            self.logger.error("Failed to retrieve active rules", exc_info=True)
+            self.logger.error("Failed to retrieve active rules", exc_info=True)  # noqa: G201
             return []
 
+    @staticmethod
+    def _empty_vector_details() -> dict[str, Any]:
+        return {
+            "experience_count": 0,
+            "experiences": [],
+            "confidence_stats": {},
+            "adx_stats": {},
+            "factor_stats": {},
+            "rule_count": 0,
+            "current_context": None,
+            "evidence_gate": None,
+        }
+
+    @staticmethod
+    def _sort_number(value: Any) -> float:
+        try:
+            return float(value) if value is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _build_vector_details_result(
+        self,
+        query: str | None,
+        limit: int,
+        sort_by: str,
+        order: str,
+    ) -> dict[str, Any]:
+        result = self._empty_vector_details()
+        result["experience_count"] = self.vector_memory.trade_count
+        result["rule_count"] = self.vector_memory.semantic_rule_count
+        result["confidence_stats"] = self.vector_memory.compute_confidence_stats()
+        result["adx_stats"] = self.vector_memory.compute_adx_performance()
+        result["factor_stats"] = self.vector_memory.compute_factor_performance()
+
+        min_evidence_trades = self.vector_memory.MIN_EVIDENCE_TRADES
+        trade_count = self.vector_memory.trade_count
+        result["evidence_gate"] = {
+            "trade_count": trade_count,
+            "min_trades": min_evidence_trades,
+            "limited": trade_count < min_evidence_trades,
+        }
+
+        where_filter = {"outcome": {"$ne": "UPDATE"}}
+        embed_query = query
+        display_context = query
+        if not embed_query:
+            display_context, embed_query = build_current_market_context(
+                self.config, self.logger, self.unified_parser
+            )
+            if display_context:
+                result["current_context"] = display_context
+
+        if embed_query:
+            experiences = self.vector_memory.retrieve_similar_experiences(
+                embed_query, k=limit, where=where_filter
+            )
+        else:
+            experiences = self.vector_memory.get_all_experiences(limit=limit, where=where_filter)
+
+        def get_sort_key(item):
+            meta = item.metadata
+            if sort_by == "date":
+                return str(meta.get("timestamp", ""))
+            if sort_by == "similarity":
+                return self._sort_number(item.similarity)
+            if sort_by == "pnl":
+                return self._sort_number(meta.get("pnl_pct"))
+            if sort_by == "outcome":
+                return str(meta.get("outcome", ""))
+            if sort_by == "confidence":
+                conf_map = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+                return conf_map.get(str(meta.get("confidence", "LOW")).upper(), 0)
+            if sort_by == "direction":
+                return str(meta.get("direction", ""))
+            return 0
+
+        experiences = sorted(experiences, key=get_sort_key, reverse=order == "desc")
+        current_atr_percentage = extract_current_atr_percentage(self.config)
+        result["experiences"] = [
+            {
+                "id": exp.id,
+                "document": exp.document,
+                "similarity": exp.similarity,
+                "recency": exp.recency,
+                "hybrid_score": exp.hybrid_score,
+                "metadata": exp.metadata,
+                "match_factors": (
+                    self.vector_memory._build_match_factors(
+                        exp.metadata, display_context, current_atr_percentage
+                    )
+                    if display_context
+                    else None
+                ),
+            }
+            for exp in experiences[:limit]
+        ]
+        return result
+
     async def get_vector_details(
-        self, request: Request, query: str = Query(default=None, max_length=500), limit: int = Query(default=50, ge=1, le=500),
-        symbol: Optional[str] = None
-    ) -> Dict[str, Any]:
+        self, request: Request, query: str = Query(default=None, max_length=500), limit: int = Query(default=50, ge=1, le=500)
+    ) -> dict[str, Any]:
         """Get detailed vector memory contents from ChromaDB."""
         sort_by = request.query_params.get("sort_by", "date")
         if sort_by not in ["date", "similarity", "pnl", "outcome", "confidence", "direction"]:
@@ -310,118 +291,73 @@ class BrainRouter:
         if order not in ["asc", "desc"]:
             order = "desc"
 
-        cache_key = f"vectors_{symbol}_{limit}_{sort_by}_{order}" if symbol else f"vectors_{limit}_{sort_by}_{order}"
+        cache_key = f"vectors_{limit}_{sort_by}_{order}"
         if not query:
             cached = self.dashboard_state.get_cached(cache_key, ttl_seconds=30.0)
             if cached:
                 return cached
-        result = {
-            "experience_count": 0,
-            "experiences": [],
-            "confidence_stats": {},
-            "adx_stats": {},
-            "factor_stats": {},
-            "rule_count": 0,
-            "current_context": None
-        }
-        vm = self._get_vector_memory_for_symbol(symbol)
-        if not vm:
+        result = self._empty_vector_details()
+        if not self.vector_memory:
             return result
         try:
-            result["experience_count"] = vm.trade_count
-            result["rule_count"] = vm.semantic_rule_count
-            result["confidence_stats"] = vm.compute_confidence_stats()
-            result["adx_stats"] = vm.compute_adx_performance()
-            result["factor_stats"] = vm.compute_factor_performance()
-            where_filter = {"outcome": {"$ne": "UPDATE"}}
-            embed_query = query
-            display_context = query
-            if not embed_query:
-                display_context, embed_query = await asyncio.to_thread(
-                    _build_current_market_context, self.config, self.logger, self.unified_parser, symbol
-                )
-                if display_context:
-                    result["current_context"] = display_context
-            if embed_query:
-                experiences = vm.retrieve_similar_experiences(
-                    embed_query, k=limit, where=where_filter
-                )
-            else:
-                experiences = vm.get_all_experiences(limit=limit, where=where_filter)
-            reverse = order == "desc"
-            def get_sort_key(item):
-                # pylint: disable=too-many-return-statements
-                meta = item.metadata
-                if sort_by == "date":
-                    return meta.get("timestamp", "")
-                if sort_by == "similarity":
-                    return item.similarity
-                if sort_by == "pnl":
-                    return meta.get("pnl_pct", 0)
-                if sort_by == "outcome":
-                    return meta.get("outcome", "")
-                if sort_by == "confidence":
-                    conf_map = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
-                    return conf_map.get(meta.get("confidence", "LOW"), 0)
-                if sort_by == "direction":
-                    return meta.get("direction", "")
-                return 0
-            experiences.sort(key=get_sort_key, reverse=reverse)
-            experiences_list = []
-            for exp in experiences[:limit]:
-                experiences_list.append({
-                    "id": exp.id,
-                    "document": exp.document,
-                    "similarity": exp.similarity,
-                    "recency": exp.recency,
-                    "hybrid_score": exp.hybrid_score,
-                    "metadata": exp.metadata
-                })
-            result["experiences"] = experiences_list
+            result = await asyncio.to_thread(
+                self._build_vector_details_result, query, limit, sort_by, order
+            )
             if not query:
                 self.dashboard_state.set_cached(cache_key, result)
         except Exception:
-            self.logger.error("Failed to retrieve vector details", exc_info=True)
+            self.logger.error("Failed to retrieve vector details", exc_info=True)  # noqa: G201
             result["error"] = "Internal error retrieving vector details"
         return result
 
-    async def get_current_position(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+    async def get_current_position(self) -> dict[str, Any]:
         """Get current open position details."""
-        cache_key = f"position_{symbol}" if symbol else "position"
-        cached = self.dashboard_state.get_cached(cache_key, ttl_seconds=10.0)
+        cached = self.dashboard_state.get_cached("position", ttl_seconds=10.0)
         if cached:
             return cached
-        target_symbol = symbol or (next(iter(self.dashboard_state.pairs)) if self.dashboard_state.pairs else None)
-        pair_state = self.dashboard_state.pairs.get(target_symbol) if target_symbol else None
-        current_price = pair_state.current_price if pair_state else None
+        current_price = self.dashboard_state.current_price
         if current_price is None:
-            prev_response_file = self._get_prev_response_path(symbol)
+            data_dir = self.config.DATA_DIR
+            prev_response_file = Path(data_dir) / "trading" / "previous_response.json"
             try:
-                data = await asyncio.to_thread(_read_json_file, prev_response_file)
-                if data is not None:
+                if prev_response_file.exists():
+                    data = await asyncio.to_thread(read_json_file, prev_response_file)
                     prompt = data.get("prompt", "")
                     match = re.search(r"Current Price:\s*\$?([\d,]+\.?\d*)", prompt)
                     if match:
                         current_price = float(match.group(1).replace(",", ""))
             except Exception:
-                self.logger.error("Failed to parse current price from prompt", exc_info=True)
+                self.logger.error("Failed to parse current price from prompt", exc_info=True)  # noqa: G201
 
-        persistence = self._get_persistence_for_symbol(symbol)
-        position = persistence.load_position()
+        if not self.persistence:
+            return {"has_position": False, "error": "Persistence not available"}
+        position = self.persistence.load_position()
         if not position:
-            res = {"has_position": False, "current_price": current_price}
-            self.dashboard_state.set_cached(cache_key, res)
+            current_exit_management = build_exit_execution_context_from_config(
+                self.config, self.config.TIMEFRAME
+            ).to_dict()
+            res = {
+                "has_position": False,
+                "current_price": current_price,
+                "exit_management": current_exit_management,
+                "risk_management": build_risk_management(current_exit_management),
+            }
+            self.dashboard_state.set_cached("position", res)
             return res
-        sl_distance_pct = _distance_pct_or_fallback(
+        sl_distance_pct = distance_pct_or_fallback(
             position.sl_distance_pct,
             position.entry_price,
             position.stop_loss,
         )
-        tp_distance_pct = _distance_pct_or_fallback(
+        tp_distance_pct = distance_pct_or_fallback(
             position.tp_distance_pct,
             position.entry_price,
             position.take_profit,
         )
+        current_exit_management = build_exit_execution_context_from_config(
+            self.config, self.config.TIMEFRAME
+        ).to_dict()
+        entry_exit_management = build_exit_execution_context_from_position(position).to_dict()
         res = {
             "has_position": True,
             "current_price": current_price,
@@ -442,27 +378,331 @@ class BrainRouter:
             "rsi_at_entry": position.rsi_at_entry,
             "max_drawdown_pct": position.max_drawdown_pct,
             "max_profit_pct": position.max_profit_pct,
-            "confluence_factors": position.confluence_factors
+            "confluence_factors": position.confluence_factors,
+            "exit_management": current_exit_management,
+            "exit_management_at_entry": entry_exit_management,
+            "risk_management": build_risk_management(current_exit_management, entry_exit_management),
         }
-        self.dashboard_state.set_cached(cache_key, res)
+        self.dashboard_state.set_cached("position", res)
         return res
 
-    async def refresh_current_price(self, symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Fetch fresh price from exchange and update dashboard state."""
+    async def refresh_current_price(self) -> dict[str, Any]:
+        """Share one exchange attempt across dashboard callers for ten seconds."""
+        async with self._price_refresh_lock:
+            if self._price_refresh_result is not None and monotonic() < self._price_refresh_expires_at:
+                return dict(self._price_refresh_result)
+            self._price_refresh_result = await self._fetch_current_price()
+            self._price_refresh_expires_at = monotonic() + self.PRICE_REFRESH_TTL_SECONDS
+            return dict(self._price_refresh_result)
+
+    async def _fetch_current_price(self) -> dict[str, Any]:
+        """Fetch price and report exchange I/O failures without breaking the panel."""
         if not self.exchange_manager:
             return {"success": False, "error": "Exchange manager not available"}
         try:
-            target_symbol = symbol or self.config.CRYPTO_PAIR
-            exchange, _ = await self.exchange_manager.find_symbol_exchange(target_symbol)
+            symbol = self.config.CRYPTO_PAIR
+            exchange, _ = await self.exchange_manager.find_symbol_exchange(symbol)
             if not exchange:
-                return {"success": False, "error": f"No exchange found for {target_symbol}"}
-            ticker = await exchange.fetch_ticker(target_symbol)
+                return {"success": False, "error": f"No exchange found for {symbol}"}
+            ticker = await exchange.fetch_ticker(symbol)
             if not ticker:
                 return {"success": False, "error": "Failed to fetch ticker"}
-            price = float(ticker.get('last', ticker.get('close', 0)))
+            price = float(ticker.get("last", ticker.get("close", 0)))
             if price > 0 and self.dashboard_state:
-                await self.dashboard_state.update_price(target_symbol, price)
-            return {"success": True, "current_price": price, "symbol": target_symbol}
+                await self.dashboard_state.update_price(price)
+            return {"success": True, "current_price": price, "symbol": symbol}
         except Exception:
-            self.logger.error("Internal error during price refresh", exc_info=True)
+            self.logger.error("Internal error during price refresh", exc_info=True)  # noqa: G201
             return {"success": False, "error": "Internal error during price refresh"}
+
+    async def get_blocked_trades(
+        self,
+        limit: int = Query(default=50, ge=1, le=500),
+        guard_type: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        """Get recent system-rejected (blocked) trade events from ChromaDB.
+
+        Exposes friction reports for dashboard visualization and debugging.
+        """
+        if not self.vector_memory:
+            return {"blocked_count": 0, "blocked_trades": []}
+
+        try:
+            blocked = self.vector_memory.get_recent_blocked_trades(
+                n=limit,
+                guard_type=guard_type,
+                max_age_hours=168,
+            )
+            return {
+                "blocked_count": self.vector_memory.get_blocked_trade_count(),
+                "blocked_trades": blocked,
+            }
+        except Exception:
+            self.logger.error("Failed to retrieve blocked trades for dashboard", exc_info=True)  # noqa: G201
+            return {"blocked_count": 0, "blocked_trades": [], "error": "Internal error"}
+
+    async def get_post_mortems(self, q: str | None = None, limit: int = 20) -> dict[str, Any]:
+        """Get post-mortem analyses, optionally filtered by FTS5 search query.
+        Returns:
+            Dict with 'count' and 'post_mortems' list.
+        """
+        if not self.post_mortem_repo:
+            return {"count": 0, "post_mortems": []}
+
+        limit = max(1, min(limit, 100))
+
+        try:
+            if q and q.strip():
+                results = self.post_mortem_repo.search_post_mortems(q.strip(), limit=limit)
+            else:
+                results = self.post_mortem_repo.get_recent_post_mortems(limit=limit)
+            return {"count": len(results), "post_mortems": results}
+        except Exception as e:  # noqa: BLE001
+            self.logger.error("Error fetching post-mortems: %s", e)
+            return {"count": 0, "post_mortems": [], "error": str(e)}
+
+    async def get_decision_summary(
+        self,
+        experience_limit: int = Query(default=5, ge=1, le=20),
+        rule_limit: int = Query(default=5, ge=1, le=20),
+        journal_limit: int = Query(default=5, ge=1, le=20),
+        blocked_limit: int = Query(default=3, ge=1, le=20),
+    ) -> dict[str, Any]:
+        """Aggregate position, memory, journal, and last response into a decision graph."""
+        def _as_int(value: Any, default: int) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        experience_limit = max(1, min(20, _as_int(experience_limit, 5)))
+        rule_limit = max(1, min(20, _as_int(rule_limit, 5)))
+        journal_limit = max(1, min(20, _as_int(journal_limit, 5)))
+        blocked_limit = max(1, min(20, _as_int(blocked_limit, 3)))
+
+        cached = self.dashboard_state.get_cached("decision_summary", ttl_seconds=15.0)
+        if cached:
+            return cached
+
+        now, last_decision, position = await self._collect_decision_state()
+        memory = await self._memory_summary(experience_limit, rule_limit, blocked_limit)
+        journal = await self._journal_summary(journal_limit)
+
+        pos_dict = position if isinstance(position, dict) else {"has_position": False}
+        synopsis = build_decision_synopsis(
+            now=now,
+            position=pos_dict,
+            memory=memory,
+            journal=journal,
+            last_decision=last_decision,
+        )
+        synopsis_data = build_decision_synopsis_data(
+            now=now,
+            last_decision=last_decision,
+            position=pos_dict,
+            memory=memory,
+            journal=journal,
+        )
+        graph = build_decision_graph(
+            now=now,
+            last_decision=last_decision,
+            position=pos_dict,
+            memory=memory,
+            journal=journal,
+        )
+
+        result = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "synopsis": synopsis,
+            "synopsis_data": synopsis_data,
+            "now": now,
+            "last_decision": last_decision,
+            "position": pos_dict,
+            "memory": memory,
+            "journal": journal,
+            "counts": {
+                "experiences": memory.get("experience_count") or 0,
+                "rules": memory.get("rule_count") or 0,
+                "journal": journal.get("count") or 0,
+                "blocked": (memory.get("blocked") or {}).get("blocked_count") or 0,
+            },
+            "graph": graph,
+        }
+        self.dashboard_state.set_cached("decision_summary", result)
+        return result
+
+    async def _collect_decision_state(self) -> tuple[dict[str, Any], dict[str, Any], Any]:
+        """Read the latest decision files, exit config, and live position for the summary."""
+        now: dict[str, Any] = {
+            "trend": "--",
+            "action": "--",
+            "confidence": "--",
+            "adx": None,
+            "rsi": None,
+            "exit_management": {},
+            "brain_lifecycle": self.dashboard_state.get_brain_lifecycle(),
+            "timestamp": None,
+        }
+        last_decision: dict[str, Any] = {
+            "source": None,
+            "timestamp": None,
+            "signal": "--",
+            "confidence": None,
+            "reasoning_excerpt": "",
+            "text_available": False,
+        }
+
+        try:
+            timeframe = self.config.TIMEFRAME
+        except AttributeError:
+            timeframe = "unknown"
+        try:
+            now["exit_management"] = build_exit_execution_context_from_config(
+                self.config, timeframe
+            ).to_dict()
+        except Exception:
+            self.logger.error("Failed to build exit management for decision-summary", exc_info=True)  # noqa: G201
+
+        try:
+            data_dir = self.config.DATA_DIR
+        except AttributeError:
+            data_dir = "data"
+        prev_response_file = Path(data_dir) / "trading" / "previous_response.json"
+        try:
+            if prev_response_file.exists():
+                prev_data = await asyncio.to_thread(read_json_file, prev_response_file)
+                if isinstance(prev_data, dict):
+                    extracted = extract_market_status(prev_data, self.unified_parser)
+                    now.update(extracted)
+                    now["timestamp"] = prev_data.get("timestamp")
+                    response = prev_data.get("response", {}) if isinstance(prev_data.get("response"), dict) else {}
+                    text_analysis = response.get("text_analysis") if isinstance(response, dict) else None
+                    last_decision = {
+                        "source": "disk",
+                        "timestamp": prev_data.get("timestamp"),
+                        "signal": now.get("action") or "--",
+                        "confidence": now.get("confidence") if now.get("confidence") != "--" else None,
+                        "reasoning_excerpt": excerpt_text(text_analysis),
+                        "text_available": bool(text_analysis),
+                    }
+        except Exception:
+            self.logger.error("Failed to load previous response for decision-summary", exc_info=True)  # noqa: G201
+
+        now["brain_lifecycle"] = self.dashboard_state.get_brain_lifecycle()
+
+        try:
+            position = await self.get_current_position()
+        except Exception:
+            self.logger.error("Failed to load position for decision-summary", exc_info=True)  # noqa: G201
+            position = {"has_position": False}
+
+        return now, last_decision, position
+
+    async def _memory_summary(
+        self, experience_limit: int, rule_limit: int, blocked_limit: int
+    ) -> dict[str, Any]:
+        """Collect vector-memory experiences, learned rules, and blocked-trade feedback."""
+        memory: dict[str, Any] = {
+            "current_context": None,
+            "experience_count": 0,
+            "rule_count": 0,
+            "top_experiences": [],
+            "top_rules": [],
+            "blocked": {"blocked_count": 0, "items": []},
+            "confidence_stats": {},
+        }
+        if not self.vector_memory:
+            return memory
+
+        try:
+            vector_details = await asyncio.to_thread(
+                self._build_vector_details_result,
+                None,
+                experience_limit,
+                "similarity",
+                "desc",
+            )
+            experiences_raw = vector_details.get("experiences") or []
+            top_experiences: list[dict[str, Any]] = []
+            for exp in experiences_raw[:experience_limit]:
+                meta = exp.get("metadata") or {}
+                document = exp.get("document") or ""
+                top_experiences.append(
+                    {
+                        "id": exp.get("id"),
+                        "similarity": exp.get("similarity"),
+                        "outcome": meta.get("outcome"),
+                        "direction": meta.get("direction"),
+                        "pnl_pct": meta.get("pnl_pct"),
+                        "confidence": meta.get("confidence"),
+                        "document_excerpt": excerpt_text(document, 180),
+                        "timestamp": meta.get("timestamp"),
+                        "symbol": meta.get("symbol"),
+                    }
+                )
+            memory["current_context"] = vector_details.get("current_context")
+            memory["experience_count"] = vector_details.get("experience_count") or 0
+            memory["rule_count"] = vector_details.get("rule_count") or 0
+            memory["top_experiences"] = top_experiences
+            memory["confidence_stats"] = vector_details.get("confidence_stats") or {}
+        except Exception:
+            self.logger.error("Failed to load vector details for decision-summary", exc_info=True)  # noqa: G201
+            try:
+                memory["experience_count"] = self.vector_memory.trade_count
+                memory["rule_count"] = self.vector_memory.semantic_rule_count
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning("Failed to read fallback vector_memory counters: %s", exc)
+
+        try:
+            rules = await self.get_active_rules()
+            top_rules: list[dict[str, Any]] = []
+            for i, rule in enumerate(rules[:rule_limit]):
+                top_rules.append(
+                    {
+                        "id": rule.get("rule_id") or f"rule_{i}",
+                        "rule_text": rule.get("rule_text") or rule.get("text") or "",
+                        "rule_type": rule.get("rule_type") or "best_practice",
+                        "win_rate": rule.get("win_rate"),
+                        "final_score": rule.get("final_score"),
+                        "recommended_adjustment": rule.get("recommended_adjustment"),
+                    }
+                )
+            memory["top_rules"] = top_rules
+            if not memory.get("rule_count"):
+                memory["rule_count"] = len(rules)
+        except Exception:
+            self.logger.error("Failed to load rules for decision-summary", exc_info=True)  # noqa: G201
+
+        try:
+            blocked_payload = await self.get_blocked_trades(limit=blocked_limit)
+            items = blocked_payload.get("blocked_trades") or []
+            memory["blocked"] = {
+                "blocked_count": blocked_payload.get("blocked_count") or len(items),
+                "items": items[:blocked_limit],
+            }
+        except Exception:
+            self.logger.error("Failed to load blocked trades for decision-summary", exc_info=True)  # noqa: G201
+
+        return memory
+
+    async def _journal_summary(self, journal_limit: int) -> dict[str, Any]:
+        """Collect the post-mortem journal entries shown next to the decision graph."""
+        journal: dict[str, Any] = {"count": 0, "items": []}
+        try:
+            pm_payload = await self.get_post_mortems(limit=journal_limit)
+            items = pm_payload.get("post_mortems") or []
+            normalized: list[dict[str, Any]] = []
+            for i, pm in enumerate(items[:journal_limit]):
+                if not isinstance(pm, dict):
+                    continue
+                entry = dict(pm)
+                entry.setdefault("id", pm.get("id") or f"pm_{i}")
+                normalized.append(entry)
+            journal = {
+                "count": pm_payload.get("count") or len(normalized),
+                "items": normalized,
+            }
+        except Exception:
+            self.logger.error("Failed to load post-mortems for decision-summary", exc_info=True)  # noqa: G201
+
+        return journal

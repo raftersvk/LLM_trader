@@ -1,6 +1,3 @@
-/**
- * News panel module - Displays latest crypto news articles.
- */
 
 export async function initNewsPanel() {
     await updateNewsData();
@@ -10,7 +7,7 @@ export async function updateNewsData() {
     const container = document.getElementById('news-content');
     if (!container) return;
     try {
-        const response = await fetch('/api/monitor/news');
+        const response = await fetch('/api/monitor/news?preview=true');
         const data = await response.json();
         if (!data.articles || data.articles.length === 0) {
             container.innerHTML = `
@@ -24,7 +21,8 @@ export async function updateNewsData() {
             `;
             return;
         }
-        container.innerHTML = renderNews(data.articles);
+        const newsHtml = renderNews(data.articles);
+        container.innerHTML = window.DOMPurify ? DOMPurify.sanitize(newsHtml) : newsHtml;
     } catch (e) {
         container.innerHTML = `
             <div class="empty-state">
@@ -96,7 +94,6 @@ function truncateText(text, maxLength) {
 function sanitizeUrl(url) {
     if (!url) return '#';
     const cleanUrl = url.trim();
-    // Only allow http and https protocols to prevent XSS (javascript:, data:, etc.)
     if (/^https?:\/\//i.test(cleanUrl)) {
         return cleanUrl;
     }

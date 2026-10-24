@@ -1,52 +1,59 @@
-"""
-Analysis Result Processor.
+"""Analysis Result Processor.
 
 Handles the processing and formatting of analysis results from the AI models.
 """
-import io
-import re
-from typing import Dict, Any, Optional, Union, TYPE_CHECKING
+from __future__ import annotations
 
+import io
+import json
+import re
+from typing import TYPE_CHECKING, Any
+
+from src.analyzer.decision_contract import validate_decision_payload
+from src.analyzer.pattern_quality_scorer import PatternQualityScorer
+from src.analyzer.risk_reward_validator import RiskRewardValidator
+from src.analyzer.trend_validator import TrendValidator
 from src.logger.logger import Logger
 
 if TYPE_CHECKING:
     from src.analyzer.analysis_context import AnalysisContext
-    from src.contracts.model_contract import ModelManagerProtocol
+    from src.managers.model_manager import ModelManager
 
 
 class AnalysisResultProcessor:
     """Processes and formats market analysis results from AI models"""
 
-    def __init__(self, model_manager: "ModelManagerProtocol", logger: Logger, unified_parser=None):
+    def __init__(
+        self,
+        model_manager: ModelManager,
+        logger: Logger,
+        unified_parser,
+        trend_validator: TrendValidator,
+        quality_scorer: PatternQualityScorer,
+        risk_reward_validator: RiskRewardValidator,
+    ):
         """Initialize the processor"""
         self.model_manager = model_manager
         self.logger = logger
         self.unified_parser = unified_parser
-        self.context: Optional["AnalysisContext"] = None
+        self.context: AnalysisContext | None = None
+        self._trend_validator = trend_validator
+        self._quality_scorer = quality_scorer
+        self._risk_reward_validator = risk_reward_validator
 
     async def process_analysis(self, system_prompt: str, prompt: str,
-                              chart_image: Optional[Union[io.BytesIO, bytes, str]] = None,
-                              provider: Optional[str] = None, model: Optional[str] = None) -> Dict[str, Any]:
+                              chart_image: io.BytesIO | bytes | str | None = None,
+                              provider: str | None = None, model: str | None = None) -> dict[str, Any]:
         # pylint: disable=too-many-arguments, too-many-positional-arguments
         """
         Process analysis by sending prompts to AI model and formatting response.
-
-        Args:
-            system_prompt: System instructions for the AI model
-            prompt: User prompt for analysis
-            chart_image: Optional chart image for visual analysis
-            provider: Optional provider override (admin only)
-            model: Optional model override (admin only)
-
         Returns:
             Dictionary containing formatted analysis results
         """
-        # Send the prompt to the model
         self.logger.debug("Sending prompt to AI model for analysis")
 
-        # Use chart analysis if image is provided and model supports it
         use_chart_analysis = chart_image is not None and self.model_manager.supports_image_analysis(provider)
-        if use_chart_analysis:
+        if chart_image is not None and use_chart_analysis:
             prov_name, model_name = self.model_manager.describe_provider_and_model(provider, model, chart=True)
             prov_label = prov_name.upper() if prov_name else "UNKNOWN"
             self.logger.info(
@@ -62,7 +69,7 @@ class AnalysisResultProcessor:
                     provider=provider,
                     model=model
                 )
-            except (ValueError, Exception) as chart_error:  # pylint: disable=broad-exception-caught
+            except (ValueError, Exception) as chart_error:  # pylint: disable=broad-exception-caught  # noqa: BLE001
                 self.logger.warning("Chart analysis failed: %s. Falling back to text-only analysis.", chart_error)
                 complete_response = await self.model_manager.send_prompt_streaming(
                     prompt=prompt,
@@ -71,7 +78,6 @@ class AnalysisResultProcessor:
                     model=model
                 )
         else:
-            # Use the standard send_prompt_streaming method
             complete_response = await self.model_manager.send_prompt_streaming(
                 prompt=prompt,
                 system_message=system_prompt,
@@ -90,39 +96,74 @@ class AnalysisResultProcessor:
                 "error": "Invalid response format",
                 "raw_response": cleaned_response
             }
-        # Log the analysis result
+        parse_failed = bool(parsed_response.get("parse_error"))
+        problems = (
+            validate_decision_payload(parsed_response)
+            if isinstance(parsed_response.get("analysis"), dict) and not parse_failed else []
+        )
+        if problems:
+            self.logger.warning(
+                "AI response contract violation: %s — asking once more with the violations",
+                "; ".join(problems[:3]),
+            )
+            correction = (
+                "\n\n## CONTRACT CORRECTION\n"
+                "Your previous response failed these Python checks:\n- "
+                + "\n- ".join(problems[:5])
+                + "\nReturn the FULL response again, with one valid decision object and complete "
+                "execution fields. Do not repeat the violation.\n"
+            )
+            complete_response = await self.model_manager.send_prompt_streaming(
+                prompt=prompt + correction,
+                system_message=system_prompt,
+                provider=provider,
+                model=model,
+            )
+            cleaned_response = self._clean_response(complete_response)
+            parsed_response = self.unified_parser.parse_ai_response(cleaned_response)
+            if not self.unified_parser.validate_ai_response(parsed_response):
+                self.logger.error("Contract retry returned an invalid response shape")
+                return {
+                    "error": "Invalid response format after contract retry",
+                    "raw_response": cleaned_response
+                }
+            remaining = validate_decision_payload(parsed_response)
+            if remaining:
+                self.logger.error(
+                    "Contract still violated after one retry: %s", "; ".join(remaining[:3])
+                )
+        self._log_response_validation(parsed_response.get("response_validation"))
+        if "narrative" not in parsed_response and "```json" in cleaned_response:
+            parsed_response["narrative"] = cleaned_response.split("```json", 1)[0].strip()
+        self._validate_llm_claims(parsed_response)
+        for issue in self._risk_reward_validator.validate(parsed_response):
+            self.logger.warning("R/R validation: %s", issue)
         self._log_analysis_result(parsed_response)
 
-        # Format the final response
         return self._format_analysis_response(parsed_response, cleaned_response)
 
-    def _log_analysis_result(self, parsed_response: Dict[str, Any]) -> None:
+    def _log_analysis_result(self, parsed_response: dict[str, Any]) -> None:
         """Log analysis result information"""
         if "analysis" in parsed_response:
             analysis = parsed_response["analysis"]
 
-            # Check if this is trading analysis (has signal field)
             if "signal" in analysis:
                 signal = analysis.get("signal", "UNKNOWN")
                 confidence = analysis.get("confidence", 0)
                 trend_info = analysis.get("trend", {})
-                # No isinstance needed - analysis.get() with default {} always returns a dict
                 direction = trend_info.get("direction", "UNKNOWN")
 
-                # Try legacy 'strength' field first, then prefer daily (macro), fall back to 4h
                 strength = trend_info.get("strength")
                 if strength is None:
                     strength = trend_info.get("strength_daily", trend_info.get("strength_4h", 0))
 
-                # Log confluence factors if available (Chain-of-Thought scoring)
                 confluence_factors = analysis.get("confluence_factors", {})
-                if confluence_factors and isinstance(confluence_factors, dict):
+                if confluence_factors:
                     cf_str = ", ".join([f"{k}={v}" for k, v in confluence_factors.items()])
                     self.logger.debug("Trading analysis complete: Signal %s, Confidence %s, Trend %s (%s%% strength) | Confluence: %s", signal, confidence, direction, strength, cf_str)
                 else:
                     self.logger.debug("Trading analysis complete: Signal %s, Confidence %s, Trend %s (%s%% strength)", signal, confidence, direction, strength)
             else:
-                # Legacy analysis format
                 bias = analysis.get("technical_bias", "UNKNOWN")
                 trend = analysis.get("observed_trend", "UNKNOWN")
                 confidence = analysis.get("confidence_score", 0)
@@ -130,15 +171,99 @@ class AnalysisResultProcessor:
         else:
             self.logger.warning("Analysis complete but response format may be incomplete")
 
-    def _format_analysis_response(self, parsed_response: Dict[str, Any],
-                                cleaned_response: str) -> Dict[str, Any]:
+    def _log_response_validation(self, validation: dict[str, Any] | None) -> None:
+        """Log response-contract validation metadata."""
+        if not validation:
+            return
+        status = validation.get("status")
+        if status == "valid":
+            self.logger.debug("AI response contract validation passed: %s", validation.get("schema"))
+            return
+        if status == "invalid":
+            errors = validation.get("errors", [])
+            self.logger.warning("AI response contract validation failed: %s", errors[:3])
+            return
+        self.logger.debug("AI response contract validation skipped: no trading signal found")
+
+    def _format_analysis_response(self, parsed_response: dict[str, Any],
+                                cleaned_response: str) -> dict[str, Any]:
         """Format the final analysis response."""
-        parsed_response["raw_response"] = cleaned_response
+        parsed_response["raw_response"] = self._render_response_text(parsed_response, cleaned_response)
         if self.context is not None:
             parsed_response["current_price"] = self.context.current_price
         return parsed_response
 
     @staticmethod
+    def _render_response_text(parsed_response: dict[str, Any], cleaned_response: str) -> str:
+        """Render the validated narrative and decision for either provider contract."""
+        narrative = parsed_response.get("narrative")
+        analysis = parsed_response.get("analysis")
+        if not isinstance(narrative, str) or not isinstance(analysis, dict):
+            return cleaned_response
+        block = json.dumps({"analysis": analysis}, indent=4, ensure_ascii=False)
+        return f"{narrative.strip()}\n\n```json\n{block}\n```"
+
+    @staticmethod
     def _clean_response(text: str) -> str:
         """Remove thinking sections and extra whitespace from AI responses"""
-        return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    def _validate_llm_claims(self, parsed_response: dict[str, Any]) -> None:
+        """Validate LLM-reported ADX strengths and pattern quality against computed data.
+
+        Runs after parsing but before the response is returned. Overwrites
+        LLM values with computed ones when discrepancies exceed thresholds.
+        Logs warnings for any significant gaps found.
+        """
+        if self.context is None:
+            return
+
+        analysis = parsed_response.get("analysis")
+        if not analysis:
+            return
+
+        trend = analysis.get("trend", {})
+        tech_data = self.context.technical_data or {}
+        long_term_data = self.context.long_term_data or {}
+
+        trend_result = self._trend_validator.validate(
+            strength_4h=trend.get("strength_4h"),
+            strength_daily=trend.get("strength_daily"),
+            computed_adx=tech_data.get("adx"),
+            computed_daily_adx=long_term_data.get("daily_adx") if long_term_data else None,
+        )
+
+        if trend_result.has_computed_data:
+            self._trend_validator.overwrite_llm_trend(analysis, trend_result)
+
+            if not trend_result.passed:
+                for d in trend_result.discrepancies:
+                    self.logger.warning("ADX validation: %s", d)
+            else:
+                self.logger.debug(
+                    "ADX validation passed: 4H=%s daily=%s",
+                    trend_result.validated_4h, trend_result.validated_daily,
+                )
+
+        llm_quality_raw = analysis.get("pattern_quality")
+        try:
+            llm_quality = float(llm_quality_raw) if llm_quality_raw is not None else None
+        except (TypeError, ValueError):
+            llm_quality = None
+
+        quality = self._quality_scorer.score(
+            patterns=self.context.technical_patterns,
+            tech_data=tech_data,
+            llm_quality=llm_quality,
+        )
+        self._quality_scorer.overwrite_llm_quality(analysis, quality)
+
+        if not quality.passed:
+            for d in quality.discrepancies:
+                self.logger.warning("Pattern quality validation: %s", d)
+        else:
+            self.logger.debug(
+                "Pattern quality: computed=%s (%s)",
+                round(quality.overall), quality.label,
+            )
+

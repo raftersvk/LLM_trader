@@ -1,12 +1,8 @@
-/**
- * Log viewer module - Handles prompt and response display.
- */
 
 let cachedPrompt = null;
 let cachedResponse = null;
 
 export async function updateLogs() {
-    // Legacy function - now we update dedicated tabs instead
     await updatePromptTab();
     await updateResponseTab();
 }
@@ -16,21 +12,16 @@ export async function updatePromptTab() {
     const meta = document.getElementById('prompt-meta');
     if (!viewer) return;
     try {
-        const symbol = window.state?.currentPair;
-        const url = symbol && symbol !== '__global__'
-            ? `/api/monitor/last_prompt?symbol=${encodeURIComponent(symbol)}`
-            : '/api/monitor/last_prompt';
-        const response = await fetch(url);
+        const response = await fetch('/api/monitor/last_prompt');
         const data = await response.json();
         const content = data.prompt || 'No prompt available';
         const timestamp = data.timestamp ? new Intl.DateTimeFormat(navigator.language, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(data.timestamp)) : 'N/A';
         const source = data.source === 'disk' ? '💾 From disk' : '🧠 From memory';
         if (meta) meta.textContent = `${source} | ${timestamp}`;
-        // Render prompt with markdown and discord-content styling (same as response)
         if (content && window.marked && window.DOMPurify) {
-            viewer.innerHTML = window.DOMPurify.sanitize(window.marked.parse(content));
+            viewer.innerHTML = DOMPurify.sanitize(marked.parse(content));
             viewer.classList.remove('prompt-content', 'code-block');
-            viewer.classList.add('discord-content');
+            viewer.classList.add('console-content');
         } else {
             viewer.textContent = content;
         }
@@ -45,37 +36,30 @@ export async function updateResponseTab() {
     const meta = document.getElementById('response-meta');
     if (!viewer) return;
     try {
-        const symbol = window.state?.currentPair;
-        const url = symbol && symbol !== '__global__'
-            ? `/api/monitor/last_response?symbol=${encodeURIComponent(symbol)}`
-            : '/api/monitor/last_response';
-        const response = await fetch(url);
+        const response = await fetch('/api/monitor/last_response');
         const data = await response.json();
         const content = data.response || 'No response available';
         const timestamp = data.timestamp ? new Intl.DateTimeFormat(navigator.language, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(data.timestamp)) : 'N/A';
         const source = data.source === 'disk' ? '💾 From disk' : '🧠 From memory';
         if (meta) meta.textContent = `${source} | ${timestamp}`;
-        // Process content for Discord-style display
         if (content && window.marked) {
             let processed = content;
-            // Strip JSON code blocks (```json ... ```) for cleaner display
             processed = processed.replace(/```json[\s\S]*?```/g, '');
-            // Strip any remaining { "analysis": ... } JSON objects that aren't in code blocks
             processed = processed.replace(/\n*\{\s*"analysis"[\s\S]*?\n\}\s*$/g, '');
-            // Highlight warning sections
             processed = processed.replace(/⚠️\s*([^.]+\.\s*)/g, '<div class="warning-banner">⚠️ $1</div>');
-            // Clean up any double line breaks left by JSON removal
             processed = processed.replace(/\n{3,}/g, '\n\n');
-            // Sanitize output to prevent XSS (prompts/responses may contain unsanitized data)
             if (window.DOMPurify) {
-                viewer.innerHTML = window.DOMPurify.sanitize(window.marked.parse(processed.trim()));
+                viewer.innerHTML = DOMPurify.sanitize(marked.parse(processed.trim()));
             } else {
-                // Safe fallback if DOMPurify fails to load
                 console.warn('DOMPurify not loaded. Rendering as safe text.');
                 viewer.textContent = processed.trim();
             }
         } else {
-            viewer.innerHTML = `<pre style="white-space: pre-wrap; margin: 0;">${escapeHtml(content)}</pre>`;
+            if (window.DOMPurify) {
+                viewer.innerHTML = DOMPurify.sanitize(`<pre style="white-space: pre-wrap; margin: 0;">${escapeHtml(content)}</pre>`);
+            } else {
+                viewer.textContent = content;
+            }
         }
         cachedResponse = content;
     } catch (e) {
@@ -108,19 +92,16 @@ window.copyResponseContent = function() {
 };
 
 function flashCopyButton(type) {
-    // Buttons have IDs like btn-copy-prompt or btn-copy-response
     const btn = document.getElementById(`btn-copy-${type}`);
     if (btn) {
         const originalHTML = btn.innerHTML;
         const originalAria = btn.getAttribute('aria-label');
 
-        // Use checkmark icon for feedback
         btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Copied!`;
         btn.setAttribute('aria-label', 'Copied successfully');
         btn.style.background = '#238636';
         btn.disabled = true;
 
-        // Ensure screen readers announce the copy action reliably
         let announcer = document.getElementById('a11y-announcer');
         if (!announcer) {
             announcer = document.createElement('div');
@@ -130,14 +111,13 @@ function flashCopyButton(type) {
             announcer.style.cssText = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;';
             document.body.appendChild(announcer);
         }
-        // Force re-announcement by clearing text first
         announcer.textContent = '';
         setTimeout(() => {
             announcer.textContent = 'Copied to clipboard';
         }, 50);
 
         setTimeout(() => {
-            btn.innerHTML = originalHTML;
+            btn.innerHTML = DOMPurify.sanitize(originalHTML);
             if (originalAria) {
                 btn.setAttribute('aria-label', originalAria);
             } else {

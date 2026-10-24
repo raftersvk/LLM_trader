@@ -1,176 +1,370 @@
-[ai_providers]
-# Options: "litellm", "googleai", "openrouter", "blockrun", "all"
-# - "litellm": Use the LiteLLM endpoint only (OpenCode Go by default)
-# - "googleai": Use Google AI Studio only
-# - "openrouter": Use OpenRouter only
-# - "blockrun": Use BlockRun.AI only
-# - "all": Use fallback system (tries primary providers first, then falls back)
-provider = litellm
+# ==============================================================================
+# config.ini.example - TEMPLATE. Copy it to config/config.ini and edit the copy.
+# Secrets do NOT belong here: API keys, admin credentials and Discord channel IDs go
+# into OS/service environment variables (recommended) or optional keys.env.
+# See keys.env.example.
+# Only the keys marked REQUIRED have to be present; delete any other key and the
+# loader falls back to its own default in src/config/loader.py.
+# ==============================================================================
 
-# Base URL for the LiteLLM endpoint (OpenCode Go)
-# Set LITELLM_API_KEY in keys.env for the API key
-litellm_base_url = https://opencode.ai/inference/go/openai/v1
-# Model identifier to use with LiteLLM (e.g., deepseek-v4.1-flash)
-litellm_model = deepseek-v4.1-flash
-# Enable streaming for LiteLLM (true/false)
-litellm_streaming = true
-# Client headers sent with every LiteLLM request
-litellm_user_agent = tradingbot/0.1
-# Stable session identifier used by OpenCode Go for routing
-litellm_session_id = tradingbot
-
-# Base URL for OpenRouter API
-openrouter_base_url = https://openrouter.ai/api/v1
-# Primary model to use with OpenRouter
-openrouter_base_model = google/gemini-3-flash-preview
-# Fallback model to use if the primary OpenRouter model fails
-openrouter_fallback_model = deepseek/deepseek-r1:free
-
-# Model identifier for Google AI Studio (e.g., gemini-flash-latest, gemini-2.5-flash)
-google_studio_model = gemini-3-flash-preview
-# BlockRun.AI Configuration
-# Base URL for BlockRun API
-
-blockrun_base_url = https://blockrun.ai/api
-# Model to use with BlockRun (format: provider/model)
-# Examples: openai/gpt-4o, anthropic/claude-sonnet-4, google/gemini-2.5-flash
-blockrun_model = deepseek/deepseek-reasoner
-
-# Dedicated vision LiteLLM provider for chart analysis
-# Uses a separate LiteLLM endpoint when configured (e.g., different API key or base_url)
-# vision_provider = litellm
-# vision_model = openai/gpt-4o-mini  # must be a vision-capable model
-# vision_base_url = https://api.openai.com/v1  # optional, uses litellm_base_url if not set
-# Add VISION_API_KEY to keys.env for the API key
-
+# === General ===
 [general]
-# Default cryptocurrency pair to analyze if none specified
+# Trading pair and the candle data every analysis is based on.
 crypto_pair = BTC/USDC
-# Default timeframe for technical analysis (e.g., 1h, 4h, 1d)
+# ⚠ CRYPTO IS VOLATILE — timeframes below 4h (1h, 15m, 5m, 1m) produce unreliable
+# signals with high noise, frequent false breakouts, and reduced win rates.
+# The bot was designed and tested for 4h+ swing/positional trading. Smaller
+# timeframes will degrade performance significantly and increase costs due to
+# more frequent LLM calls. You have been warned.
 timeframe = 4h
-# Number of candles to fetch for internal technical analysis calculation
+# Candles fetched per timeframe, and candles drawn into the chart image sent with the prompt.
 candle_limit = 999
-# Number of candles to visualize in the chart images sent to the AI
 ai_chart_candle_limit = 125
-# Master switch to enable or disable the Discord bot integration
-discord_bot = true
-# Whether to include project description in coin details (useful for unknown tokens)
+# Discord notifications (analysis posts + old-message cleanup); needs BOT_TOKEN_DISCORD and
+# MAIN_CHANNEL_ID from the environment.
+discord_bot = false
+# Adds the CoinGecko project description to the prompt (costs extra tokens)
 include_coin_description = false
+# spot = BUY/SELL signals, futures = LONG/SHORT signals with leverage
+market_type = spot
+# market = instant execution. limit = the model may also ask for a limit order; the bot forwards
+# the order type as-is and the conditional part is handled on the executor's side.
+entry_order_type = market
 
-[debug]
-# Save generated chart images to disk for debugging purposes
-save_chart_images = false
-# Directory path to save debug chart images
-chart_save_path = chart_images
-# Enable detailed logic (DEBUG level) logging
-logger_debug = true
+# === AI Providers ===
+[ai_providers]
+# local | googleai | openrouter | deepseek | all
+# blockrun is NOT a valid value here: the loader rejects it (VALID_PROVIDERS in
+# src/config/loader.py) and only uses it as a chain member of "all", and only with
+# BLOCKRUN_WALLET_KEY set.
+# "all" builds a fallback chain whose order is fixed in the code, not taken from this file:
+#   text:   googleai -> deepseek -> local -> openrouter -> blockrun
+#   charts: googleai -> deepseek -> openrouter -> blockrun
+# Unavailable providers are skipped; the first valid answer wins.
+# Only the active provider is used, but the per-model config is picked by EXACT model-name match
+# (deepseek_model / google_studio_model), so keep those names distinct across providers.
+provider = googleai
 
-[directories]
-# Directory to store log files
-log_dir = logs
-# Directory to store persistent data
-data_dir = data
+# LM Studio (local)
+# Non-empty base URL = the LM Studio client is created; empty = the provider is unusable.
+lm_studio_base_url = http://localhost:1234/v1
+# Empty = the first model loaded in the LM Studio server is selected automatically.
+lm_studio_model =
+lm_studio_streaming = false
 
-[rag]
-# Cache validity duration (in hours).
-# - Automatic Analysis: ALWAYS fetches fresh news (ignores this).
-# - Manual Analysis ('a'): Uses cached news if younger than this interval. Set to 0 for always fresh.
-update_interval_hours = 4
-# Frequency (in hours) to update news categories
-categories_update_interval_hours = 168
-# Frequency (in hours) to refresh the CoinGecko coin list
-coingecko_update_interval_hours = 24
-# Frequency (in hours) to refresh DefiLlama fundamentals data (0.25 = 15 minutes)
-defillama_update_interval_hours = 0.25
-# API endpoint for CoinGecko global market data
-coingecko_global_api_url = https://api.coingecko.com/api/v3/global
-# Maximum number of news articles to include in the AI's context
-news_limit = 5
-# Maximum number of tokens per article chunk for processing
-article_max_tokens = 500
-# Filter news sources to reliable feeds only (prevents stale articles with current dates)
-news_filter_sources = true
-# Optional: Override default Tier 1 feeds (comma-separated: cointelegraph,coindesk,theblock,decrypt,bitcoinmagazine)
-news_allowed_feeds = seekingalpha,invezz,coinpaper,cryptopotato
+# OpenRouter
+openrouter_base_url = https://openrouter.ai/api/v1
+openrouter_base_model = google/gemini-3-flash-preview
+openrouter_fallback_model = deepseek/deepseek-v4.1-flash
 
-[exchanges]
-# List of exchanges to use for symbol lookup (in priority order)
-supported = binance,kucoin,gateio,mexc,hyperliquid
-# Frequency (in hours) to refresh exchange market data
-market_refresh_hours = 24
+# DeepSeek (official API) — requires DEEPSEEK_API_KEY in the environment or keys.env
+deepseek_base_url = https://api.deepseek.com
+# One model for text + chart analysis (flash accepts images natively)
+deepseek_model = deepseek-flash
 
-[risk_management]
-# Default position size as decimal (e.g., 0.02 = 2% of capital)
-default_position_size = 0.02
-# Minimum order size in quote currency (e.g., 10.0 for $10 minimum)
-# Set to 0 to disable minimum order size check
-min_order_size = 10.0
-# Default stop loss percentage as decimal (e.g., 0.02 = 2%)
-default_stop_loss_pct = 0.02
-# Default take profit percentage as decimal (e.g., 0.04 = 4%)
-default_take_profit_pct = 0.04
+# Google AI Studio - the model must exist in the Google docs; its thinking level and output cap
+# live in [model_config] below. It also needs an entry in [model_context_windows], otherwise the
+# request is refused before it is sent.
+google_studio_model = gemini-3.8-flash
 
-[demo_trading]
-# Simulated capital in quote currency (e.g., USDC) for position size calculation
-demo_quote_capital = 10000
-# Transaction fee percentage for limit orders (0.00075 = 0.075%)
-transaction_fee_percent = 0.00075
+# BlockRun.AI (x402 micropayments) - reachable only as part of the "all" chain (see above).
+# Paid per request from BLOCKRUN_WALLET_KEY; the model is given as provider/model, e.g.
+# openai/gpt-4o, anthropic/claude-sonnet-4, google/gemini-2.5-flash.
+# blockrun_base_url = https://blockrun.ai/api
+# blockrun_model = deepseek/deepseek-reasoner
 
-[cooldowns]
-# File message expiry is configured in hours; loader converts it to seconds at runtime.
-file_message_expiry = 168
+# === Model Configuration ===
+# Which keys apply is decided by MODEL NAME, not by the active provider:
+#   openrouter / local -> temperature, top_p, top_k, max_tokens (OpenRouter drops presence_penalty)
+#   blockrun           -> only temperature, top_p, top_k, max_tokens
+#   deepseek           -> ONLY max_tokens + reasoning_effort + response_format; the sampling keys
+#                         and both penalties above are ignored
+#   googleai           -> ONLY google_max_tokens + google_thinking_level + google_code_execution
 
+# OpenCode Go (LiteLLM endpoint) — fork integration. Set provider = litellm
+# above to route every request through this endpoint; LITELLM_API_KEY in keys.env.
+litellm_base_url = https://opencode.ai/inference/go/openai/v1
+litellm_model = deepseek-v4.1-flash
+litellm_streaming = true
+litellm_user_agent = tradingbot/0.1
+litellm_session_id = tradingbot
+# Dedicated vision LiteLLM provider for chart analysis (optional).
+# vision_provider = litellm
+# vision_model = openai/gpt-4o-mini
+# vision_base_url = https://api.openai.com/v1
 [model_config]
-# Default model configuration parameters
-# Controls randomness: 0.0 = deterministic, 1.0 = creative
-temperature = 0.7
-# Nucleus sampling: considering tokens with top_p probability mass
-top_p = 0.9
-# Top-k sampling: considering the top k most likely tokens
-top_k = 40
-# Frequency penalty to reduce repetition
-#freq_penalty = 0.1
-# Presence penalty to encourage new topics
-#pres_penalty = 0.1
-# Maximum number of tokens to generate in the response
-max_tokens = 32768
-# Request timeout in seconds (increase for slow large models)
-timeout = 120
+# New analysis detail + approximate NARRATIVE length (tokens, not characters):
+# low = 400 (3 lines), medium = 1000 (5 lines), high = 2000 (13 lines),
+# full = 8000 (complete research report with sections and interpretations).
+# Targets exclude decision JSON and hidden reasoning; they are not hard API caps.
+# Previous analysis has no separate length cap; structured decision summaries
+# are preferred. [prompt_budget] protects the whole request for each target model.
+model_verbosity = full
 
-# Google configuration overrides (Google models often require specific settings)
-# Gemini 3 Flash Preview Specifics:
-# - Temperature: MUST be 1.0 (Default). Do not lower; use "Thinking Levels" for reasoning control.
-# - TopK: Fixed at 64 by the model.
-# - Thinking Level: Controls reasoning depth (minimal, low, medium, high). Default: high.
-#   Ignored for models that don't support it (e.g., Gemini 2.5).
+temperature = 1.0
+top_p = 0.9
+top_k = 40
+# REQUIRED - the bot refuses to start without it. Used by every provider except Google.
+max_tokens = 32768
+# frequency_penalty and presence_penalty are also accepted (0.0 = off)
+# REQUIRED while provider = googleai OR all. Output cap, and it INCLUDES thought tokens.
+# gemini-3.8-flash accepts up to 65536; with thinking = high a low cap can cut the answer off
+# mid-sentence (and a cut answer means no parsed decision).
+google_max_tokens = 65536
+# How deep the model thinks before answering: low | medium | high.
+# Google's own default for gemini-3.8-flash is medium; high = maximum depth
+# (slower and more output tokens, but the most thorough analysis).
+# NOTE: "minimal" is not supported by this model and returns an API error.
+google_thinking_level = high
+# Let the model run Python code while answering CHART-analysis requests (off = plain text answer);
+# text-only requests never get the code-execution tool.
+google_code_execution = false
+# OpenRouter reasoning effort: none | minimal | low | medium | high | xhigh | max
+# The bot forwards the value unchanged - "xhigh"/"max" handling happens on OpenRouter's side.
+openrouter_reasoning_effort = max
+
+# DeepSeek thinking effort: minimal | low | medium | high | max (thinking is enabled by default).
+# The bot does not validate this value. Thinking tokens are billed as output and count toward
+# deepseek_max_tokens.
+# `high` is a deliberate choice; it is slower/costlier and does not guarantee correct R/R arithmetic.
+deepseek_reasoning_effort = high
+# DeepSeek max output (falls back to max_tokens when absent). Thinking tokens count
+# toward this cap and DeepSeek allows up to 384k, so keep a wide margin: a hit cap
+# cuts the reply mid-answer, and a cut reply means no parsed decision.
+deepseek_max_tokens = 65536
+# DeepSeek requests are sent with response_format=json_object, so while provider =
+# deepseek the prompt asks for ONE JSON object ({"narrative": ..., "analysis": {...}})
+# instead of narrative + fenced block. The wire format and the prompt are switched by
+# the `provider = deepseek` selection alone - there is no separate switch to keep in sync.
+
+# === Risk Management ===
+
+# Google per-provider overrides (fork provider factory).
 google_temperature = 1.0
 google_top_p = 0.95
 google_top_k = 64
-google_max_tokens = 32768
-google_thinking_level = high
-# Agentic Vision (Code Execution): Enables the model to generate and run Python code
-# to analyze images more precisely (e.g., zooming, counting, calculations).
-# Available for Gemini 3 Flash+ models via Google AI Studio API only (not OpenRouter).
-# May increase token usage slightly but improves accuracy for complex visual analysis.
-google_code_execution = false
+[risk_management]
+# SL/TP execution mode: soft (candle-close only) | hard (intra-candle polling)
+stop_loss_type = hard
+take_profit_type = hard
+# How often "hard" mode polls the price for an exit. Format: number + m/h/d/w
+# (1m, 15m, 1h, 4h); must not exceed the timeframe. Unused in "soft" mode.
+stop_loss_check_interval = 15m
+take_profit_check_interval = 15m
+# How often the position's SL/TP is evaluated against the REAL market while the
+# executor is live (seconds; 0 disables). This is the stop that actually runs: the
+# exchange's own stop-loss leg is only a catastrophe backstop, placed beyond the
+# venue's price noise by the executor's PROTECTION_BACKSTOP_MULTIPLIER. Requires
+# [exchanges] sandbox = false — with testnet market data the check evaluates the
+# testnet book and protects nothing. Turning it off (0) is safe ONLY together with
+# PROTECTION_BACKSTOP_MULTIPLIER=1.0 and PROTECTION_BACKSTOP_MIN_PCT=0.
+reference_exit_check_seconds = 10
+# Hard ceiling on the position as a fraction of capital; the regime profile may only tighten it
+# (with 0.10: aggressive 0.10 / neutral 0.08 / conservative 0.05).
+max_position_size = 0.10
+# Baseline floor for the risk/reward gate, shared by the prompt and the bot's own entry gate:
+# entries below the effective R/R are rejected. 0 starts without a hard floor; the brain can add
+# one after enough losing low-R/R trades.
+min_rr_entry = 0.0
+# Fallback sizes when AI doesn't provide position_size (by confidence)
+position_size_fallback_low = 0.01
+position_size_fallback_medium = 0.02
+position_size_fallback_high = 0.03
+# SL tightening: minimum price progress toward TP before the stop can be tightened
+# (timeframe bands, then the range the brain may learn and the sample threshold for it).
+sl_tightening_scalping = 0.25          # < 1h timeframe
+sl_tightening_intraday = 0.20          # 1h–4h
+sl_tightening_swing = 0.15             # 4h–1d
+sl_tightening_position = 0.10          # 1d+
+sl_tightening_floor = 0.05             # brain can't push below this
+sl_tightening_ceiling = 0.40           # brain can't push above this
+sl_tightening_min_samples = 10         # min paired samples before brain override
 
-[dashboard]
-# Enable or disable the web dashboard entirely (true/false)
-# Can also be toggled at runtime via keyboard: 'd'
+# === Executor API ===
+# Forward trading decisions to the separate llm_trader_executor service
+# (https://github.com/qrak/llm_trader_executor) which executes real exchange
+# orders via CCXT. When disabled, the bot is pure paper/sim — NO HTTP forward
+# and NO latest_decision.json file fallback is written (a live executor would
+# poll that file and execute decisions despite the disable).
+
+# Fork defaults used for paper/spot sizing when the AI gives no size.
+default_position_size = 0.02
+min_order_size = 10.0
+default_stop_loss_pct = 0.02
+default_take_profit_pct = 0.04
+[executor_api]
 enabled = true
-# Host to bind the dashboard server to
-# Use 127.0.0.1 for local access only (Recommended for security)
-# Use 0.0.0.0 to allow access from other devices on the network
+url = http://127.0.0.1:9199/decision
+# Verdict journal: JSONL file the executor appends one outcome line per
+# processed decision to, keyed by the bot's order_id (executed/blocked/error
+# + reason). The bot reads this to confirm what happened to ITS order instead
+# of polling /position and guessing. Must match the executor's
+# LLM_TRADER_VERDICT_PATH env var (default: sibling of latest_decision.json).
+verdict_path = data/trading/executor_verdicts.jsonl
+# Exit journal: JSONL file the executor appends one line to whenever it sees a
+# tracked position exit ON THE EXCHANGE (a stop-loss or take-profit order filled
+# while the bot was between its 4h cycles). The bot reads it to book the CLOSE
+# with the REAL fill price. Must match the executor's LLM_TRADER_EXIT_PATH env
+# var (default: sibling of latest_decision.json).
+exit_path = data/trading/executor_exits.jsonl
+# Hard cap on entry notional forwarded to the executor (USDC).
+# 0 = no clamp — the executor enforces its own MAX_POSITION_SIZE_USDC limit.
+# Only set this if you want the bot to size DOWN before sending (e.g. to match
+# a tighter executor limit than the bot's %-of-capital sizing would produce).
+max_position_usdc = 0
+
+# === Paper Trading ===
+[demo_trading]
+# Paper-trading capital (USDC) and the fee used in EV / profit calculations
+demo_quote_capital = 10000
+transaction_fee_percent = 0.00075
+
+# === Dashboard ===
+# Local web dashboard: analysis history, statistics, live console.
+[dashboard]
+enabled = true
 host = 0.0.0.0
-# Port to listen on
 port = 8000
-# Enable Cross-Origin Resource Sharing (CORS)
-# Set to true only if you need to access the API from a different domain/port (e.g. external tools)
+# CORS lets OTHER websites call the dashboard API from a browser. Leave it off
+# unless you need it; with enable_cors = true, origins "*" means ANY page on the
+# internet is allowed to talk to your dashboard.
 enable_cors = false
-# Comma-separated list of allowed origins (e.g. http://localhost:3000, http://example.com)
-# Use "*" to allow all origins (NOT recommended for production)
 cors_origins = *
 
+# === Exchanges ===
+[exchanges]
+# ccxt exchange ids in priority order. "gateio" is not a ccxt id (ccxt names it "gate"), so that
+# entry never loads - rename it if you want the venue.
+supported = binance,kucoin,gateio,mexc,hyperliquid
+# Hours between exchange market refreshes
+market_refresh_hours = 24
+# Market data source: false = the REAL exchange, true = the exchange's TESTNET.
+# Turn ON only while the executor trades the testnet - then the bot measures the same
+# book its stop/target orders rest on (instead of the real market, whose chart never
+# prints the testnet fill). Public testnet data needs no API keys.
+sandbox = false
+
+# === Research Team (Bull/Bear Debate) ===
+# Enables structured bull-vs-bear analysis in the LLM prompt.
+# When true, the prompt instructs the model to argue both sides before deciding.
+# This reduces confirmation bias at the cost of slightly longer prompts.
+# No additional LLM call — both perspectives are generated in ONE response.
+# (this template ships it disabled - set to true to enable)
+[research_team]
+enabled = false
+
+# === Social Sentiment (Reddit) ===
+# Fetches the latest posts from r/CryptoCurrency, r/Bitcoin, r/ethereum and
+# r/CryptoMarkets via Reddit's public Atom RSS feeds (no API key).
+# Requests are spaced ~20s apart to stay within Reddit's rate limits.
+# Up to 15 distinct titles from the last 48h fit in a 600-token context budget.
+# The trading LLM assesses outlook with cited titles in its existing response.
+# No keyword sentiment score, extra LLM request or vector index is used.
+# (these limits are hardcoded in the analyst, not config keys)
+# (this template ships it disabled so the first run makes no Reddit requests)
+[social_sentiment]
+enabled = false
+
+# === RAG / News ===
+[rag]
+# How often the RAG layer rebuilds news + market knowledge, how long the CoinGecko catalog stays
+# in its HTTP cache and how often DeFiLlama TVL is refreshed (all in hours).
+# Note: the CoinGecko client's own refresh interval is fixed at 24h in the code; this key only
+# controls the HTTP cache TTL.
+update_interval_hours = 4              # hours between RAG rebuilds
+coingecko_update_interval_hours = 24   # HTTP cache TTL for the coin catalog
+defillama_update_interval_hours = 0.25 # hours between DeFiLlama TVL refreshes
+coingecko_global_api_url = https://api.coingecko.com/api/v3/global
+# Context budget: how many articles reach the model and how many tokens each may take.
+news_limit = 5                         # max articles in AI context
+article_max_tokens = 1000              # max tokens per article
+# Empty = use all four feeds below; otherwise a comma-separated subset of
+# coindesk, cointelegraph, decrypt, cryptoslate. Unknown names are ignored silently.
+news_sources =
+news_source_coindesk_url = https://www.coindesk.com/arc/outboundfeeds/rss/
+news_source_cointelegraph_url = https://cointelegraph.com/rss
+news_source_decrypt_url = https://decrypt.co/feed
+news_source_cryptoslate_url = https://cryptoslate.com/feed/
+# Fetch the full article body when the RSS body is short or contains page boilerplate
+# (Crawl4AI first, plain HTTP as fallback).
+news_page_enrichment = true
+# Body-length threshold used by enrichment AND by context ordering: shorter bodies are the
+# enrichment targets (a crawl result below the threshold is rejected) and full-body articles are
+# placed BEFORE short ones in the context pool. Articles are not dropped for being short.
+news_min_body_chars = 400
+# Timeouts (seconds) and parallelism of the news pipeline.
+news_timeout_seconds = 20              # one RSS feed / one page request
+rag_update_timeout_seconds = 180       # whole market-knowledge refresh per cycle
+news_fetch_total_timeout_seconds = 45  # all RSS feeds together
+news_enrichment_timeout_seconds = 120  # the whole enrichment batch
+news_max_concurrency = 6               # parallel page fetches (Crawl4AI hard-caps at 6)
+news_max_items_per_source = 100        # articles read per RSS feed
+# Article scoring weights - the thresholds are CHARACTER counts of the article body
+# body shorter than this -> score x penalty_multiplier
+density_penalty_threshold = 300
+# body longer than this -> score x boost_multiplier
+density_boost_threshold = 1000
+density_penalty_multiplier = 0.5
+density_boost_multiplier = 1.2
+# bonus when ALL query keywords (at least two) appear in the article title + body
+cooccurrence_multiplier = 1.5
+news_crawl4ai_enabled = true           # use the Crawl4AI browser instead of plain HTTP
+news_crawl_timeout = 20                # per-page Crawl4AI timeout
+
+# === Estimated-token safety budgets ===
+# TokenCounter uses cl100k_base: estimates, not exact provider/vision token counts.
+
+# Fork news filtering (reliable-feed allowlist).
+categories_update_interval_hours = 168
+news_filter_sources = true
+news_allowed_feeds = seekingalpha,invezz,coinpaper,cryptopotato
+[prompt_budget]
+# Cap for the brain/memory context: optional ranges are dropped to fit, and the request is
+# refused rather than cutting a lesson.
+brain_max_tokens = 50000
+# Cap for the WHOLE request per target model. When nothing fits, the optional sections (news,
+# recent decisions, previous analysis, similar experiences, semantic rules) are dropped and
+# protected content (e.g. Python R/R feedback) refuses to send instead.
+request_max_tokens = 100000
+# Headroom kept below the model's context window (must not exceed 50).
+safety_margin_percent = 10
+# Extra reservation for requests that carry a chart image.
+image_reserve_tokens = 16384
+
+# === Model context windows ===
+# Exact provider/model IDs; the value is the configured context-window capacity.
+# Unknown targets are refused before sending. Add local/model-id using the
+# context actually loaded in the local server, not an advertised model maximum.
+# The numbers follow the providers' documentation - the bot does not verify them.
+[model_context_windows]
+deepseek/deepseek-flash = 1000000
+deepseek/deepseek-v4-pro = 1000000
+googleai/gemini-3.8-flash = 1048576
+googleai/gemini-3-flash-preview = 1048576
+openrouter/google/gemini-3-flash-preview = 1048576
+openrouter/deepseek/deepseek-v4.1-flash = 1048576
+
+# === Paths ===
+[directories]
+# Relative to the process working directory (the repo root only when the bot is started from
+# there); the RAG data directory is pinned to the repo root in the code.
+log_dir = logs
+data_dir = data
+
+# === Debug ===
+[debug]
+# Save the generated chart PNGs to disk (debugging only)
+save_chart_images = false
+# Folder for those PNGs, relative to the working directory (repo root)
+chart_save_path = chart_images
+# DEBUG-level logging - very noisy, for troubleshooting only
+logger_debug = true
+# === Cooldowns ===
+[cooldowns]
+# hours before tracked chat messages are cleaned up
+file_message_expiry = 168
+
+# === JEV / System One decision provider ===
 [jev]
 # System One decision provider used by the JEV gate.
 # Decision 3.0 (default): free key in DECISION_API_KEY, state sent as JSON text.

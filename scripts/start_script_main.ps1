@@ -1,0 +1,126 @@
+<#
+start_script_main.ps1 (scripts/)
+Purpose: Prepare .venv, install requirements, and run start.py (main branch)
+Usage: pwsh.exe -File .\scripts\start_script_main.ps1 [symbol] [-Timeframe <tf>]
+Examples:
+    .\scripts\start_script_main.ps1
+    .\scripts\start_script_main.ps1 BTC/USDC -Timeframe 4h
+Parameters:
+  -Symbol <pair>       Optional trading pair override.
+  -Timeframe <tf>      Optional timeframe override.
+  -Venv <path>         Path to virtual environment (default: .venv).
+  -SkipInstall         Skip pip install step.
+#>
+param(
+    [string]$Symbol = "",
+    [string]$Timeframe = "",
+    [string]$Venv = ".venv",
+    [switch]$SkipInstall
+)
+
+$ErrorActionPreference = 'Stop'
+
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+$VenvPath = Join-Path $RepoRoot $Venv
+$ActivatePath = Join-Path $VenvPath 'Scripts\Activate.ps1'
+$RequirementsPath = Join-Path $RepoRoot 'requirements.txt'
+$ConstraintsPath = Join-Path $RepoRoot 'constraints.txt'
+$StartPath = Join-Path $RepoRoot 'start.py'
+
+Write-Output "== scripts/start_script_main.ps1 (main) =="
+Write-Output "Graceful stop: use Ctrl+C (app shows confirmation popup)."
+Write-Output "In-place reload: press SHIFT+R in the app console (auto-restarts, no manual restart)."
+Write-Output "Closing the terminal window/tab with X terminates host process immediately."
+Write-Output "Repository root: $RepoRoot"
+
+if (-not (Test-Path $VenvPath)) {
+    Write-Output "Creating virtual environment at '$VenvPath'..."
+    python -m venv $VenvPath
+}
+else {
+    Write-Output "Virtual environment '$VenvPath' already exists."
+}
+
+if (-not (Test-Path $ActivatePath)) {
+    Write-Output "Activation script not found at $ActivatePath"
+    Write-Output "If the venv was just created, ensure Python created the Scripts/Activate.ps1 file."
+    exit 1
+}
+
+Write-Output "Activating virtual environment..."
+. $ActivatePath
+
+# constraints.txt holds the floors and caps of packages this project does not import
+# directly; both install branches pass it to pip so they stay enforced.
+$PipInstallArgs = @('-r', $RequirementsPath)
+if (Test-Path $ConstraintsPath) {
+    $PipInstallArgs += @('-c', $ConstraintsPath)
+}
+
+if (-not $SkipInstall) {
+    if (Test-Path $RequirementsPath) {
+        Write-Output "Checking installed packages against requirements.txt (version-aware)..."
+        $missing = @(& python (Join-Path $RepoRoot 'scripts\check_requirements.py') $RequirementsPath)
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output "Requirement check failed (exit $LASTEXITCODE); running pip install to be safe."
+            python -m pip install --upgrade pip
+            python -m pip install @PipInstallArgs
+        }
+        elseif ($missing.Count -eq 0) {
+            Write-Output "All requirements satisfied; skipping pip install."
+        }
+        else {
+            Write-Output "Missing or mismatched requirements detected:`n$($missing -join "`n")"
+            Write-Output "Installing/updating dependencies from requirements.txt..."
+            python -m pip install --upgrade pip
+            python -m pip install @PipInstallArgs
+        }
+    }
+    else {
+        Write-Output "No requirements.txt found; skipping pip install."
+    }
+}
+else {
+    Write-Output "Skipping dependency installation (-SkipInstall provided)."
+}
+
+Set-Location $RepoRoot
+
+if (Test-Path $StartPath) {
+    $startArgs = @()
+    if ($Symbol) { $startArgs += $Symbol }
+    if ($Timeframe) { $startArgs += '-t', $Timeframe }
+
+    if ($startArgs.Count -gt 0) {
+        Write-Output "Running start.py with arguments: $($startArgs -join ' ')..."
+    }
+    else {
+        Write-Output "Running start.py with default settings..."
+    }
+
+    # In-place reload: the bot exits with code 42 on SHIFT+R; restart it here so
+    # no manual stop/start is needed. LLM_TRADER_RELOAD_SUPPORTED tells the bot
+    # this launcher can restart it (otherwise SHIFT+R is politely refused).
+    $ReloadExitCode = 42
+    $env:LLM_TRADER_RELOAD_SUPPORTED = "1"
+    while ($true) {
+        & python $StartPath @startArgs
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq $ReloadExitCode) {
+            Write-Output "`n=== Reload requested - restarting start.py in place... ===`n"
+            Start-Sleep -Seconds 1
+            continue
+        }
+        break
+    }
+
+    if ($exitCode -ne 0) {
+        Write-Output "`n=== Process exited with error code: $exitCode ===`n"
+    }
+}
+else {
+    Write-Output "No start.py found in repository root."
+}
+
+Write-Output "`n=== Script completed. Press ENTER to close this window... ===`n"
+Read-Host

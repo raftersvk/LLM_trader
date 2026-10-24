@@ -1,20 +1,56 @@
 """Trading strategy that wraps analysis with position management."""
 
+import asyncio
+import math
 from datetime import datetime, timezone
-from typing import Optional, Any, Dict, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.logger.logger import Logger
-from src.contracts.risk_contract import RiskManagerProtocol
-from .data_models import Position, TradeDecision
+from src.utils.timeframe_validator import TimeframeValidator
+
 from .brain import TradingBrainService
-from .statistics import TradingStatisticsService
+from .data_models import (
+    FILL_DIVERGENCE_MARKER,
+    LocalExitRequest,
+    MarketConditions,
+    Position,
+    TradeDecision,
+    market_verification_is_verified,
+)
+from .executor_reconciliation import (
+    INTENT_ACTION_CLOSE,
+    INTENT_CONFIRMED,
+    INTENT_PENDING,
+    INTENT_REFUSED,
+    INTENT_UNKNOWN,
+    LESSON_SKIPPED_ALREADY_LEARNED,
+    LESSON_SKIPPED_FILL_DIVERGENCE,
+    LESSON_SKIPPED_NO_EVIDENCE,
+    LESSON_SKIPPED_NO_POST_MORTEM,
+    MAX_LEARNED_EXIT_EVENTS,
+    ExecutorReconciliationMixin,
+    LocalPositionReconciliation,
+    close_fill_is_divergent,
+    exit_evidence_is_learnable,
+    market_verification_gap_reason,
+    position_identity,
+)
+from .guards.pipeline import GuardPipeline
 from .memory import TradingMemoryService
+from .position_management import PositionManagementMixin
+from .statistics import TradingStatisticsService
+from .stop_loss_tightening_policy import StopLossTighteningPolicy, TighteningEvaluation
 
 if TYPE_CHECKING:
+    from src.dashboard.dashboard_state import DashboardState
     from src.managers.persistence_manager import PersistenceManager
+    from src.managers.risk_manager import RiskManager
+
+    from .market_conditions_extractor import MarketConditionsExtractor
 
 
-class TradingStrategy:
+class TradingStrategy(ExecutorReconciliationMixin, PositionManagementMixin):
+
     """Manages trading positions and decision execution based on AI analysis."""
 
     def __init__(
@@ -24,26 +60,16 @@ class TradingStrategy:
         brain_service: TradingBrainService,
         statistics_service: TradingStatisticsService,
         memory_service: TradingMemoryService,
-        risk_manager: RiskManagerProtocol,
+        risk_manager: "RiskManager",
         config: Any = None,
         position_extractor=None,
-        position_factory=None,
-        portfolio_capital_service=None,
+        conditions_extractor: "MarketConditionsExtractor | None" = None,
+        dashboard_state: "DashboardState | None" = None,
+        tightening_policy: StopLossTighteningPolicy | None = None,
+        guard_pipeline: GuardPipeline | None = None,
+        post_mortem_service: Any | None = None,
     ):
-        """Initialize the trading strategy with DI pattern.
-
-        Args:
-            logger: Logger instance
-            persistence: Persistence service for loading/saving data
-            brain_service: Brain service for learning and insights
-            statistics_service: Statistics service for performance metrics
-            memory_service: Memory service for recent decision context
-            risk_manager: Risk Manager for position sizing and SL/TP
-            config: Configuration module
-            position_extractor: PositionExtractor instance (injected from app.py)
-            position_factory: PositionFactory instance (injected from start.py)
-            portfolio_capital_service: Shared portfolio capital service for multi-pair
-        """
+        """Initialize the trading strategy with DI pattern."""
         self.logger = logger
         self.persistence = persistence
         self.brain_service = brain_service
@@ -52,703 +78,727 @@ class TradingStrategy:
         self.risk_manager = risk_manager
         self.config = config
         self.extractor = position_extractor
-        self.position_factory = position_factory
-        self.portfolio_capital_service = portfolio_capital_service
+        self.dashboard_state = dashboard_state
 
-        # Load any existing position
-        self.current_position: Optional[Position] = self.persistence.load_position()
+        self._conditions = conditions_extractor
+        if self._conditions is None:
+            from .market_conditions_extractor import MarketConditionsExtractor
+            self._conditions = MarketConditionsExtractor(logger)
+
+        self.guard_pipeline = guard_pipeline
+        self.post_mortem_service = post_mortem_service
+        self._http_client = None
+        self._last_executor_position_payload: dict | None = None
+
+        self.current_position: Position | None = self.persistence.load_position()
+
+        self._executor_side_exit_reason: str | None = None
+        self._state_divergence: str | None = None
+        self._local_exit_request: LocalExitRequest | None = None
+        self._pending_local_close_decision: TradeDecision | None = None
+
+        self._position_transition_lock: asyncio.Lock | None = None
+        self._booked_exit_events: set[str] = set()
+        self._last_booked_exit: dict[str, Any] | None = None
+        self._last_reconciliation: LocalPositionReconciliation | None = None
+        self._learned_exit_events: set[str] = set()
+
+        self._tf_minutes: int = TimeframeValidator.to_minutes(config.TIMEFRAME) if config else 240
+
+        self._tightening_policy: StopLossTighteningPolicy = (
+            tightening_policy if tightening_policy is not None else StopLossTighteningPolicy()
+        )
+
+        self._last_sl_tightening_evaluation: TighteningEvaluation | None = None
 
         if self.current_position:
             self.logger.info("Loaded existing position: %s %s @ $%s", self.current_position.direction, self.current_position.symbol, f"{self.current_position.entry_price:,.2f}")
-            if self.portfolio_capital_service:
-                self.portfolio_capital_service.reserve_position(
-                    symbol=self.current_position.symbol,
-                    quote_amount=self.current_position.quote_amount,
-                    entry_price=self.current_position.entry_price,
-                    quantity=self.current_position.size,
-                    direction=self.current_position.direction
-                )
 
-    async def check_position(self, current_price: float) -> Optional[str]:
-        """Check if current position hit stop loss or take profit.
+        try:
+            expected_symbol = config.CRYPTO_PAIR if config else None
+            state_warnings = self.persistence.validate_loaded_position(expected_symbol)
+            for warning in state_warnings:
+                self.logger.warning("STARTUP STATE WARNING: %s", warning)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning("Could not validate loaded position: %s", e)
 
-        Args:
-            current_price: Current market price
+    def set_dashboard_state(self, dashboard_state: "DashboardState | None") -> None:
+        """Inject dashboard state after dashboard server construction."""
+        self.dashboard_state = dashboard_state
 
-        Returns:
-            Reason for closing position if hit, else None
-        """
+    async def _record_trade_decision(self, decision: TradeDecision) -> int:
+        """Persist a decision, refresh short-term memory, return SQLite row ID."""
+        row_id = await self.persistence.async_save_trade_decision(decision)
+        self.memory_service.add_decision(decision)
+        return row_id
+
+    async def _update_live_metrics(self, current_price: float) -> bool:
+        """Update live position metrics before evaluating an exit."""
         if not self.current_position:
-            return None
-
-        # Update live performance metrics (MAE/MFE)
+            return False
         self.current_position.update_metrics(current_price)
         await self.persistence.async_save_position(self.current_position)
+        return True
 
-        if self.current_position.is_stop_hit(current_price):
-            conditions = self._build_conditions_from_position(self.current_position)
-            await self.close_position("stop_loss", current_price, conditions)
-            return "stop_loss"
+    async def check_position(self, current_price: float) -> str | None:
+        """Check if current position hit stop loss or take profit.
 
-        if self.current_position.is_target_hit(current_price):
-            conditions = self._build_conditions_from_position(self.current_position)
-            await self.close_position("take_profit", current_price, conditions)
-            return "take_profit"
+        Wave 3: a hit does NOT close anything locally. It registers a CLOSE intent
+        (see ``_close_on_exit``) and this returns None — ``take_local_exit_request``
+        carries the unbooked condition to the caller.
+        """
+        if not await self._update_live_metrics(current_price):
+            return None
+
+        if self.current_position.is_stop_hit(current_price):  # type: ignore
+            return await self._close_on_exit("stop_loss", current_price)
+
+        if self.current_position.is_target_hit(current_price):  # type: ignore
+            return await self._close_on_exit("take_profit", current_price)
 
         return None
+
+    async def check_stop_loss(self, current_price: float) -> str | None:
+        """Check only the configured stop loss exit (never books the close locally)."""
+        if not await self._update_live_metrics(current_price):
+            return None
+
+        if self.current_position.is_stop_hit(current_price):  # type: ignore
+            return await self._close_on_exit("stop_loss", current_price)
+
+        return None
+
+    async def check_take_profit(self, current_price: float) -> str | None:
+        """Check only the configured take profit exit (never books the close locally)."""
+        if not await self._update_live_metrics(current_price):
+            return None
+
+        if self.current_position.is_target_hit(current_price):  # type: ignore
+            return await self._close_on_exit("take_profit", current_price)
+
+        return None
+
+    async def check_reference_exit(self, current_price: float) -> str | None:
+        """Evaluate the bracket against the REAL market, fast, without side effects.
+
+        The bot reads the real market while the executor's protective leg rests on
+        the venue's own (testnet) book, so a venue-only excursion can fill that leg
+        at a price the real market never made (2026-10-22: filled 83,016.90 while
+        the real market traded at 84,037). This is the real stop: the position's
+        own SL/TP evaluated against the real price, on the monitor's fast cadence.
+
+        Deliberately does NOT update live metrics or persist the position: a check
+        every few seconds must not turn into a write every few seconds. A hit goes
+        through the same ``_close_on_exit`` as every other local exit condition —
+        an INTENT, never a booking, and the caller forwards it to the executor.
+        """
+        position = self.current_position
+        if position is None:
+            return None
+        if position.is_stop_hit(current_price):  # type: ignore
+            return await self._close_on_exit("stop_loss", current_price)
+        if position.is_target_hit(current_price):  # type: ignore
+            return await self._close_on_exit("take_profit", current_price)
+        return None
+
+    def executor_query_available(self) -> bool:
+        """True when executor queries are configured (enabled AND a URL is set)."""
+        return self._executor_query_available()
+
+    async def _close_on_exit(self, reason: str, current_price: float) -> str | None:
+        """Local SL/TP condition hit: REQUEST a close — never book one locally.
+
+        Wave 3: a ticker price that trips the bracket is NOT a fill. Booking a CLOSE
+        here (at the ticker price) is the exact fabrication class the 2026-09-21
+        incident covers, so this method books nothing, touches no statistics, never
+        clears the local position and never rewrites the exit price. What it does:
+
+        * executor integration live: registers a pending CLOSE intent and queues a
+          CLOSE recommendation for the app to forward. The local position stays until
+          real fill evidence (price AND quantity) arrives from the executor;
+        * integration off: no command can be sent, so no exit may be invented. The
+          intent is recorded as ``unknown``, the position stays and a divergence alarm
+          is raised for the operator — no silent reset, no zeroing.
+
+        Returns None on purpose: the caller's contract is "a close was booked", and one
+        is never booked from this path.
+        """
+        position = self.current_position
+        if position is None:
+            return None
+
+        position_key = position_identity(position)
+        symbol = position.symbol
+        ledger = self.position_intents()
+        intent_key = self.intent_identity(INTENT_ACTION_CLOSE, symbol, position_id=position_key)
+        previous_intent = ledger.get(intent_key)
+        self._local_exit_request_was_pending = bool(
+            previous_intent is not None and previous_intent.state == INTENT_PENDING
+        )
+
+        if self._executor_query_available():
+            existing = previous_intent
+            order_id = (
+                existing.order_id
+                if existing is not None and existing.state == INTENT_PENDING and existing.order_id
+                else None
+            ) or f"close-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+            self.register_position_intent(
+                INTENT_ACTION_CLOSE,
+                symbol,
+                order_id=order_id,
+                position_id=position_key,
+                detail=(
+                    f"the local exit condition ({reason}) triggered at price "
+                    f"{current_price:,.2f} — CLOSE intent; the ticker price is NOT the exit "
+                    f"price and books nothing"
+                ),
+                payload={
+                    "local_exit_reason": reason,
+                    "observed_price": current_price,
+                    "source": "local_monitor",
+                },
+            )
+            self._pending_local_close_decision = TradeDecision(
+                timestamp=datetime.now(timezone.utc),
+                symbol=symbol,
+                action="CLOSE",
+                confidence=position.confidence,
+                price=current_price,
+                stop_loss=position.stop_loss,
+                take_profit=position.take_profit,
+                quantity=position.size,
+                fee=0.0,
+                reasoning=(
+                    f"The local exit condition ({reason}) triggered at price "
+                    f"{current_price:,.2f}. The exit is NOT booked: booking happens "
+                    f"only from the executor's fill evidence."
+                ),
+                order_id=order_id,
+            )
+            state = INTENT_PENDING
+            note = (
+                f"the local exit condition {reason} triggered at price {current_price:,.2f} — "
+                f"a CLOSE intent was sent to the executor; the local position STAYS, history and "
+                f"statistics unchanged, until fill evidence appears (the ticker price does not "
+                f"book an exit)"
+            )
+        else:
+            ledger.record(
+                INTENT_ACTION_CLOSE,
+                symbol,
+                key=intent_key,
+                position_id=position_key,
+                state=INTENT_UNKNOWN,
+                evidence="local_monitor",
+                detail=(
+                    "no executor integration — the local exit condition cannot "
+                    "book a close; there is no fill evidence at all"
+                ),
+                payload={"local_exit_reason": reason, "observed_price": current_price},
+            )
+            order_id = None
+            state = INTENT_UNKNOWN
+            note = (
+                f"the local exit condition {reason} triggered at price {current_price:,.2f}, but "
+                f"executor integration is DISABLED — there is no fill evidence, so the exit was NOT "
+                f"booked (state: {INTENT_UNKNOWN}/unresolved); the local position "
+                f"STAYS without clearing and without zeroing — check the exchange state"
+            )
+            self._state_divergence = note
+
+        self._local_exit_request = LocalExitRequest(
+            reason=reason,
+            observed_price=current_price,
+            state=state,
+            intent_key=intent_key,
+            order_id=order_id,
+            detail=note,
+        )
+        self._log_local_exit_condition(reason, current_price, state)
+        self._unconfirmed_intent_alert = note
+        return None
+
+    def _log_local_exit_condition(self, reason: str, current_price: float, state: str) -> None:
+        """Shout on the first hit, keep a trace while the same exit is still pending.
+
+        A condition that keeps tripping while its CLOSE is pending is the SAME fact,
+        not a new emergency: the monitor raises the operator alert and the retry path
+        bounds how often this runs, so a repeat belongs in the debug trail instead of
+        a second CRITICAL every few seconds.
+        """
+        if self._local_exit_request_was_pending:
+            self.logger.debug(
+                "Local exit condition %s still pending @ %s (state=%s, position kept)",
+                reason, current_price, state,
+            )
+            return
+        self.logger.critical(
+            "LOCAL EXIT CONDITION %s hit @ %s — NOTHING booked locally (state=%s, position kept)",
+            reason, current_price, state,
+        )
+
+    def take_local_exit_request(self) -> "LocalExitRequest | None":
+        """One-shot read of the last unbooked local exit condition (or None)."""
+        request = getattr(self, "_local_exit_request", None)
+        self._local_exit_request = None
+        return request
+
+    def take_pending_local_close_decision(self) -> TradeDecision | None:
+        """One-shot read of the CLOSE recommendation a local exit condition queued.
+
+        The monitor detects the bracket but has no forward path; the app drains this
+        recommendation and hands it to the executor. Nothing local is booked either
+        way — only the executor's fill evidence closes the trade.
+        """
+        decision = getattr(self, "_pending_local_close_decision", None)
+        self._pending_local_close_decision = None
+        return decision
+
+    @staticmethod
+    def _booked_quantity(
+        position: Position, filled_quantity: float | None
+    ) -> tuple[float, str]:
+        """The amount a CLOSE row may carry, plus a divergence note for the operator.
+
+        Wave 5: when the executor's evidence carries the ACTUAL filled amount, that is
+        what gets booked — the local size can be a corrupted restore (the 2026-09-21
+        incident left ``size=0.045`` against a real 0.00554 fill). A mismatch larger
+        than 1% of the local size is NOT silently fixed: it is logged at critical level
+        and stated on the row itself.
+
+        Without a filled amount (an older caller, no executor fields) the local size is
+        kept exactly as before — the caller in that case has no evidence at all, so the
+        close never reaches the learning path (see the guard in ``close_position``).
+        """
+        local = position.size
+        if isinstance(filled_quantity, bool):
+            return local, ""
+        try:
+            filled = float(filled_quantity)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return local, ""
+        if not math.isfinite(filled) or filled <= 0:
+            return local, ""
+        if abs(filled - local) > max(1e-9, abs(local) * 0.01):
+            return filled, (
+                f" WARNING: the executor fill quantity {filled:.8f} differs from the local "
+                f"size {local:.8f} — the fill quantity was booked."
+            )
+        return filled, ""
 
     async def close_position(
         self,
         reason: str,
         current_price: float,
-        market_conditions: Optional[Dict[str, Any]] = None
+        market_conditions: MarketConditions,
+        *,
+        exit_fee: float | None = None,
+        fee_source: str | None = None,
+        filled_quantity: float | None = None,
+        evidence: Any | None = None,
+        exit_time: datetime | None = None,
     ) -> None:
         """Close the current position and update trading brain.
 
-        Args:
-            reason: Reason for closing (stop_loss, take_profit, signal)
-            current_price: Current market price
-            market_conditions: Optional market conditions for brain learning
+        ``current_price`` is the ACTUAL exit price (a validated fill/order average),
+        never a ticker read and never the entry price. ``exit_fee`` may only carry real
+        fill/order fee data (e.g. the executor exit journal's ``fees``); it defaults to
+        ``None`` = UNKNOWN, in which case the booked row says so and no rate (the
+        configured ``TRANSACTION_FEE_PERCENT``, 0.075%) is ever substituted for it.
+
+        ``filled_quantity`` is the ACTUAL filled base amount from the same evidence; when
+        present it is booked instead of the local size (see :meth:`_booked_quantity`).
+
+        ``evidence`` (:class:`~src.trading.executor_reconciliation.ExitEvidence`) is the
+        PROOF this close rests on. Wave-5 brain guard: without usable evidence (a real
+        price AND amount from a confirming source, with a stable event id) the
+        post-mortem is not even asked and the trading brain is NOT updated — instead the
+        skip is logged explicitly (``LESSON_SKIPPED_NO_EVIDENCE``). The same holds when
+        the post-mortem runs but produces no validated analysis: a close never turns into
+        a lesson the bot cannot back with evidence (the 2026-09-21 false lesson).
         """
         if not self.current_position:
             return
 
-        pnl = self.current_position.calculate_pnl(current_price)
+        closed_position = self.current_position
+        pnl = closed_position.calculate_pnl(current_price)
 
-        # Calculate closing fee
-        closing_fee = self.current_position.calculate_closing_fee(
-            current_price,
-            self.config.TRANSACTION_FEE_PERCENT
-        )
+        fee_text = self._commission_text(exit_fee, fee_source)
+        learnable, refusal_reason = exit_evidence_is_learnable(evidence)
+        entry_quality = closed_position.entry_execution_quality
+        if (entry_quality is not None or self.config.EXECUTOR_API_ENABLED) and not market_verification_is_verified(entry_quality):
+            learnable = False
+            refusal_reason = f"entry {market_verification_gap_reason(entry_quality)}"
+        exit_quality = evidence.to_dict() if evidence is not None and not isinstance(evidence, dict) else dict(evidence or {})
+        execution_quality = {"eligible": learnable, "entry": entry_quality, "exit": exit_quality, "reason": refusal_reason}
+        divergent = close_fill_is_divergent(entry_quality, evidence)
+        if not learnable:
+            marker = FILL_DIVERGENCE_MARKER if divergent else "EXECUTION UNVERIFIED"
+            if marker not in reason:
+                reason = f"{marker}: {refusal_reason}. {reason}"
+        if filled_quantity is None:
+            filled_quantity = getattr(evidence, "quantity", None)
+        booked_quantity, quantity_note = self._booked_quantity(closed_position, filled_quantity)
+        if quantity_note:
+            self.logger.critical(
+                "QUANTITY DIVERGENCE for %s on close (%s): booked the FILL amount",
+                closed_position.symbol, reason,
+            )
 
+        pnl_text = f"P&L: {pnl:+.2f}%." if learnable else "Strategy P&L: excluded (unverified execution)."
         decision = TradeDecision(
-            timestamp=datetime.now(timezone.utc),
-            symbol=self.current_position.symbol,
-            action=f"CLOSE_{self.current_position.direction}",
-            confidence=self.current_position.confidence,
+            timestamp=exit_time or datetime.now(timezone.utc),
+            symbol=closed_position.symbol,
+            action=f"CLOSE_{closed_position.direction}",
+            confidence=closed_position.confidence,
             price=current_price,
-            stop_loss=self.current_position.stop_loss,
-            take_profit=self.current_position.take_profit,
-            position_size=self.current_position.size_pct,
-            quote_amount=self.current_position.quote_amount,
-            quantity=self.current_position.size,
-            fee=closing_fee,
-            reasoning=f"Position closed: {reason}. P&L: {pnl:+.2f}%. Fee: ${closing_fee:.4f}",
+            stop_loss=closed_position.stop_loss,
+            take_profit=closed_position.take_profit,
+            position_size=closed_position.size_pct,
+            quote_amount=closed_position.quote_amount,
+            quantity=booked_quantity,
+            fee=exit_fee,
+            execution_quality=execution_quality,
+            reasoning=(
+                f"Position closed: {reason}. {pnl_text} {fee_text}{quantity_note}"
+            ),
         )
 
-        self.logger.info("Closing %s position (%s) @ $%s, P&L: %s%%, Fee: $%.4f", self.current_position.direction, reason, f"{current_price:,.2f}", f"{pnl:+.2f}", closing_fee)
+        self.logger.info("Closing %s position (%s) @ $%s, P&L: %s%%, %s", closed_position.direction, reason, f"{current_price:,.2f}", f"{pnl:+.2f}", fee_text)
 
-        # Retrieve entry decision from trade history for brain learning
         entry_decision = None
         try:
             entry_decision = self.persistence.get_entry_decision_for_position(
-                self.current_position.entry_time
+                closed_position.entry_time,
+                symbol=closed_position.symbol,
             )
             if entry_decision:
                 reasoning_preview = entry_decision.reasoning[:500] if entry_decision.reasoning else "(no reasoning)"
                 self.logger.debug("Retrieved entry decision with reasoning: %s...", reasoning_preview)
             else:
                 self.logger.warning("Could not retrieve entry decision from trade history")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Error retrieving entry decision: %s", e)
 
-        # Update trading brain with closed trade insights
-        try:
-            self.brain_service.update_from_closed_trade(
-                position=self.current_position,
-                close_price=current_price,
-                close_reason=reason,
-                entry_decision=entry_decision,
-                market_conditions=market_conditions
-            )
-        except Exception as e:
-            self.logger.error("Error updating trading brain: %s", e)
-        # Save close decision FIRST so statistics include this trade
-        await self.persistence.async_save_trade_decision(decision)
+        close_row_id = await self._record_trade_decision(decision)
 
-        # Recalculate performance statistics (Sharpe, Sortino, drawdown, etc.)
+        post_mortem_result: Any | None = None
+        if not learnable:
+            self.logger.warning(
+                "%s (%s) | %s %s",
+                LESSON_SKIPPED_FILL_DIVERGENCE if divergent else LESSON_SKIPPED_NO_EVIDENCE,
+                refusal_reason, closed_position.symbol, reason,
+            )
+        elif not entry_decision:
+            self.logger.warning(
+                "%s (no entry decision for this trade) | %s",
+                LESSON_SKIPPED_NO_POST_MORTEM, closed_position.symbol,
+            )
+        elif not self.post_mortem_service:
+            self.logger.warning(
+                "%s (post-mortem service is not connected) | %s",
+                LESSON_SKIPPED_NO_POST_MORTEM, closed_position.symbol,
+            )
+        else:
+            try:
+                post_mortem_result = await self.post_mortem_service.analyze_closed_trade(
+                    closed_position=closed_position,
+                    entry_decision=entry_decision,
+                    exit_decision=decision,
+                    trade_id=close_row_id,
+                    pnl=pnl,
+                    reason=reason,
+                    market_conditions=market_conditions,
+                )
+            except Exception:
+                self.logger.warning("Post-mortem analysis failed", exc_info=True)
+                post_mortem_result = None
+            if post_mortem_result is None:
+                self.logger.warning(
+                    "%s (post-mortem returned no confirmed analysis) | %s %s",
+                    LESSON_SKIPPED_NO_POST_MORTEM, closed_position.symbol, reason,
+                )
+
         try:
             self.statistics_service.recalculate(self.config.DEMO_QUOTE_CAPITAL)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Error recalculating statistics: %s", e)
-
-        # Release capital from portfolio tracking
-        if self.portfolio_capital_service:
-            net_pnl = self._calculate_net_pnl_quote(
-                self.current_position, current_price, closing_fee
-            )
-            self.portfolio_capital_service.release_position(
-                self.current_position.symbol, net_pnl
-            )
-
         await self.persistence.async_save_position(None)
         self.current_position = None
 
-    @staticmethod
-    def _calculate_net_pnl_quote(position: Position, current_price: float, closing_fee: float) -> float:
-        """Convert a position's P&L into net quote-currency profit.
+        learn_key = str(getattr(evidence, "event_id", None) or "")
+        if not learnable:
+            self.logger.info(
+                "Brain NOT updated (%s) | %s", closed_position.symbol, reason
+            )
+        elif post_mortem_result is None:
+            self.logger.info(
+                "Brain NOT updated: no confirmed post-mortem | %s %s",
+                closed_position.symbol, reason,
+            )
+        elif learn_key in self._learned_exit_events:
+            self.logger.warning(
+                "%s (%s) | %s", LESSON_SKIPPED_ALREADY_LEARNED, learn_key,
+                closed_position.symbol,
+            )
+        else:
+            self._learned_exit_events.add(learn_key)
+            while len(self._learned_exit_events) > MAX_LEARNED_EXIT_EVENTS:
+                self._learned_exit_events.pop()
+            try:
+                if self.dashboard_state:
+                    await self.dashboard_state.mark_brain_rebuild_started(
+                        f"Learning from closed {closed_position.direction} trade"
+                    )
+                await asyncio.to_thread(
+                    self.brain_service.update_from_closed_trade,
+                    position=closed_position,
+                    close_price=current_price,
+                    close_reason=reason,
+                    entry_decision=entry_decision,
+                    market_conditions=market_conditions,
+                    evidence=evidence,
+                )
+                if self.dashboard_state:
+                    await self.dashboard_state.mark_brain_rebuild_completed("Brain state rebuilt from closed trade")
+            except Exception as e:  # noqa: BLE001
+                self._learned_exit_events.discard(learn_key)
+                self.logger.error("Error updating trading brain: %s", e)
+                if self.dashboard_state:
+                    await self.dashboard_state.mark_brain_rebuild_failed("Brain rebuild failed after trade close")
 
-        ``Position.calculate_pnl`` returns a percentage, whereas portfolio
-        capital accounting expects a quote-currency amount. Convert the
-        direction-aware price delta with the position quantity and deduct the
-        entry and closing fees so realised equity matches reality.
-        """
-        if position.direction == 'LONG':
-            pnl_quote = (current_price - position.entry_price) * position.size
-        else:  # SHORT
-            pnl_quote = (position.entry_price - current_price) * position.size
-        return pnl_quote - position.entry_fee - closing_fee
-
-    async def process_analysis(self, analysis_result: dict, symbol: str) -> Optional[TradeDecision]:
+    async def process_analysis(
+        self, analysis_result: dict, symbol: str, market_price: float | None = None
+    ) -> TradeDecision | None:
         """Process AI analysis result and execute trading decision.
 
-        Args:
-            analysis_result: Result from AnalysisEngine.analyze_market()
-            symbol: Trading symbol
+        market_price is the live price the prompt showed the model (the position
+        context advertises it). The SL tightening gate evaluates with it, so the
+        prompt and the gate cannot disagree about the same cycle.
 
         Returns:
             TradeDecision if action taken, else None
         """
         try:
-            raw_response = analysis_result.get("raw_response", "")
-            current_price = self._extract_price_from_result(analysis_result)
+            analysis = analysis_result.get("analysis") or {}
+            current_price = self._conditions.extract_price(analysis_result)  # type: ignore
 
-            if not raw_response:
-                self.logger.warning("No response to process")
+            if not analysis:
+                self.logger.warning("No parsed analysis to process")
                 return None
 
-            if current_price <= 0:
+            if current_price is None or not math.isfinite(current_price) or current_price <= 0:
                 self.logger.error("Invalid current_price extracted, cannot process trade")
                 return None
 
-            # Extract trading info from response
-            extracted = self.extractor.extract_trading_info(raw_response)
-            signal, confidence, stop_loss, take_profit, position_size, reasoning, ai_symbol = extracted
-
-            # Validate symbol if AI provided one
-            if ai_symbol:
-                expected_symbol = symbol.upper().replace("/", "_")
-                ai_symbol_normalized = ai_symbol.upper().replace("/", "_").replace("-", "_")
-                if ai_symbol_normalized != expected_symbol:
-                    self.logger.error(
-                        "AI responded with wrong symbol: %s (expected %s). Discarding response.",
-                        ai_symbol, symbol
-                    )
-                    return None
+            signal, confidence, stop_loss, take_profit, position_size, reasoning = \
+                self.extractor.extract_trading_info(analysis)  # type: ignore
 
             self.logger.info("Extracted Signal: %s, Confidence: %s", signal, confidence)
 
-            # Validate signal
-            if not self.extractor.validate_signal(signal):
+            if not self.extractor.validate_signal(signal):  # type: ignore
                 self.logger.warning("Invalid signal: %s", signal)
                 return None
 
-            # Extract market conditions for brain learning
-            market_conditions = self._extract_market_conditions(analysis_result)
+            market_conditions = self._conditions.extract_market_conditions(analysis_result)  # type: ignore
 
-            # Extract confluence factors for brain learning (Feature 1)
-            confluence_factors = self._extract_confluence_factors(analysis_result)
+            confluence_factors = self._conditions.extract_confluence_factors(analysis_result)  # type: ignore
 
-            # Handle existing position
             if self.current_position:
                 return await self._handle_existing_position(
                     signal, confidence, stop_loss, take_profit,
-                    current_price, symbol, reasoning, market_conditions
+                    current_price, symbol, reasoning, market_conditions,
+                    market_price,
                 )
 
-            # Handle new position
-            if signal in ("BUY", "SELL"):
+            if signal in ("BUY", "SELL", "LONG", "SHORT"):
                 return await self._open_new_position(
                     signal, confidence, stop_loss, take_profit,
                     position_size, current_price, symbol, reasoning,
-                    confluence_factors, market_conditions
+                    market_conditions, confluence_factors
                 )
 
-            # HOLD or no action
             if reasoning:
-                self.logger.info("No action taken. Signal: %s. Reasoning: %s", signal, reasoning[:200])
+                self.logger.info("No action taken. Signal: %s. Reasoning: %s", signal, reasoning)
             else:
                 self.logger.info("No action taken. Signal: %s", signal)
             return None
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Error processing analysis: %s", e)
             return None
 
-    async def _handle_existing_position(
-        self,
-        signal: str,
-        confidence: str,
-        stop_loss: Optional[float],
-        take_profit: Optional[float],
-        current_price: float,
-        symbol: str,
-        reasoning: str,
-        market_conditions: Optional[Dict[str, Any]] = None,
-    ) -> Optional[TradeDecision]:
-        """Handle trading decision when position exists.
 
-        Args:
-            signal: Trading signal
-            confidence: Confidence level
-            stop_loss: New stop loss (for update)
-            take_profit: New take profit (for update)
-            current_price: Current price
-            symbol: Trading symbol
-            reasoning: AI reasoning
-            market_conditions: Market state for brain learning
+    def _get_last_closed_position_info(self) -> str | None:
+        """Query trade history for the most recent closed position.
 
         Returns:
-            TradeDecision if action taken
+            Formatted string like 'LONG, closed 3.2 hours ago' or None if no history.
         """
-        if signal == "CLOSE" or signal.startswith("CLOSE_"):
-            self.logger.info("Closing position based on analysis signal...")
-            await self.close_position("analysis_signal", current_price, market_conditions)
-            return TradeDecision(
-                timestamp=datetime.now(timezone.utc),
-                symbol=symbol,
-                action="CLOSE",
-                confidence=confidence,
-                price=current_price,
-                fee=0.0,
-                reasoning=reasoning,
+        try:
+            rows = self.persistence.sqlite_history.query(
+                action=None,
+                limit=20,
+                order="DESC",
             )
-
-        old_sl = self.current_position.stop_loss
-        old_tp = self.current_position.take_profit
-
-        updated = await self._update_position_parameters(stop_loss, take_profit)
-
-        if updated:
-            try:
-                current_pnl = self.current_position.calculate_pnl(current_price)
-                self.brain_service.track_position_update(
-                    position=self.current_position,
-                    old_sl=old_sl,
-                    old_tp=old_tp,
-                    new_sl=stop_loss if stop_loss else old_sl,
-                    new_tp=take_profit if take_profit else old_tp,
-                    current_price=current_price,
-                    current_pnl_pct=current_pnl,
-                    market_conditions=market_conditions
-                )
-            except Exception as e:
-                self.logger.warning("Failed to track position update: %s", e)
-
-            decision = TradeDecision(
-                timestamp=datetime.now(timezone.utc),
-                symbol=symbol,
-                action="UPDATE",
-                confidence=confidence,
-                price=current_price,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
-                fee=0.0,
-                reasoning=f"Updated position parameters. {reasoning}",
-            )
-            await self.persistence.async_save_trade_decision(decision)
-            self.logger.info("Position updated: New SL=$%s, TP=$%s", f"{stop_loss:,.2f}", f"{take_profit:,.2f}")
-            return decision
-
-        return None
-
-    async def _open_new_position(
-        self,
-        signal: str,
-        confidence: str,
-        stop_loss: Optional[float],
-        take_profit: Optional[float],
-        position_size: Optional[float],
-        current_price: float,
-        symbol: str,
-        reasoning: str,
-        confluence_factors: tuple = (),
-        market_conditions: Optional[Dict[str, Any]] = None,
-    ) -> TradeDecision:
-        """Open a new trading position with dynamic parameter calculation."""
-        direction = "LONG" if signal == "BUY" else "SHORT"
-        market_conditions = market_conditions or {}
-
-        # Calculate available capital considering ALL open positions across portfolio
-        if self.portfolio_capital_service:
-            portfolio_capital = self.portfolio_capital_service.current_capital
-            available = self.portfolio_capital_service.get_available_capital(symbol, 0)
-            capital = available
-            self.logger.info("Using shared portfolio capital: $%s available (total: $%s)", f"{available:,.2f}", f"{portfolio_capital:,.2f}")
-        else:
-            capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
-
-        # Delegate Risk Calculation to RiskManager
-        risk_assessment = self.risk_manager.calculate_entry_parameters(
-            signal=signal,
-            current_price=current_price,
-            capital=capital,
-            confidence=confidence,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            position_size=position_size,
-            market_conditions=market_conditions
-        )
-
-        final_sl = risk_assessment.stop_loss
-        final_tp = risk_assessment.take_profit
-        final_size_pct = risk_assessment.size_pct
-        quantity = risk_assessment.quantity
-        entry_fee = risk_assessment.entry_fee
-        sl_distance_pct = risk_assessment.sl_distance_pct
-        tp_distance_pct = risk_assessment.tp_distance_pct
-        rr_ratio = risk_assessment.rr_ratio
-
-        if final_size_pct <= 0 or quantity <= 0:
-            self.logger.info("Order rejected: size below minimum threshold")
+            for row in rows:
+                action = row.get("action", "")
+                if action in ("CLOSE_LONG", "CLOSE_SHORT"):
+                    direction = "LONG" if action == "CLOSE_LONG" else "SHORT"
+                    ts_str = row.get("timestamp", "")
+                    if not ts_str:
+                        continue
+                    try:
+                        close_time = datetime.fromisoformat(ts_str)
+                        if close_time.tzinfo is None:
+                            close_time = close_time.replace(tzinfo=timezone.utc)
+                    except (ValueError, TypeError):
+                        continue
+                    now = datetime.now(timezone.utc)
+                    delta = now - close_time
+                    total_seconds = delta.total_seconds()
+                    if total_seconds < 3600:
+                        time_ago = f"{total_seconds / 60:.0f} minutes ago"
+                    elif total_seconds < 86400:
+                        time_ago = f"{total_seconds / 3600:.1f} hours ago"
+                    else:
+                        time_ago = f"{total_seconds / 86400:.1f} days ago"
+                    return f"{direction}, closed {time_ago}"
+            return None
+        except Exception:  # noqa: BLE001
             return None
 
-        self.logger.info("Position sizing: Capital=$%s, Size=%.2f%%, Allocation=$%s, Quantity=%.6f", f"{capital:,.2f}", final_size_pct * 100, f"{risk_assessment.quote_amount:,.2f}", quantity)
-        self.logger.info("Risk metrics: SL=%.2f%%, TP=%.2f%%, R/R=%.2f", sl_distance_pct * 100, tp_distance_pct * 100, rr_ratio)
+    def _last_action_outcome_lines(self) -> list[str]:
+        """Render the newest recorded command outcome — what the bot did, or refused to do.
 
-        # Reserve capital in portfolio tracking before opening. The availability
-        # check above is not atomic: another pair may have reserved the funds in
-        # the meantime, in which case the position must not be created/persisted.
-        if self.portfolio_capital_service:
-            reserved = self.portfolio_capital_service.reserve_position(
-                symbol=symbol,
-                quote_amount=risk_assessment.quote_amount,
-                entry_price=current_price,
-                quantity=quantity,
-                direction=direction
-            )
-            if not reserved:
-                self.logger.warning(
-                    "Order rejected: could not reserve $%s for %s (insufficient unallocated capital)",
-                    f"{risk_assessment.quote_amount:,.2f}", symbol
-                )
-                return None
-
-        # Create position using Factory
-        self.current_position = self.position_factory.create_position(
-            symbol=symbol,
-            direction=direction,
-            confidence=confidence,
-            risk_assessment=risk_assessment,
-            confluence_factors=confluence_factors,
-            market_conditions=market_conditions
-        )
-
-        await self.persistence.async_save_position(self.current_position)
-        self.logger.info("Opened %s position @ $%s (SL: $%s, TP: $%s, Qty: %.6f, Fee: $%.4f)", direction, f"{current_price:,.2f}", f"{final_sl:,.2f}", f"{final_tp:,.2f}", quantity, entry_fee)
-
-        # Create and save decision (store size_pct for history context)
-        decision = TradeDecision(
-            timestamp=datetime.now(timezone.utc),
-            symbol=symbol,
-            action=signal,
-            confidence=confidence,
-            price=current_price,
-            stop_loss=final_sl,
-            take_profit=final_tp,
-            position_size=final_size_pct,
-            quote_amount=risk_assessment.quote_amount,
-            quantity=quantity,
-            fee=entry_fee,
-            reasoning=reasoning,
-        )
-
-        await self.persistence.async_save_trade_decision(decision)
-
-        return decision
-
-    async def _update_position_parameters(
-        self,
-        stop_loss: Optional[float],
-        take_profit: Optional[float],
-    ) -> bool:
-        """Update position stop loss and take profit.
-
-        Args:
-            stop_loss: New stop loss
-            take_profit: New take profit
-
-        Returns:
-            True if anything was updated
+        One analysis per cycle means the next prompt is the only place where a refused
+        UPDATE/CLOSE/ENTRY can still change a decision, so the outcome travels with the
+        position context instead of living only in the logs.
         """
-        if not self.current_position:
-            return False
-
-        updated = False
-        new_sl = self.current_position.stop_loss
-        new_tp = self.current_position.take_profit
-
-        if stop_loss and stop_loss != self.current_position.stop_loss:
-            direction = self.current_position.direction
-            old_sl = self.current_position.stop_loss
-            # FULL AI AUTONOMY: Allow AI to move stop loss in any direction
-            if direction == "LONG" and stop_loss < old_sl:
-                self.logger.info(
-                    "AI Widening Stop Loss for LONG: $%.2f -> $%.2f (Risk Increased)",
-                    old_sl, stop_loss
-                )
-                new_sl = stop_loss
-                updated = True
-            elif direction == "SHORT" and stop_loss > old_sl:
-                self.logger.info(
-                    "AI Widening Stop Loss for SHORT: $%.2f -> $%.2f (Risk Increased)",
-                    old_sl, stop_loss
-                )
-                new_sl = stop_loss
-                updated = True
-            else:
-                new_sl = stop_loss
-                self.logger.info("Updated Stop Loss: $%s", f"{stop_loss:,.2f}")
-                updated = True
-
-        if take_profit and take_profit != self.current_position.take_profit:
-            new_tp = take_profit
-            self.logger.info("Updated Take Profit: $%s", f"{take_profit:,.2f}")
-            updated = True
-
-        if updated:
-            # Create new position with updated values using factory
-            self.current_position = self.position_factory.create_updated_position(
-                original_position=self.current_position,
-                new_stop_loss=new_sl,
-                new_take_profit=new_tp
-            )
-            await self.persistence.async_save_position(self.current_position)
-
-        return updated
-
-    def _extract_price_from_result(self, result: dict) -> float:
-        """Extract current price from analysis result.
-
-        Args:
-            result: Analysis result dictionary
-
-        Returns:
-            Current price
-        """
-        # Try different possible locations for price
-        if "current_price" in result:
-            return float(result["current_price"])
-
-        if "context" in result and result["context"] is not None:
-            return float(result["context"].current_price)
-
-        # Default fallback
-        if self.logger:
-            self.logger.warning("Could not extract price from result keys: %s", list(result.keys()))
-        return 0.0
-
-    @staticmethod
-    def _build_conditions_from_position(position: Position) -> Dict[str, Any]:
-        """Reconstruct market conditions from Position's stored entry fields.
-
-        Used when closing via SL/TP hit where no fresh analysis is available.
-        """
-        rsi = position.rsi_at_entry
-        if rsi > 70:
-            rsi_level = "OVERBOUGHT"
-        elif rsi > 60:
-            rsi_level = "STRONG"
-        elif rsi < 30:
-            rsi_level = "OVERSOLD"
-        elif rsi < 40:
-            rsi_level = "WEAK"
+        ledger = self.position_intents()
+        position = self.current_position
+        if position is not None:
+            intent = ledger.latest_for_position(position_identity(position))
         else:
-            rsi_level = "NEUTRAL"
+            recent = ledger.recent(1)
+            intent = recent[0] if recent else None
+        if intent is None:
+            return []
+        stamp = (intent.created_at or intent.updated_at or "")[:16].replace("T", " ")
+        evidence = f" (evidence: {intent.evidence})" if intent.evidence else ""
+        lines = [
+            "",
+            "### Last Action Outcome",
+            f"- {intent.action} {intent.symbol} at {stamp} UTC — state: {intent.state}{evidence}",
+        ]
+        if intent.detail:
+            lines.append(f"- outcome detail: {intent.detail}")
+        payload = intent.payload or {}
+        proposed_sl = payload.get("requested_stop_loss")
+        if isinstance(proposed_sl, (int, float)):
+            in_force = payload.get("old_stop_loss")
+            in_force_text = f"${in_force:,.2f}" if isinstance(in_force, (int, float)) else "unchanged"
+            lines.append(
+                f"- proposed stop loss ${proposed_sl:,.2f} — stop loss in force stays {in_force_text}"
+            )
+        if intent.state == INTENT_CONFIRMED:
+            lines.append("- Executor evidence confirms this command. This outcome supersedes earlier missing-confirmation alerts.")
+        elif intent.state == INTENT_REFUSED:
+            lines.append("- This command was refused; do not treat its requested levels as executed.")
+        else:
+            lines.append("- Execution is not confirmed. Local SL/TP values are a mirror, not proof of exchange protection.")
+        return lines
 
-        return {
-            "trend_direction": position.trend_direction_at_entry,
-            "adx": position.adx_at_entry,
-            "rsi": rsi,
-            "rsi_level": rsi_level,
-            "volatility": position.volatility_level,
-            "macd_signal": position.macd_signal_at_entry,
-            "bb_position": position.bb_position_at_entry,
-            "volume_state": position.volume_state_at_entry,
-            "market_sentiment": position.market_sentiment_at_entry,
-        }
-
-    def _extract_market_conditions(self, result: dict) -> Dict[str, Any]:
-        """Extract market conditions from analysis result for brain learning.
-
-        Args:
-            result: Analysis result dictionary
-
-        Returns:
-            Dictionary with trend_direction, adx, volatility, etc.
-        """
-        conditions = {}
-
-        try:
-            # Extract from analysis dict (result has 'analysis' at top level, not under 'parsed_json')
-            analysis = result.get("analysis", {})
-
-            # Get trend info
-            trend = analysis.get("trend", {})
-            if trend:
-                conditions["trend_direction"] = trend.get("direction", "NEUTRAL")
-                conditions["trend_strength"] = trend.get("strength_4h", trend.get("strength", 50))
-                conditions["timeframe_alignment"] = trend.get("timeframe_alignment")
-
-            # Get technical data (result has 'technical_data' at top level, not under 'context')
-            tech_data = result.get("technical_data", {})
-            if tech_data:
-                conditions["adx"] = tech_data.get("adx", 0)
-                conditions["rsi"] = tech_data.get("rsi", 50)
-                # Derive RSI Level
-                rsi_val = conditions["rsi"]
-                if rsi_val > 70:
-                    conditions["rsi_level"] = "OVERBOUGHT"
-                elif rsi_val > 60:
-                    conditions["rsi_level"] = "STRONG"
-                elif rsi_val < 30:
-                    conditions["rsi_level"] = "OVERSOLD"
-                elif rsi_val < 40:
-                    conditions["rsi_level"] = "WEAK"
-                else:
-                    conditions["rsi_level"] = "NEUTRAL"
-                    
-                conditions["choppiness"] = tech_data.get("choppiness", None)
-                
-                # MACD
-                macd = tech_data.get("macd", {})
-                if isinstance(macd, dict):
-                    conditions["macd_signal"] = macd.get("signal", "NEUTRAL")
-                
-                # Bollinger Bands
-                bb = tech_data.get("bollinger_bands", {})
-                if isinstance(bb, dict):
-                    pct_b = bb.get("percent_b", 0.5)
-                    if pct_b > 0.95:
-                        conditions["bb_position"] = "UPPER"
-                    elif pct_b < 0.05:
-                        conditions["bb_position"] = "LOWER"
-                    else:
-                        conditions["bb_position"] = "MIDDLE"
-
-                # Volume
-                vol_data = tech_data.get("volume", {})
-                if isinstance(vol_data, dict):
-                    conditions["volume_state"] = vol_data.get("state", "NORMAL")
-
-                # Extract ATR for dynamic SL/TP calculation
-                conditions["atr"] = tech_data.get("atr", 0)
-                atr_pct = tech_data.get("atr_percentage", 0)
-                conditions["atr_percentage"] = atr_pct
-                # Determine volatility from ATR or other indicators
-                if atr_pct > 3:
-                    conditions["volatility"] = "HIGH"
-                elif atr_pct < 1.5:
-                    conditions["volatility"] = "LOW"
-                else:
-                    conditions["volatility"] = "MEDIUM"
-            
-            # Market Sentiment
-            conditions["market_sentiment"] = result.get("context", {}).get("market_sentiment", "NEUTRAL") if "context" in result else "NEUTRAL"
-            conditions["fear_greed_index"] = result.get("context", {}).get("fear_greed_index", 50) if "context" in result else 50
-
-            # Fallback: try to extract from raw response keywords
-            raw_response = result.get("raw_response", "").lower()
-            if not conditions.get("trend_direction"):
-                if "bullish" in raw_response or "uptrend" in raw_response:
-                    conditions["trend_direction"] = "BULLISH"
-                elif "bearish" in raw_response or "downtrend" in raw_response:
-                    conditions["trend_direction"] = "BEARISH"
-                else:
-                    conditions["trend_direction"] = "NEUTRAL"
-        except Exception as e:
-            self.logger.warning("Could not extract market conditions: %s", e)
-        return conditions
-
-    def _extract_confluence_factors(self, result: dict) -> tuple:
-        """Extract confluence factors from analysis result for brain learning.
-
-        Args:
-            result: Analysis result dictionary
-
-        Returns:
-            Tuple of (factor_name, score) pairs
-        """
-        factors = []
-
-        try:
-            # Extract from analysis dict (result has 'analysis' at top level, not under 'parsed_json')
-            analysis = result.get("analysis", {})
-            confluence_factors = analysis.get("confluence_factors", {})
-            if isinstance(confluence_factors, dict):
-                for factor_name, score in confluence_factors.items():
-                    try:
-                        # Ensure score is numeric and in valid range
-                        score_value = float(score)
-                        if 0 <= score_value <= 100:
-                            factors.append((factor_name, score_value))
-                    except (ValueError, TypeError):
-                        pass
-        except Exception as e:
-            self.logger.warning("Could not extract confluence factors: %s", e)
-        return tuple(factors)
-
-    def get_position_context(self, current_price: Optional[float] = None) -> str:
+    def get_position_context(self, current_price: float | None = None) -> str:
         """Get formatted context about current position for prompts.
-
-        Args:
-            current_price: Current market price for P&L calculation
-
         Returns:
             Formatted position context string with capital status
         """
+        capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
         currency = self.config.QUOTE_CURRENCY
 
-        if self.portfolio_capital_service:
-            total_capital = self.portfolio_capital_service.current_capital
-            total_allocated = self.portfolio_capital_service.total_allocated
-            available = self.portfolio_capital_service.total_unallocated
-        else:
-            capital = self.statistics_service.get_current_capital(self.config.DEMO_QUOTE_CAPITAL)
-            total_capital = capital
-            total_allocated = 0.0
-            available = capital
+        capital_header = [
+            "## Capital Status",
+            f"- Total Capital: ${capital:,.2f} {currency}",
+        ]
+        position_header = "## Current Position"
 
         if not self.current_position:
-            return (
-                f"## Capital Status\n"
-                f"- Total Capital: ${total_capital:,.2f} {currency}\n"
-                f"- Available: ${available:,.2f} (100%)\n\n"
-                f"CURRENT POSITION: None"
-            )
+            lines = capital_header + [
+                f"- Available: ${capital:,.2f} (100%)",
+                "",
+                position_header,
+                "- Status: None",
+            ]
+            last_closed = self._get_last_closed_position_info()
+            if last_closed:
+                lines.append(f"- Last Position: {last_closed}")
+            lines.extend(self._last_action_outcome_lines())
+            return "\n".join(lines)
+
         pos = self.current_position
-        # Ensure both datetimes are timezone-aware for subtraction
         now = datetime.now(timezone.utc)
         entry_time = pos.entry_time
         if entry_time.tzinfo is None:
             entry_time = entry_time.replace(tzinfo=timezone.utc)
         duration = now - entry_time
         hours = duration.total_seconds() / 3600
-        allocation_pct = (total_allocated / total_capital) * 100 if total_capital > 0 else 0
-        context_lines = [
-            "## Capital Status",
-            f"- Total Capital: ${total_capital:,.2f} {currency}",
-            f"- Allocated (all pairs): ${total_allocated:,.2f} ({allocation_pct:.1f}%)",
+        allocated = pos.quote_amount
+        available = capital - allocated
+        allocation_pct = (allocated / capital) * 100 if capital > 0 else 0
+
+        lines = capital_header + [
+            f"- Allocated: ${allocated:,.2f} ({allocation_pct:.1f}%)",
             f"- Available: ${available:,.2f} ({100 - allocation_pct:.1f}%)",
             "",
-            "## Current Position",
+            position_header,
             f"- Direction: {pos.direction}",
             f"- Symbol: {pos.symbol}",
             f"- Entry Price: ${pos.entry_price:,.2f}",
         ]
         if current_price and current_price > 0:
-            context_lines.append(f"- Current Price: ${current_price:,.2f}")
-        context_lines.extend([
+            lines.append(f"- Current Price: ${current_price:,.2f}")
+        lines.extend([
             f"- Stop Loss: ${pos.stop_loss:,.2f}",
             f"- Take Profit: ${pos.take_profit:,.2f}",
             f"- Position Size: {pos.size_pct * 100:.2f}%",
             f"- Quantity: {pos.size:.6f}",
-            f"- Entry Fee: ${pos.entry_fee:.4f}",
+            f"- Entry Fee: {self._commission_text(pos.entry_fee)}",
             f"- Duration: {hours:.1f} hours",
             f"- Confidence: {pos.confidence}",
         ])
         if current_price and current_price > 0:
             pnl_pct = pos.calculate_pnl(current_price)
-            pnl_quote = (current_price - pos.entry_price) * pos.size if pos.direction == 'LONG' else (pos.entry_price - current_price) * pos.size
-            context_lines.append(f"- Unrealized P&L: {pnl_pct:+.2f}% (${pnl_quote:+,.2f} {currency})")
-        return "\n".join(context_lines)
+            pnl_quote = (current_price - pos.entry_price) * pos.size if pos.direction == "LONG" else (pos.entry_price - current_price) * pos.size
+            lines.append(f"- Unrealized P&L: {pnl_pct:+.2f}% (${pnl_quote:+,.2f} {currency})")
+
+        brain_thresholds = self.brain_service.get_dynamic_thresholds()
+        sentinel_sl = pos.stop_loss - 1e-8 if pos.direction == "SHORT" else pos.stop_loss + 1e-8
+        sl_eval = self._tightening_policy.evaluate_update(
+            position=pos,
+            proposed_sl=sentinel_sl,
+            current_price=current_price or 0.0,
+            tf_minutes=self._tf_minutes,
+            brain_thresholds=brain_thresholds,
+        )
+        effective_pct = sl_eval.effective_min_progress * 100
+        progress_pct = sl_eval.price_progress * 100 if current_price and current_price > 0 else None
+        if progress_pct is not None:
+            eligible = progress_pct >= effective_pct
+            lines.extend([
+                "",
+                "## SL Tightening Policy",
+                f"- Effective minimum progress: {effective_pct:.0f}% of entry-to-TP (source: {sl_eval.source})",
+                f"- Current price progress: {progress_pct:.1f}%",
+                f"- Tightening eligible: {'YES' if eligible else 'NO — wait until price progress reaches the minimum'}",
+            ])
+        else:
+            lines.extend([
+                "",
+                "## SL Tightening Policy",
+                f"- Effective minimum progress: {effective_pct:.0f}% of entry-to-TP (source: {sl_eval.source})",
+            ])
+
+        lines.extend(self._last_action_outcome_lines())
+        return "\n".join(lines)

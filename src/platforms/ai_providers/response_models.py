@@ -1,7 +1,9 @@
 """Unified Pydantic response models for all AI providers."""
-from typing import Optional, List, Dict, Any
+import re
+from enum import Enum
+from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class MessageModel(BaseModel):
@@ -15,22 +17,23 @@ class UsageModel(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    thoughts_token_count: int = 0
 
 
 class ChoiceModel(BaseModel):
     """Single response choice from AI."""
     message: MessageModel
-    finish_reason: Optional[str] = None
-    error: Optional[Dict[str, Any]] = None
+    finish_reason: str | None = None
+    error: dict[str, Any] | None = None
 
 
 class ChatResponseModel(BaseModel):
     """Unified response model for all AI providers."""
-    choices: List[ChoiceModel]
-    usage: Optional[UsageModel] = None
-    id: Optional[str] = None
-    model: Optional[str] = None
-    error: Optional[str] = None
+    choices: list[ChoiceModel]
+    usage: UsageModel | None = None
+    id: str | None = None
+    model: str | None = None
+    error: str | None = None
 
     @classmethod
     def from_error(cls, error: str) -> "ChatResponseModel":
@@ -42,9 +45,9 @@ class ChatResponseModel(BaseModel):
         cls,
         content: str,
         role: str = "assistant",
-        usage: Optional[UsageModel] = None,
-        model: Optional[str] = None,
-        response_id: Optional[str] = None
+        usage: UsageModel | None = None,
+        model: str | None = None,
+        response_id: str | None = None
     ) -> "ChatResponseModel":
         """Create response from content string."""
         return cls(
@@ -53,3 +56,147 @@ class ChatResponseModel(BaseModel):
             model=model,
             id=response_id
         )
+
+
+class TradingSignal(str, Enum):
+    """Allowed trading decision signals emitted by the analysis LLM."""
+    BUY = "BUY"
+    SELL = "SELL"
+    HOLD = "HOLD"
+    CLOSE = "CLOSE"
+    UPDATE = "UPDATE"
+
+
+class TrendDirection(str, Enum):
+    """Allowed market trend directions in the analysis response."""
+    BULLISH = "BULLISH"
+    BEARISH = "BEARISH"
+    NEUTRAL = "NEUTRAL"
+
+
+class TimeframeAlignment(str, Enum):
+    """Allowed timeframe alignment labels in the analysis response."""
+    ALIGNED = "ALIGNED"
+    MIXED = "MIXED"
+    DIVERGENT = "DIVERGENT"
+
+
+class ConfluenceFactorsModel(BaseModel):
+    """Confluence scores used by trading-brain learning and dashboard logs."""
+    model_config = ConfigDict(extra="allow")
+
+    trend_alignment: float | None = Field(default=None, ge=0, le=100)
+    momentum_strength: float | None = Field(default=None, ge=0, le=100)
+    volume_support: float | None = Field(default=None, ge=0, le=100)
+    pattern_quality: float | None = Field(default=None, ge=0, le=100)
+    support_resistance_strength: float | None = Field(default=None, ge=0, le=100)
+
+
+class KeyLevelsModel(BaseModel):
+    """Support and resistance levels selected by the analysis response."""
+    model_config = ConfigDict(extra="allow")
+
+    support: list[float] = Field(default_factory=list)
+    resistance: list[float] = Field(default_factory=list)
+
+
+class TrendModel(BaseModel):
+    """Trend summary emitted by the trading analysis response."""
+    model_config = ConfigDict(extra="allow")
+
+    direction: TrendDirection | None = None
+    strength_4h: int | None = Field(default=None, ge=0, le=100)
+    strength_daily: int | None = Field(default=None, ge=0, le=100)
+    timeframe_alignment: TimeframeAlignment | None = None
+
+
+class RedditAssessmentModel(BaseModel):
+    """Same-call interpretation of the selected Reddit titles, with evidence IDs."""
+    model_config = ConfigDict(extra="forbid")
+
+    outlook: Literal["BULLISH", "BEARISH", "MIXED", "INSUFFICIENT_EVIDENCE"]
+    evidence: list[Annotated[int, Field(strict=True, ge=1)]]
+    reason: str = Field(min_length=1, max_length=240)
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def coerce_decimal_string_evidence(cls, value: Any) -> Any:
+        """Accept title IDs quoted as decimal strings ("12" -> 12).
+
+        Providers occasionally serialise the numeric title IDs as strings. Strict int
+        validation rejected the WHOLE assessment in that case, so usable sentiment
+        evidence was discarded over formatting. Only plain ASCII digits are coerced;
+        anything else is still rejected by the strict field.
+        """
+        if not isinstance(value, (list, tuple)):
+            return value
+        coerced: list[Any] = []
+        for item in value:
+            if isinstance(item, str) and re.fullmatch(r"[0-9]+", item.strip()):
+                coerced.append(int(item.strip()))
+            else:
+                coerced.append(item)
+        return coerced
+
+    @model_validator(mode="after")
+    def validate_evidence(self) -> "RedditAssessmentModel":
+        """Directional assessments need distinct references to supplied titles."""
+        if len(self.evidence) != len(set(self.evidence)):
+            raise ValueError("Reddit evidence IDs must be unique")
+        if self.outlook != "INSUFFICIENT_EVIDENCE" and not self.evidence:
+            raise ValueError("Reddit outlook requires title evidence")
+        return self
+
+
+class TradingAnalysisModel(BaseModel):
+    """Validated shape for the `analysis` object in trading responses."""
+    model_config = ConfigDict(extra="allow")
+
+    signal: TradingSignal
+    confidence: int = Field(ge=0, le=100)
+    confluence_factors: ConfluenceFactorsModel | None = None
+    entry_price: float | None = Field(default=None, gt=0)
+    stop_loss: float | None = Field(default=None, gt=0)
+    take_profit: float | None = Field(default=None, gt=0)
+    position_size: float | None = Field(default=None, ge=0, le=1)
+    reasoning: str = ""
+    key_levels: KeyLevelsModel | None = None
+    trend: TrendModel | None = None
+    reddit_sentiment: RedditAssessmentModel | None = None
+    risk_reward_ratio: float | None = Field(default=None, ge=0)
+    symbol: str | None = None
+    order_type: str | None = None
+    quantity: float | None = Field(default=None, ge=0)
+    reduce_only: bool = False
+    leverage: float = Field(default=1.0, ge=1.0)
+
+    @model_validator(mode="after")
+    def validate_signal_execution_fields(self) -> "TradingAnalysisModel":
+        """Validate fields that are mandatory for immediate execution signals."""
+        if self.signal in (TradingSignal.BUY, TradingSignal.SELL):
+            required_fields = {
+                "entry_price": self.entry_price,
+                "stop_loss": self.stop_loss,
+                "take_profit": self.take_profit,
+                "risk_reward_ratio": self.risk_reward_ratio,
+                "position_size": self.position_size,
+            }
+            missing_fields = [field_name for field_name, field_value in required_fields.items() if field_value is None]
+            if missing_fields:
+                raise ValueError(
+                    f"{self.signal.value} response is missing required execution fields: {', '.join(missing_fields)}"
+                )
+        if self.signal == TradingSignal.UPDATE:
+            if self.entry_price is None:
+                raise ValueError("UPDATE response requires entry_price to represent the current price")
+            if self.stop_loss is None and self.take_profit is None:
+                raise ValueError("UPDATE response must include a new stop_loss or take_profit")
+        return self
+
+
+class TradingAnalysisResponseModel(BaseModel):
+    """Validated trading analysis response wrapper."""
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: ClassVar[str] = "trading-analysis-response-v1"
+    analysis: TradingAnalysisModel

@@ -1,9 +1,3 @@
-/**
- * Fullscreen panel module - Opens panels in modal overlay.
- * 
- * For canvas-based charts (ApexCharts, vis-network), we MOVE the original
- * element to the fullscreen container instead of cloning, then move it back on close.
- */
 
 let currentPanel = null;
 let originalParent = null;
@@ -122,7 +116,6 @@ export function openFullscreen(panelId) {
     modal.classList.add('active');
     document.body.style.overflow = 'hidden';
 
-    // Trap focus and hide background
     const appContainer = document.getElementById('app-container');
     if (appContainer) appContainer.setAttribute('aria-hidden', 'true');
 
@@ -133,7 +126,7 @@ export function openFullscreen(panelId) {
 function getContentId(panelId) {
     const mapping = {
         'panel-performance': 'performance-chart',
-        'panel-synapses': 'synapse-network',
+        'panel-decision-pathways': 'decision-graph',
         'panel-thoughts': 'log-viewer',
         'panel-visuals': 'visual-container',
         'panel-position': 'position-content',
@@ -157,14 +150,13 @@ function resizeContent(panelId, contentEl) {
                 }
             }, false, true);
             setTimeout(() => {
-                // NEW: Re-apply annotations at larger scale
                 if (typeof window.refreshPerformanceAnnotations === 'function') {
                     window.refreshPerformanceAnnotations();
                 }
             }, 100);
         }
-    } else if (panelId === 'panel-synapses') {
-        const network = window.synapseNetwork;
+    } else if (panelId === 'panel-decision-pathways') {
+        const network = window.decisionNetwork;
         if (network && typeof network.fit === 'function') {
             contentEl.style.width = '100%';
             contentEl.style.height = '100%';
@@ -223,14 +215,13 @@ function restoreContent(panelId, contentEl) {
                     }
                 }, true, true);
                 window.dispatchEvent(new Event('resize'));
-                // NEW: Restore annotations to original scale
                 if (typeof window.refreshPerformanceAnnotations === 'function') {
                     window.refreshPerformanceAnnotations();
                 }
             }, 150);
         }
-    } else if (panelId === 'panel-synapses') {
-        const network = window.synapseNetwork;
+    } else if (panelId === 'panel-decision-pathways') {
+        const network = window.decisionNetwork;
         if (network && typeof network.fit === 'function') {
             contentEl.style.width = '';
             contentEl.style.height = '';

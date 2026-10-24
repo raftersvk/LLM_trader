@@ -1,26 +1,95 @@
 """Risk Manager for converting signals into actionable trade parameters."""
 
-from typing import Optional, Dict, Any, TYPE_CHECKING
+import math
+from typing import TYPE_CHECKING, Any
+
+from src.indicators.price.risk_reward import risk_reward_ratio_numba
 from src.logger.logger import Logger
-from src.contracts.risk_contract import RiskManagerProtocol
+from src.trading.regime_risk_profile import RegimeRiskProfileSelector
 
 if TYPE_CHECKING:
-    from src.config.protocol import ConfigProtocol
-    from src.trading.data_models import RiskAssessment
+    from src.config.loader import Config
+    from src.trading.data_models import MarketConditions, RiskAssessment
 
-class RiskManager(RiskManagerProtocol):
+class RiskManager:
     """
     Manages risk calculations including position sizing, stop-loss/take-profit dynamic adjustment,
     and circuit breakers.
     """
 
-    def __init__(self, logger: Logger, config: "ConfigProtocol"):
+    def __init__(self, logger: Logger, config: "Config"):
         self.logger = logger
         self.config = config
+        self._last_frictions: list[dict[str, Any]] = []
+        self.regime_profile_selector = RegimeRiskProfileSelector()
 
     def validate_signal(self, signal: str) -> bool:
         """Validate if a signal is actionable."""
         return signal in ("BUY", "SELL", "CLOSE", "CLOSE_LONG", "CLOSE_SHORT")
+
+    def _is_valid_position_size(self, position_size: float | None) -> bool:
+        """Return whether position size is a usable capital fraction."""
+        return position_size is not None and math.isfinite(position_size) and position_size > 0
+
+    def _get_confidence_fallback_size(self, confidence: str) -> float:
+        """Get configured fallback size for a confidence level."""
+        fallback_sizes = {
+            "HIGH": self.config.POSITION_SIZE_FALLBACK_HIGH,
+            "MEDIUM": self.config.POSITION_SIZE_FALLBACK_MEDIUM,
+            "LOW": self.config.POSITION_SIZE_FALLBACK_LOW,
+        }
+        fallback_size = fallback_sizes.get(confidence.upper(), self.config.POSITION_SIZE_FALLBACK_MEDIUM)
+        if math.isfinite(fallback_size) and fallback_size > 0:
+            return fallback_size
+        self.logger.warning(
+            "Configured fallback position size for %s confidence is invalid, using MEDIUM fallback",
+            confidence,
+        )
+        return self.config.POSITION_SIZE_FALLBACK_MEDIUM
+
+    def _resolve_position_size_pct(self, position_size: float | None, confidence: str, profile_cap: float | None = None) -> float:
+        """Resolve final position size from AI request or configured confidence fallback.
+
+        MAX_POSITION_SIZE is the hard ceiling: a regime profile cap may only tighten it.
+        """
+        config_cap = self.config.MAX_POSITION_SIZE
+        if not math.isfinite(config_cap) or config_cap <= 0:
+            raise ValueError("MAX_POSITION_SIZE must be a positive finite decimal")
+        max_size = config_cap if profile_cap is None else min(profile_cap, config_cap)
+        if not math.isfinite(max_size) or max_size <= 0:
+            raise ValueError("effective position size cap must be a positive finite decimal")
+
+        if position_size is not None and self._is_valid_position_size(position_size):
+            requested_size = position_size
+            source = "AI"
+        else:
+            requested_size = self._get_confidence_fallback_size(confidence)
+            source = f"configured {confidence.upper()} confidence fallback"
+            self.logger.info("Using %s position size: %.2f%%", source, requested_size * 100)
+
+        final_size_pct = min(requested_size, max_size)
+        if requested_size > max_size:
+            self.logger.warning(
+                "%s position size %.2f%% exceeds cap %.2f%%, clamping",
+                source,
+                requested_size * 100,
+                max_size * 100,
+            )
+            self._last_frictions.append({
+                "guard_type": "position_size_clamp",
+                "direction": "N/A",
+                "suggested_size": requested_size,
+                "max_size": max_size,
+                "detail": f"Position size {requested_size*100:.1f}% clamped to max {max_size*100:.1f}%",
+            })
+        self.logger.debug(
+            "Resolved position size: source=%s requested=%.4f cap=%.4f final=%.4f",
+            source,
+            requested_size,
+            max_size,
+            final_size_pct,
+        )
+        return final_size_pct
 
     def calculate_entry_parameters(
         self,
@@ -28,23 +97,26 @@ class RiskManager(RiskManagerProtocol):
         current_price: float,
         capital: float,
         confidence: str,
-        stop_loss: Optional[float] = None,
-        take_profit: Optional[float] = None,
-        position_size: Optional[float] = None,
-        market_conditions: Optional[Dict[str, Any]] = None
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        position_size: float | None = None,
+        market_conditions: "MarketConditions | None" = None,
+        choppiness: float | None = None,
     ) -> "RiskAssessment":
         """
         Calculate all risk parameters for a new position entry.
         """
-        from src.trading.data_models import RiskAssessment
-        market_conditions = market_conditions or {}
-        direction = "LONG" if signal == "BUY" else "SHORT"
+        from src.trading.data_models import RiskAssessment, entry_direction
+        if not math.isfinite(current_price) or current_price <= 0:
+            raise ValueError("current_price must be a positive finite number")
+        if not math.isfinite(capital) or capital < 0:
+            raise ValueError("capital must be a non-negative finite number")
+        direction = entry_direction(signal)
+        mc = market_conditions
 
-        # 1. Extract or Default ATR/Volatility
-        atr = market_conditions.get("atr", current_price * 0.02)
-        atr_pct = market_conditions.get("atr_percentage", (atr / current_price) * 100)
+        atr = mc.atr if mc and mc.atr > 0 else current_price * 0.02
+        atr_pct = mc.atr_percentage if mc and mc.atr_percentage > 0 else (atr / current_price) * 100
 
-        # Determine volatility level
         if atr_pct > 3:
             volatility_level = "HIGH"
         elif atr_pct < 1.5:
@@ -52,19 +124,23 @@ class RiskManager(RiskManagerProtocol):
         else:
             volatility_level = "MEDIUM"
 
-        # 2. Dynamic SL/TP Calculation (Dynamic Defaults)
-        # Use 2x ATR for SL, 4x ATR for TP (2:1 R/R default)
-        dynamic_sl_distance = atr * 2
-        dynamic_tp_distance = atr * 4
+        profile = self.regime_profile_selector.select_profile(
+            choppiness=choppiness,
+            atr_percentage=atr_pct,
+        )
+        sl_mult = self.regime_profile_selector.get_sl_multiplier(profile)
+        tp_mult = self.regime_profile_selector.get_tp_multiplier(profile)
+
+        dynamic_sl_distance = atr * sl_mult
+        dynamic_tp_distance = atr * tp_mult
 
         if direction == "LONG":
             dynamic_sl = current_price - dynamic_sl_distance
             dynamic_tp = current_price + dynamic_tp_distance
-        else:  # SHORT
+        else:
             dynamic_sl = current_price + dynamic_sl_distance
             dynamic_tp = current_price - dynamic_tp_distance
 
-        # 3. Resolve Final SL/TP (AI vs Dynamic)
         if stop_loss and stop_loss > 0:
             final_sl = stop_loss
             self.logger.debug("Using AI-provided SL: $%s", f"{final_sl:,.2f}")
@@ -79,79 +155,124 @@ class RiskManager(RiskManagerProtocol):
             final_tp = dynamic_tp
             self.logger.info("Using dynamic TP (4x ATR): $%s", f"{final_tp:,.2f}")
 
-        # 4. Circuit Breakers (Clamp Extreme Values)
         sl_distance_raw = abs(current_price - final_sl) / current_price
 
-        # Clamp SL: min 0.5%, max 10%
         if sl_distance_raw > 0.10:
             self.logger.warning("SL distance %s exceeds 10%% max, clamping", f"{sl_distance_raw:.1%}")
+            self._last_frictions.append({
+                "guard_type": "sl_distance_max",
+                "direction": direction,
+                "suggested_sl": final_sl,
+                "suggested_sl_pct": sl_distance_raw,
+                "corrected_sl_pct": 0.10,
+                "current_price": current_price,
+                "volatility_level": volatility_level,
+                "detail": f"SL distance {sl_distance_raw*100:.1f}% clamped to max 10%",
+            })
             if direction == "LONG":
                 final_sl = current_price * 0.90
             else:
                 final_sl = current_price * 1.10
-        elif sl_distance_raw < 0.005:
-            self.logger.warning("SL distance %s below 0.5%% min, expanding", f"{sl_distance_raw:.1%}")
+        elif sl_distance_raw < 0.01:
+            self.logger.warning("SL distance %s below 1.0%% min, expanding", f"{sl_distance_raw:.1%}")
+            self._last_frictions.append({
+                "guard_type": "sl_distance_min",
+                "direction": direction,
+                "suggested_sl": final_sl,
+                "suggested_sl_pct": sl_distance_raw,
+                "corrected_sl_pct": 0.01,
+                "current_price": current_price,
+                "volatility_level": volatility_level,
+                "detail": f"SL distance {sl_distance_raw*100:.1f}% expanded to min 1%",
+            })
             if direction == "LONG":
-                final_sl = current_price * 0.995
+                final_sl = current_price * 0.99
             else:
-                final_sl = current_price * 1.005
+                final_sl = current_price * 1.01
 
-        # Validate Logical Consistency
+        tp_distance_raw = abs(final_tp - current_price) / current_price
+        if tp_distance_raw > 0.50:
+            self.logger.warning("TP distance %s exceeds 50%% max, clamping", f"{tp_distance_raw:.1%}")
+            self._last_frictions.append({
+                "guard_type": "tp_distance_max",
+                "direction": direction,
+                "suggested_tp": final_tp,
+                "suggested_tp_pct": tp_distance_raw,
+                "corrected_tp_pct": 0.50,
+                "current_price": current_price,
+                "volatility_level": volatility_level,
+                "detail": f"TP distance {tp_distance_raw*100:.1f}% clamped to max 50%",
+            })
+            if direction == "LONG":
+                final_tp = current_price * 1.50
+            else:
+                final_tp = current_price * 0.50
+
         if direction == "LONG":
             if final_sl >= current_price:
                 self.logger.warning("Invalid SL for LONG (%s >= %s), using dynamic", final_sl, current_price)
+                self._last_frictions.append({
+                    "guard_type": "sl_below_entry",
+                    "direction": direction,
+                    "suggested_sl": final_sl,
+                    "dynamic_sl": dynamic_sl,
+                    "current_price": current_price,
+                    "volatility_level": volatility_level,
+                    "detail": f"SL ${final_sl:,.2f} was above/at entry ${current_price:,.2f}, using dynamic",
+                })
                 final_sl = dynamic_sl
             if final_tp <= current_price:
                 self.logger.warning("Invalid TP for LONG (%s <= %s), using dynamic", final_tp, current_price)
+                self._last_frictions.append({
+                    "guard_type": "tp_below_entry",
+                    "direction": direction,
+                    "suggested_tp": final_tp,
+                    "dynamic_tp": dynamic_tp,
+                    "current_price": current_price,
+                    "volatility_level": volatility_level,
+                    "detail": f"TP ${final_tp:,.2f} was below/at entry ${current_price:,.2f}, using dynamic",
+                })
                 final_tp = dynamic_tp
-        else:  # SHORT
+        else:
             if final_sl <= current_price:
                 self.logger.warning("Invalid SL for SHORT (%s <= %s), using dynamic", final_sl, current_price)
+                self._last_frictions.append({
+                    "guard_type": "sl_below_entry",
+                    "direction": direction,
+                    "suggested_sl": final_sl,
+                    "dynamic_sl": dynamic_sl,
+                    "current_price": current_price,
+                    "volatility_level": volatility_level,
+                    "detail": f"SL ${final_sl:,.2f} was below/at entry ${current_price:,.2f}, using dynamic",
+                })
                 final_sl = dynamic_sl
             if final_tp >= current_price:
                 self.logger.warning("Invalid TP for SHORT (%s >= %s), using dynamic", final_tp, current_price)
+                self._last_frictions.append({
+                    "guard_type": "tp_below_entry",
+                    "direction": direction,
+                    "suggested_tp": final_tp,
+                    "dynamic_tp": dynamic_tp,
+                    "current_price": current_price,
+                    "volatility_level": volatility_level,
+                    "detail": f"TP ${final_tp:,.2f} was above/at entry ${current_price:,.2f}, using dynamic",
+                })
                 final_tp = dynamic_tp
 
-        # 5. Position Sizing
-        if position_size and position_size > 0:
-            final_size_pct = position_size
-        else:
-            # Dynamic sizing based on confidence
-            confidence_map = {"HIGH": 0.03, "MEDIUM": 0.02, "LOW": 0.01}
-            final_size_pct = confidence_map.get(confidence.upper(), 0.02)
-            self.logger.info("Using confidence-based size: %.1f%%", final_size_pct * 100)
+        profile_cap = self.regime_profile_selector.get_position_size_cap(profile)
+        final_size_pct = self._resolve_position_size_pct(position_size, confidence, profile_cap)
 
-        # 6. Calculate Financials
         allocation = capital * final_size_pct
         quantity = allocation / current_price
-        entry_fee = allocation * self.config.TRANSACTION_FEE_PERCENT
+        entry_fee: float | None = None
 
-        # 7. Metrics
         sl_distance_pct = abs(current_price - final_sl) / current_price
         tp_distance_pct = abs(final_tp - current_price) / current_price
-        rr_ratio = tp_distance_pct / sl_distance_pct if sl_distance_pct > 0 else 0
-
-        # 7b. Enforce Minimum Order Size
-        min_order_size = self.config.MIN_ORDER_SIZE
-        if min_order_size > 0 and allocation < min_order_size:
-            self.logger.warning(
-                "Order size $%s below minimum $%s, rejecting position",
-                f"{allocation:.2f}", f"{min_order_size:.2f}"
-            )
-            return RiskAssessment(
-                direction=direction,
-                entry_price=current_price,
-                stop_loss=final_sl,
-                take_profit=final_tp,
-                quantity=0.0,
-                size_pct=0.0,
-                quote_amount=0.0,
-                entry_fee=0.0,
-                sl_distance_pct=sl_distance_pct,
-                tp_distance_pct=tp_distance_pct,
-                rr_ratio=rr_ratio,
-                volatility_level=volatility_level
-            )
+        rr_ratio = risk_reward_ratio_numba(
+            current_price, final_sl, final_tp, 1 if direction == "LONG" else -1
+        )
+        if not math.isfinite(rr_ratio):
+            raise ValueError("normalized SL/TP do not form a valid risk/reward setup")
 
         return RiskAssessment(
             direction=direction,
@@ -165,5 +286,19 @@ class RiskManager(RiskManagerProtocol):
             sl_distance_pct=sl_distance_pct,
             tp_distance_pct=tp_distance_pct,
             rr_ratio=rr_ratio,
-            volatility_level=volatility_level
+            volatility_level=volatility_level,
+            regime_profile=profile.value,
         )
+
+    def get_and_clear_frictions(self) -> list[dict[str, Any]]:
+        """Return accumulated friction reports and clear the buffer.
+
+        Called by TradingStrategy after `calculate_entry_parameters` to retrieve
+        any clamping/rejection events for persistence as blocked trade feedback.
+
+        Returns:
+            List of friction dicts (guard_type, direction, deltas, etc.).
+        """
+        frictions = self._last_frictions
+        self._last_frictions = []
+        return frictions
