@@ -1007,7 +1007,7 @@ class ExecutorReconciliationMixin:
         dir (keeps each deployment/temporary test dir isolated), then a repo default.
         """
         configured = getattr(self.config, "BOT_INTENT_JOURNAL_PATH", None)
-        if configured:
+        if isinstance(configured, (str, Path)) and configured:
             return Path(configured)
         data_dir = getattr(self.persistence, "data_dir", None)
         if isinstance(data_dir, (str, Path)):

@@ -33,7 +33,7 @@ entry_order_type = market
 
 # === AI Providers ===
 [ai_providers]
-# local | googleai | openrouter | deepseek | all
+# local | googleai | openrouter | deepseek | litellm | all
 # blockrun is NOT a valid value here: the loader rejects it (VALID_PROVIDERS in
 # src/config/loader.py) and only uses it as a chain member of "all", and only with
 # BLOCKRUN_WALLET_KEY set.

@@ -27,7 +27,12 @@ def _resolve_keys_env_path() -> Path:
     override = os.environ.get("LLM_TRADER_KEYS_ENV")
     if override:
         return Path(override)
-    return globals().get("KEYS_ENV_PATH", ROOT_DIR / "keys.env")
+    configured = globals().get("KEYS_ENV_PATH")
+    import_value = globals().get("_IMPORT_KEYS_ENV_PATH")
+    if configured is not None and configured != import_value:
+        # Explicitly reassigned by tests/embedders.
+        return configured
+    return ROOT_DIR / "keys.env"
 
 
 def _resolve_config_ini_path() -> Path:
@@ -35,13 +40,22 @@ def _resolve_config_ini_path() -> Path:
     override = os.environ.get("LLM_TRADER_CONFIG_INI")
     if override:
         return Path(override)
-    return globals().get("CONFIG_INI_PATH", CONFIG_DIR / "config.ini")
+    configured = globals().get("CONFIG_INI_PATH")
+    import_value = globals().get("_IMPORT_CONFIG_INI_PATH")
+    if configured is not None and configured != import_value:
+        # Explicitly reassigned by tests/embedders.
+        return configured
+    return CONFIG_DIR / "config.ini"
 
 
 # Module-level defaults (kept for importers); Config resolves them again per
 # instance so --config and Config.reload() see environment changes.
 KEYS_ENV_PATH = _resolve_keys_env_path()
 CONFIG_INI_PATH = _resolve_config_ini_path()
+# Snapshot so a later removal of the env override falls back to the real default
+# instead of the import-time override.
+_IMPORT_KEYS_ENV_PATH = KEYS_ENV_PATH
+_IMPORT_CONFIG_INI_PATH = CONFIG_INI_PATH
 
 VALID_PROVIDERS = {"local", "googleai", "openrouter", "deepseek", "litellm", "all"}
 VALID_EXIT_TYPES = {"soft", "hard"}

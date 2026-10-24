@@ -283,6 +283,7 @@ class CompositionRoot(ProvisioningMixin):
                     ),
                     "ev_formatter": analyzer["ev_formatter"],
                     "parser": utils["parser"],
+                    "prompt_budget": utils["prompt_budget"],
                     "dashboard_state": None,
                     "post_mortem_repo": trading.get("post_mortem_repo"),
                     "guard_pipeline": trading.get("guard_pipeline"),

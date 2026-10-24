@@ -45,6 +45,7 @@ def _base_dependencies() -> dict:
         "post_mortem_service": MagicMock(),
         "tightening_policy": MagicMock(),
         "post_mortem_repo": MagicMock(),
+        "prompt_budget": MagicMock(),
     }
 
 
@@ -67,6 +68,13 @@ async def test_create_bot_for_pair_wires_the_pair_strategy(tmp_path, monkeypatch
     assert bot.trading_strategy is not factory.base_dependencies.get("market_analyzer")
     assert bot.persistence is not None
     assert bot.brain_service is not None
+    assert bot.brain_service.context_provider.post_mortem_repo is (
+        factory.base_dependencies["post_mortem_repo"]
+    )
+    assert bot.brain_service.context_provider.prompt_budget is (
+        factory.base_dependencies["prompt_budget"]
+    )
+    assert bot.memory_service.initial_capital == _config().DEMO_QUOTE_CAPITAL
 
     # Each pair owns an isolated persistence directory.
     assert "pair_ETH_USDT" in str(bot.persistence.data_dir)

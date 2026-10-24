@@ -227,10 +227,23 @@ class BotDependencyFactory:
         vector_memory = VectorMemoryService(self.logger, chroma_client, embedding_model=embedding_model)
 
         from src.trading.brain import TradingBrainService
-        brain_service = TradingBrainService(self.logger, persistence, vector_memory)
+
+        brain_service = TradingBrainService(
+            self.logger,
+            persistence,
+            vector_memory,
+            post_mortem_repo=self.base_dependencies.get("post_mortem_repo"),
+            prompt_budget=self.base_dependencies.get("prompt_budget"),
+        )
 
         from src.trading.memory import TradingMemoryService
-        memory_service = TradingMemoryService(self.logger, persistence, max_memory=10, vector_memory=vector_memory)
+        memory_service = TradingMemoryService(
+            self.logger,
+            persistence,
+            max_memory=10,
+            vector_memory=vector_memory,
+            initial_capital=self.config.DEMO_QUOTE_CAPITAL,
+        )
 
         from src.trading.statistics import TradingStatisticsService
         statistics_service = TradingStatisticsService(self.logger, persistence)

@@ -95,3 +95,35 @@ async def test_bot_publishes_updates_scoped_to_the_current_symbol():
     assert countdown["seconds_remaining"] is not None
     assert bot.dashboard_state.pairs["BTC/USDC"].analysis_count == 1
     assert bot.dashboard_state.pairs["BTC/USDC"].current_position is None
+
+
+@pytest.mark.asyncio
+async def test_system_router_merges_live_analysis_counts_in_multi_pair(tmp_path, monkeypatch):
+    """MultiPairManager status must inherit the live DashboardState analysis count."""
+    monkeypatch.chdir(tmp_path)
+    state = DashboardState()
+    await state.update_analysis_complete("BTC/USDC")
+    await state.update_price("BTC/USDC", 101.0)
+
+    manager = MagicMock()
+    manager.get_status.return_value = {
+        "BTC/USDC": {
+            "is_running": True,
+            "timeframe": "1h",
+            "analysis_count": 0,
+            "last_error": None,
+            "task_active": True,
+        }
+    }
+    config = SimpleNamespace(
+        CRYPTO_PAIRS=["BTC/USDC"],
+        TIMEFRAME="1h",
+        DATA_DIR=str(tmp_path / "data"),
+        QUOTE_CURRENCY="USDC",
+    )
+    router = SystemRouter(config, MagicMock(), state, manager)
+
+    status = await router.get_system_status()
+
+    assert status["pairs"]["BTC/USDC"]["analysis_count"] == 1
+    assert status["pairs"]["BTC/USDC"]["current_price"] == 101.0
