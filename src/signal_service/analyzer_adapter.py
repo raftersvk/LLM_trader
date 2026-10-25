@@ -620,7 +620,9 @@ class PairAnalyzer:
             repaired_text = await send_prompt(
                 prompt=prompt,
                 system_message=JSON_REPAIR_SYSTEM,
-                response_format={"type": "json_object"},
+                # Honour the same signal-path opt-out as the initial call: a
+                # provider that rejects response_format must not get it here.
+                response_format=self._json_response_format(),
             )
         except TypeError:
             # Test doubles / older model managers may not accept response_format.

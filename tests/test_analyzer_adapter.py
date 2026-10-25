@@ -1466,3 +1466,25 @@ async def test_repair_error_payload_is_not_mistaken_for_a_decision():
     assert signal.risk_approved is False
     assert signal.reasoning == "invalid LLM output: JSON parse error after repair"
     signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_repair_honours_the_json_format_opt_out():
+    """When structured output is disabled, the repair must not send response_format."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=PROSE_WITHOUT_JSON,
+        result=_json_parse_error_result(PROSE_WITHOUT_JSON),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=False,
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(repair.calls) == 1
+    assert repair.calls[0]["response_format"] is None
+    assert engine.calls[-1]["response_format"] is None
+    assert signal.reasoning == "repaired decision"
