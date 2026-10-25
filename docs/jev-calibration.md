@@ -21,9 +21,10 @@ misleading for a rare label and is not a valid basis for a threshold decision.
   `--observations runtime/jev_bench/observations.jsonl`.
 - Weekly policy layer: see [`jev-policy.md`](jev-policy.md). The policy uses a
   trade-P&L label (base direction, net of cost) over h1-h4.
-- Larger 7-symbol campaign (BTC, ETH, SOL, AXS, AVAX, NEXO, ARB; 1,400 calls):
+- Larger spot + USDT-M futures campaign (7 spot, 6 futures; 2,600 calls):
   see [`jev-campaign-7-symbols.md`](jev-campaign-7-symbols.md). Its conclusion is
-  that no rank-based rejection rule is reliable today; the fallback stays 0.5.
+  that no rank-based rejection rule is reliable today in either market, and all
+  spot-vs-futures differences are within noise; the fallback stays 0.5.
 
 ## What changed in this revision
 

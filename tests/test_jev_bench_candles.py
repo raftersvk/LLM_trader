@@ -19,6 +19,14 @@ sys.modules[_SPEC.name] = fetch
 _SPEC.loader.exec_module(fetch)
 
 
+def test_market_symbol_maps_spot_to_perpetual_contract():
+    """Futures symbols gain the USDT settle suffix; spot symbols are untouched."""
+    assert fetch._market_symbol("SOL/USDT", "futures") == "SOL/USDT:USDT"
+    assert fetch._market_symbol("SOL/USDT:USDT", "futures") == "SOL/USDT:USDT"
+    assert fetch._market_symbol("SOL/USDT", "spot") == "SOL/USDT"
+    assert fetch._base_name("SOL/USDT:USDT") == "SOL_USDT"
+
+
 def test_timeframe_seconds_units():
     """Supported timeframe suffixes convert to seconds."""
     assert fetch.timeframe_seconds("1h") == 3600

@@ -1,8 +1,9 @@
-"""Aggregate a multi-symbol JEV calibration campaign.
+"""Aggregate a multi-symbol JEV spot and futures calibration campaign.
 
-Reads the per-symbol ``calibration_<base>_200.json`` reports produced by
-``scripts/jev_calibration.py`` and answers four questions per symbol at the h1
-horizon (``abs(forward_return) >= 1 %`` means "worth trading"):
+Reads the per-symbol ``calibration_<base>_200.json`` and
+``calibration_<base>_200_futures.json`` reports produced by
+``scripts/jev_calibration.py`` and answers four questions per symbol-market at
+the h1 horizon (``abs(forward_return) >= 1 %`` means "worth trading"):
 
 1. how often the event happens (prevalence);
 2. whether a high ``noul`` identifies it (top vs bottom group event rate and
@@ -12,10 +13,12 @@ horizon (``abs(forward_return) >= 1 %`` means "worth trading"):
 
 All intervals are deterministic bootstrap intervals with the same seed as the
 calibration tool. Symbols are never pooled: pooling hides one symbol's fluke
-behind another's.
+behind another's. When futures reports are supplied, each symbol also gets a
+spot-minus-futures comparison with an independent-sample bootstrap interval.
 
     python scripts/jev_campaign_analysis.py \\
         --reports runtime/jev_bench/calibration_*_200.json \\
+        --futures-reports runtime/jev_bench/calibration_*_200_futures.json \\
         --output runtime/jev_bench/campaign_summary.json
 """
 
@@ -187,6 +190,158 @@ def _direction_report(states: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _event_rate_stat(states: Sequence[Dict[str, Any]]) -> Optional[float]:
+    """Share of states labelled worth trading at the primary horizon."""
+    if not states:
+        return None
+    return sum(
+        1 for state in states if state["worth_trading"][str(HORIZON)]
+    ) / len(states)
+
+
+def _tradeability_auc_stat(states: Sequence[Dict[str, Any]]) -> Optional[float]:
+    """Ranking AUC of noul for the worth-trading label."""
+    if not states:
+        return None
+    return ranking_auc(
+        [float(state["noul"]) for state in states],
+        [bool(state["worth_trading"][str(HORIZON)]) for state in states],
+    )
+
+
+def _direction_auc_stat(states: Sequence[Dict[str, Any]]) -> Optional[float]:
+    """Ranking AUC of noul for the sign of the forward return."""
+    if not states:
+        return None
+    return ranking_auc(
+        [float(state["noul"]) for state in states],
+        [float(state["forward_returns"][str(HORIZON)]) > 0.0 for state in states],
+    )
+
+
+def _rejection_diff_stat(fraction: float) -> Any:
+    """Return a stat function for kept-minus-rejected event rate at one cut."""
+    def stat(states: Sequence[Dict[str, Any]]) -> Optional[float]:
+        records = [
+            (float(state["noul"]), bool(state["worth_trading"][str(HORIZON)]))
+            for state in states
+        ]
+        rejected, kept = _partition_by_score(records, fraction)
+        if not rejected or not kept:
+            return None
+        kept_rate = sum(1 for _score, event in kept if event) / len(kept)
+        rejected_rate = sum(1 for _score, event in rejected if event) / len(rejected)
+        return kept_rate - rejected_rate
+    return stat
+
+
+def _bootstrap_independent_delta(
+    spot_states: Sequence[Dict[str, Any]],
+    futures_states: Sequence[Dict[str, Any]],
+    stat: Any,
+    resamples: int = BOOTSTRAP_RESAMPLES,
+    seed: int = BOOTSTRAP_SEED,
+) -> Optional[Dict[str, Any]]:
+    """Bootstrap CI for ``stat(spot) - stat(futures)`` with independent samples.
+
+    Each market is resampled with replacement independently, which is the right
+    null for two separate candle series. The observed difference is reported as
+    spot minus futures: positive means spot has the larger value.
+    """
+    spot_value = stat(spot_states)
+    futures_value = stat(futures_states)
+    if spot_value is None or futures_value is None:
+        return None
+    observed = spot_value - futures_value
+    generator = random.Random(seed)
+    spot_count = len(spot_states)
+    futures_count = len(futures_states)
+    values: List[float] = []
+    for _ in range(resamples):
+        spot_sample = [spot_states[generator.randrange(spot_count)] for _ in range(spot_count)]
+        futures_sample = [
+            futures_states[generator.randrange(futures_count)] for _ in range(futures_count)
+        ]
+        spot_sample_value = stat(spot_sample)
+        futures_sample_value = stat(futures_sample)
+        if spot_sample_value is None or futures_sample_value is None:
+            continue
+        values.append(spot_sample_value - futures_sample_value)
+    if not values:
+        return None
+    values.sort()
+    ci = {
+        "low": round(_percentile(values, 2.5), 4),
+        "high": round(_percentile(values, 97.5), 4),
+    }
+    return {
+        "observed": round(observed, 4),
+        "ci95": ci,
+        "within_noise": bool(ci["low"] <= 0.0 <= ci["high"]),
+        "resamples": len(values),
+    }
+
+
+def _compare_markets(
+    spot_states: Sequence[Dict[str, Any]],
+    futures_states: Sequence[Dict[str, Any]],
+    spot_summary: Dict[str, Any],
+    futures_summary: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Compare one symbol's spot and futures metrics.
+
+    ``observed`` deltas are spot minus futures. A delta whose CI contains zero
+    is reported as within noise; with this sample size most deltas will be.
+    """
+    metrics: Dict[str, Any] = {}
+    definitions = {
+        "event_rate": _event_rate_stat,
+        "tradeability_auc": _tradeability_auc_stat,
+        "direction_auc": _direction_auc_stat,
+    }
+    for fraction in REJECT_FRACTIONS:
+        definitions[f"rejection_diff_{int(round(fraction * 100))}"] = _rejection_diff_stat(fraction)
+    for name, stat in definitions.items():
+        metrics[name] = _bootstrap_independent_delta(spot_states, futures_states, stat)
+
+    significant = [
+        name for name, result in metrics.items()
+        if result is not None and not result["within_noise"]
+    ]
+    spot_reliable = spot_summary.get("verdict") != "no reliable rejection rule today"
+    futures_reliable = futures_summary.get("verdict") != "no reliable rejection rule today"
+    if not significant:
+        conclusion = (
+            "same conclusion; all spot-vs-futures metric differences are within noise"
+        )
+    elif not spot_reliable and not futures_reliable:
+        conclusion = (
+            "same conclusion (neither market has a reliable rule), but "
+            f"{len(significant)} metric difference(s) exceed noise: "
+            + ", ".join(significant)
+        )
+    elif spot_reliable != futures_reliable:
+        winning = "futures" if futures_reliable else "spot"
+        conclusion = (
+            f"different: only {winning} shows a nominal rejection signal; "
+            f"{len(significant)} metric difference(s) exceed noise"
+        )
+    else:
+        conclusion = (
+            f"both markets show nominal signals; {len(significant)} metric "
+            "difference(s) exceed noise: " + ", ".join(significant)
+        )
+    return {
+        "symbol": spot_summary.get("symbol"),
+        "spot_verdict": spot_summary.get("verdict"),
+        "futures_verdict": futures_summary.get("verdict"),
+        "metrics": metrics,
+        "significant_metrics": significant,
+        "all_metric_differences_within_noise": not significant,
+        "conclusion": conclusion,
+    }
+
+
 def _symbol_summary(report: Dict[str, Any]) -> Dict[str, Any]:
     """Compute every campaign metric for one symbol report."""
     states = _scored_states(report)
@@ -265,6 +420,7 @@ def _symbol_summary(report: Dict[str, Any]) -> Dict[str, Any]:
     dataset = report.get("dataset") or {}
     return {
         "symbol": dataset.get("symbol"),
+        "market_type": dataset.get("market_type") or "spot",
         "report": dataset.get("source"),
         "model": dataset.get("model"),
         "aborted": report.get("aborted"),
@@ -297,32 +453,81 @@ def _verdict(symbol: Dict[str, Any]) -> str:
     return "rank rejection separates event rates at some cuts only"
 
 
-def build_summary(paths: Sequence[str]) -> Dict[str, Any]:
-    """Load every report and build the per-symbol campaign summary."""
-    symbols = []
+def _load_reports(paths: Sequence[str]) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Load reports and their per-symbol summaries in path order."""
+    loaded: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     for path in sorted(paths):
         with open(path, "r", encoding="utf-8") as handle:
             report = json.load(handle)
         summary = _symbol_summary(report)
         summary["verdict"] = _verdict(summary)
-        symbols.append(summary)
-    family_size = len(symbols) * (1 + 1 + len(REJECT_FRACTIONS))
+        loaded.append((report, summary))
+    return loaded
+
+
+def build_summary(
+    paths: Sequence[str],
+    futures_paths: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """Load every report and build the per-symbol spot/futures summary."""
+    spot_loaded = _load_reports(paths)
+    futures_loaded = _load_reports(futures_paths)
+    symbols = [summary for _report, summary in spot_loaded]
+    futures_symbols = [summary for _report, summary in futures_loaded]
+
+    spot_by_symbol = {
+        summary["symbol"]: (report, summary) for report, summary in spot_loaded
+    }
+    futures_by_symbol = {
+        summary["symbol"]: (report, summary) for report, summary in futures_loaded
+    }
+    comparisons = []
+    for symbol in sorted(set(spot_by_symbol) & set(futures_by_symbol)):
+        spot_report, spot_summary = spot_by_symbol[symbol]
+        futures_report, futures_summary = futures_by_symbol[symbol]
+        comparisons.append(
+            _compare_markets(
+                _scored_states(spot_report),
+                _scored_states(futures_report),
+                spot_summary,
+                futures_summary,
+            )
+        )
+    futures_skipped = [
+        {
+            "symbol": symbol,
+            "reason": (
+                "no Binance USDT-M perpetual market"
+                if symbol == "NEXO/USDT"
+                else "no futures report supplied"
+            ),
+        }
+        for symbol in sorted(set(spot_by_symbol) - set(futures_by_symbol))
+    ]
+
+    spot_checks = len(symbols) * (1 + 1 + len(REJECT_FRACTIONS))
+    futures_checks = len(futures_symbols) * (1 + 1 + len(REJECT_FRACTIONS))
     return {
-        "kind": "jev-campaign-7-symbol-summary",
+        "kind": "jev-spot-futures-campaign-summary",
         "horizon": HORIZON,
         "move_threshold_pct": 1.0,
         "top_fraction": TOP_FRACTION,
         "reject_fractions": list(REJECT_FRACTIONS),
         "bootstrap": {"resamples": BOOTSTRAP_RESAMPLES, "seed": BOOTSTRAP_SEED},
         "multiple_testing": {
-            "symbols": len(symbols),
-            "comparisons": family_size,
+            "spot_symbols": len(symbols),
+            "futures_symbols": len(futures_symbols),
+            "symbol_markets": len(symbols) + len(futures_symbols),
+            "metric_checks": spot_checks + futures_checks,
             "note": (
-                "A 30 % event rate in a 200-state group is still a low-information "
-                "estimate; testing several symbols and cuts multiplies false positives"
+                "13 symbol-market evaluations, each with correlated AUC and "
+                "rank-rejection checks; a single good-looking symbol is not evidence"
             ),
         },
         "symbols": symbols,
+        "futures_symbols": futures_symbols,
+        "futures_skipped": futures_skipped,
+        "comparisons": comparisons,
     }
 
 
@@ -344,12 +549,31 @@ def _fmt_auc_ci(value: Optional[float], ci: Optional[Dict[str, float]]) -> str:
     return f"{value:.3f} ({ci['low']:.3f}-{ci['high']:.3f})"
 
 
-def print_markdown(summary: Dict[str, Any]) -> None:
-    """Print a compact Markdown table ready to paste into the campaign doc."""
+def _fmt_delta(result: Optional[Dict[str, Any]], percent: bool = False) -> str:
+    """Format one spot-minus-futures delta with its interval."""
+    if not result:
+        return "n/a"
+    scale = 100.0 if percent else 1.0
+    unit = " pp" if percent else ""
+    ci = result.get("ci95") or {}
+    low = ci.get("low")
+    high = ci.get("high")
+    observed = result.get("observed")
+    text = f"{observed * scale:+.2f}{unit}"
+    if low is not None and high is not None:
+        text += f" ({low * scale:+.2f} to {high * scale:+.2f}{unit})"
+    if result.get("within_noise"):
+        text += " [noise]"
+    return text
+
+
+def _print_market_tables(symbols: Sequence[Dict[str, Any]], label: str) -> None:
+    """Print the two per-symbol tables for one market."""
+    print(f"\n### {label}")
     print("| Symbol | Worth-trading rate | Top 30% event rate | Bottom 30% event rate | "
           "Difference (95% CI) | Tradeability AUC (95% CI) | Direction AUC (95% CI) |")
     print("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
-    for symbol in summary["symbols"]:
+    for symbol in symbols:
         prevalence = symbol["prevalence"]
         top_bottom = symbol.get("top_vs_bottom") or {}
         top = top_bottom.get("top") or {}
@@ -368,7 +592,7 @@ def print_markdown(summary: Dict[str, Any]) -> None:
     print("\n| Symbol | Reject 30%: skipped | Kept rate | Rejected rate | Difference (95% CI) | "
           "Reject 40%: diff | Reject 50%: diff | Verdict |")
     print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
-    for symbol in summary["symbols"]:
+    for symbol in symbols:
         rows = {row["reject_fraction"]: row for row in symbol["rank_rejection"]}
         first = rows[0.30]
         print(
@@ -381,9 +605,59 @@ def print_markdown(summary: Dict[str, Any]) -> None:
         )
 
 
+def _print_comparisons(summary: Dict[str, Any]) -> None:
+    """Print the per-symbol spot-vs-futures comparison table."""
+    spot = {symbol["symbol"]: symbol for symbol in summary["symbols"]}
+    futures = {symbol["symbol"]: symbol for symbol in summary.get("futures_symbols") or []}
+    print("\n### Spot vs USDT-M perpetual futures (delta = spot minus futures)")
+    print("| Symbol | Event rate spot -> futures (delta, 95% CI) | "
+          "Tradeability AUC spot -> futures (delta, 95% CI) | "
+          "Direction AUC spot -> futures (delta, 95% CI) | Rejection diffs 30/40/50 spot | "
+          "Rejection diffs 30/40/50 futures | Conclusion |")
+    print("| --- | --- | --- | --- | --- | --- | --- |")
+    for comparison in summary.get("comparisons") or []:
+        name = comparison["symbol"]
+        spot_row = spot[name]
+        futures_row = futures[name]
+        metrics = comparison["metrics"]
+        spot_rejection = "/".join(
+            _fmt_pct(row["difference"]["observed"]) for row in spot_row["rank_rejection"]
+        )
+        futures_rejection = "/".join(
+            _fmt_pct(row["difference"]["observed"]) for row in futures_row["rank_rejection"]
+        )
+        print(
+            f"| {name} | {_fmt_pct(spot_row['prevalence']['rate'])} -> "
+            f"{_fmt_pct(futures_row['prevalence']['rate'])} "
+            f"({_fmt_delta(metrics['event_rate'], percent=True)}) | "
+            f"{spot_row['tradeability_auc']['auc']:.3f} -> "
+            f"{futures_row['tradeability_auc']['auc']:.3f} "
+            f"({_fmt_delta(metrics['tradeability_auc'])}) | "
+            f"{spot_row['direction']['auc']:.3f} -> "
+            f"{futures_row['direction']['auc']:.3f} "
+            f"({_fmt_delta(metrics['direction_auc'])}) | {spot_rejection} | "
+            f"{futures_rejection} | {comparison['conclusion']} |"
+        )
+    for skipped in summary.get("futures_skipped") or []:
+        print(f"\nSkipped futures: {skipped['symbol']} ({skipped['reason']}).")
+
+
+def print_markdown(summary: Dict[str, Any]) -> None:
+    """Print compact Markdown tables ready to paste into the campaign doc."""
+    _print_market_tables(summary["symbols"], "Spot")
+    if summary.get("futures_symbols"):
+        _print_market_tables(summary["futures_symbols"], "USDT-M perpetual futures")
+    if summary.get("comparisons"):
+        _print_comparisons(summary)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Aggregate a JEV multi-symbol campaign")
-    parser.add_argument("--reports", nargs="+", default=None)
+    parser.add_argument("--reports", nargs="+", default=None, help="Spot calibration reports")
+    parser.add_argument(
+        "--futures-reports", nargs="+", default=None,
+        help="USDT-M futures calibration reports (optional)",
+    )
     parser.add_argument("--output", default=os.path.join(_REPO_ROOT, "runtime", "jev_bench", "campaign_summary.json"))
     return parser
 
@@ -394,9 +668,14 @@ def main(argv: Iterable[str] | None = None) -> int:
     paths = args.reports
     if not paths:
         paths = glob.glob(os.path.join(_REPO_ROOT, "runtime", "jev_bench", "calibration_*_200.json"))
+    futures_paths = args.futures_reports
+    if futures_paths is None:
+        futures_paths = glob.glob(
+            os.path.join(_REPO_ROOT, "runtime", "jev_bench", "calibration_*_200_futures.json")
+        )
     if not paths:
         raise SystemExit("no calibration reports found")
-    summary = build_summary(paths)
+    summary = build_summary(paths, futures_paths)
     output = os.path.abspath(args.output)
     os.makedirs(os.path.dirname(output), exist_ok=True)
     with open(output, "w", encoding="utf-8") as handle:

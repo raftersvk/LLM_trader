@@ -946,6 +946,8 @@ def _carry_aggregate_dataset(
         args.move_threshold_pct = dataset.get("move_threshold_pct", DEFAULT_MOVE_THRESHOLD_PCT)
     if args.delay_seconds is None:
         args.delay_seconds = dataset.get("delay_seconds", DEFAULT_DELAY_SECONDS)
+    if args.market_type is None:
+        args.market_type = dataset.get("market_type") or "spot"
     if args.candles is None:
         source = dataset.get("source")
         args.candles = source if isinstance(source, str) and source else None
@@ -974,6 +976,8 @@ def _apply_run_defaults(args: argparse.Namespace) -> None:
         args.delay_seconds = DEFAULT_DELAY_SECONDS
     if args.cost_pct is None:
         args.cost_pct = DEFAULT_COST_PCT
+    if args.market_type is None:
+        args.market_type = "spot"
 
 
 def build_report(
@@ -1086,6 +1090,7 @@ def build_report(
             "source": args.candles,
             "symbol": args.symbol,
             "timeframe": args.timeframe,
+            "market_type": getattr(args, "market_type", "spot"),
             "candles": args.candle_count,
             "states": len(records),
             "horizons": list(horizons),
@@ -1315,6 +1320,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeframe", default=None,
         help="Candle timeframe (default 1h, or the report's timeframe with --aggregate-from)",
+    )
+    parser.add_argument(
+        "--market-type", default=None, choices=("spot", "futures"),
+        help="Market the candles came from (default spot, or the report's value on rebuild)",
     )
     parser.add_argument("--limit", type=int, default=200, help="Most recent states to evaluate (0 = all)")
     parser.add_argument(

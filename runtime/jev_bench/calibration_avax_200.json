@@ -17,6 +17,7 @@
     "source": "runtime/jev_bench/AVAX_USDT_1h.csv",
     "symbol": "AVAX/USDT",
     "timeframe": "1h",
+    "market_type": "spot",
     "candles": 700,
     "states": 200,
     "horizons": [

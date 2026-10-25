@@ -19,6 +19,7 @@
     "source": "runtime/jev_bench/SOL_USDT_1h.csv",
     "symbol": "SOL/USDT",
     "timeframe": "1h",
+    "market_type": "spot",
     "candles": 700,
     "states": 200,
     "horizons": [

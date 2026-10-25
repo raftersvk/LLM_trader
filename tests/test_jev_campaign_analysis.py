@@ -5,6 +5,7 @@ No network: every test uses a synthetic report in the saved calibration shape.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -28,10 +29,15 @@ def _state(index: int, noul: float, forward: float) -> Dict[str, Any]:
     }
 
 
-def _report(states: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _report(
+    states: List[Dict[str, Any]],
+    symbol: str = "TEST/USDT",
+    market_type: str = "spot",
+) -> Dict[str, Any]:
     """Wrap states in the minimal report shape the aggregator reads."""
     return {
-        "dataset": {"symbol": "TEST/USDT", "source": "synthetic.csv", "model": "test"},
+        "dataset": {"symbol": symbol, "market_type": market_type,
+                    "source": "synthetic.csv", "model": "test"},
         "scoring": {"calls": len(states), "scored": len(states), "errors": 0,
                     "rate_limit_errors": 0, "other_errors": 0},
         "aborted": False,
@@ -100,3 +106,57 @@ def test_bootstrap_difference_is_deterministic(fraction):
     first = analysis._bootstrap_difference(records, analysis._reject_select(fraction), resamples=200)
     second = analysis._bootstrap_difference(records, analysis._reject_select(fraction), resamples=200)
     assert first == second
+
+
+def test_bootstrap_independent_delta_detects_large_event_rate_gap():
+    """A 50 % vs 10 % event rate is reported as spot minus futures."""
+    spot = [_state(index, 0.5, 0.02 if index < 25 else -0.005) for index in range(50)]
+    futures = [_state(index, 0.5, 0.02 if index < 5 else -0.005) for index in range(50)]
+
+    result = analysis._bootstrap_independent_delta(
+        spot, futures, analysis._event_rate_stat, resamples=500
+    )
+    assert result is not None
+    assert result["observed"] == pytest.approx(0.4)
+    assert result["ci95"]["low"] > 0.0
+    assert result["within_noise"] is False
+
+
+def test_compare_markets_same_states_is_within_noise():
+    """Identical spot and futures samples have zero delta and no significance."""
+    states = [_state(index, 0.1 * (index + 1), 0.02 if index >= 6 else -0.005)
+              for index in range(10)]
+    report = _report(states)
+    summary = analysis._symbol_summary(report)
+    summary["verdict"] = analysis._verdict(summary)
+
+    comparison = analysis._compare_markets(states, states, summary, summary)
+    assert comparison["all_metric_differences_within_noise"] is True
+    assert comparison["significant_metrics"] == []
+    assert "same conclusion" in comparison["conclusion"]
+
+
+def test_build_summary_reports_skipped_futures_symbol(tmp_path):
+    """A spot-only symbol is listed as skipped, not silently compared."""
+    states = [_state(index, 0.1 * (index + 1), 0.02 if index >= 6 else -0.005)
+              for index in range(10)]
+    spot_test = tmp_path / "calibration_test_200.json"
+    spot_nexo = tmp_path / "calibration_nexo_200.json"
+    futures_test = tmp_path / "calibration_test_200_futures.json"
+    spot_test.write_text(json.dumps(_report(states, "TEST/USDT", "spot")), encoding="utf-8")
+    spot_nexo.write_text(json.dumps(_report(states, "NEXO/USDT", "spot")), encoding="utf-8")
+    futures_test.write_text(
+        json.dumps(_report(states, "TEST/USDT", "futures")), encoding="utf-8"
+    )
+
+    summary = analysis.build_summary(
+        [str(spot_test), str(spot_nexo)], [str(futures_test)]
+    )
+    assert len(summary["symbols"]) == 2
+    assert len(summary["futures_symbols"]) == 1
+    assert len(summary["comparisons"]) == 1
+    assert summary["comparisons"][0]["symbol"] == "TEST/USDT"
+    assert summary["futures_skipped"] == [
+        {"symbol": "NEXO/USDT", "reason": "no Binance USDT-M perpetual market"}
+    ]
+    assert summary["multiple_testing"]["symbol_markets"] == 3

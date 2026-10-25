@@ -10,6 +10,14 @@ outages.
         --symbols BTC/USDT,SOL/USDT --limit 700 \\
         --output-dir runtime/jev_bench
 
+USDT-M perpetual futures use ``--market futures``; spot symbols such as
+``BTC/USDT`` are mapped to ccxt contracts such as ``BTC/USDT:USDT`` and the
+CSV gets a ``_futures`` suffix:
+
+    python scripts/fetch_jev_bench_candles.py --market futures \\
+        --symbols BTC/USDT,ETH/USDT --limit 700 \\
+        --output-dir runtime/jev_bench
+
 The output format matches the calibration loader:
 ``time,open,high,low,close,volume`` with ISO-8601 UTC timestamps.
 """
@@ -56,8 +64,15 @@ def _last_closed_open(now: datetime, timeframe_seconds: int) -> datetime:
 
 
 def _base_name(symbol: str) -> str:
-    """Return ``SOL_USDT`` for ``SOL/USDT``."""
-    return symbol.replace("/", "_")
+    """Return ``SOL_USDT`` for ``SOL/USDT`` and ``SOL/USDT:USDT``."""
+    return symbol.split(":")[0].replace("/", "_")
+
+
+def _market_symbol(symbol: str, market: str) -> str:
+    """Map a spot symbol to the ccxt contract symbol used by USDT-M futures."""
+    if market == "futures" and ":" not in symbol:
+        return f"{symbol}:USDT"
+    return symbol
 
 
 def _write_csv(path: str, rows: Sequence[Sequence[float]]) -> None:
@@ -112,6 +127,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeframe", default=DEFAULT_TIMEFRAME)
     parser.add_argument("--output-dir", default="runtime/jev_bench")
     parser.add_argument(
+        "--market",
+        choices=("spot", "futures"),
+        default="spot",
+        help="Binance spot or USDT-M perpetual futures (default spot)",
+    )
+    parser.add_argument(
         "--end",
         default=None,
         help="Open time of the last wanted candle (ISO-8601; default: last closed candle)",
@@ -131,14 +152,24 @@ def main(argv: Iterable[str] | None = None) -> int:
     if end_open.timestamp() % period:
         raise SystemExit("--end must align to the start of a candle")
 
-    exchange = ccxt.binance({"enableRateLimit": True})
+    exchange: ccxt.Exchange
+    if args.market == "futures":
+        exchange = ccxt.binanceusdm({"enableRateLimit": True})
+        suffix = "_futures"
+    else:
+        exchange = ccxt.binance({"enableRateLimit": True})
+        suffix = ""
     os.makedirs(args.output_dir, exist_ok=True)
     for symbol in symbols:
-        rows = fetch_symbol(exchange, symbol, args.timeframe, end_open, args.limit)
-        path = os.path.join(args.output_dir, f"{_base_name(symbol)}_{args.timeframe}.csv")
+        market_symbol = _market_symbol(symbol, args.market)
+        rows = fetch_symbol(exchange, market_symbol, args.timeframe, end_open, args.limit)
+        path = os.path.join(
+            args.output_dir, f"{_base_name(market_symbol)}_{args.timeframe}{suffix}.csv"
+        )
         _write_csv(path, rows)
         first = datetime.fromtimestamp(rows[0][0] / 1000, tz=timezone.utc)
-        print(f"{symbol}: {len(rows)} candles {first.isoformat()} -> {end_open.isoformat()} -> {path}")
+        print(f"{market_symbol}: {len(rows)} candles {first.isoformat()} -> "
+              f"{end_open.isoformat()} -> {path}")
     return 0
 
 
