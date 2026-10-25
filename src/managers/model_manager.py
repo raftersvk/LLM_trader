@@ -49,6 +49,9 @@ class ModelManager:
         self.model_pricing = model_pricing
         self._clients = provider_clients
         self._orchestrator = orchestrator
+        # Diagnostic surface for the signal adapter: the last provider
+        # finish_reason, without exposing the response body.
+        self.last_finish_reason: str | None = None
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -91,16 +94,25 @@ class ModelManager:
         system_message: str | None = None,
         prepared_messages: list[dict[str, str]] | None = None,
         provider: str | None = None,
-        model: str | None = None
+        model: str | None = None,
+        response_format: dict | None = None,
     ) -> str:
         """
         Send a prompt to the model and get a response.
+
+        Args:
+            response_format: Optional structured-output request (e.g.
+                ``{"type": "json_object"}``). Only the signal analysis path
+                sets it; other callers keep the historical behaviour.
+
         Returns:
             Response text from the AI model
         """
         messages = prepared_messages if prepared_messages is not None else self._prepare_messages(prompt, system_message)
         effective_provider = provider if provider else self.provider
-        result = await self._orchestrator.get_text_response(effective_provider, messages, model)  # type: ignore[reportOptionalMemberAccess]
+        result = await self._orchestrator.get_text_response(  # type: ignore[reportOptionalMemberAccess]
+            effective_provider, messages, model, response_format=response_format,
+        )
         return await self._process_result(result)
 
     async def send_prompt_streaming(
@@ -108,7 +120,8 @@ class ModelManager:
         prompt: str,
         system_message: str | None = None,
         provider: str | None = None,
-        model: str | None = None
+        model: str | None = None,
+        response_format: dict | None = None,
     ) -> str:
         """
         Send a prompt to the model and get a streaming response.
@@ -137,7 +150,10 @@ class ModelManager:
                 self.logger.warning("LM Studio streaming returned None. Falling back to non-streaming mode.")
             except Exception as e:  # noqa: BLE001
                 self.logger.warning("LM Studio streaming failed: %s. Falling back to non-streaming mode.", str(e))
-        return await self.send_prompt(prompt, system_message, prepared_messages=messages, provider=provider, model=model)
+        return await self.send_prompt(
+            prompt, system_message, prepared_messages=messages,
+            provider=provider, model=model, response_format=response_format,
+        )
 
     async def send_prompt_with_chart_analysis(
         self,
@@ -145,7 +161,8 @@ class ModelManager:
         chart_image: io.BytesIO | bytes | str,
         system_message: str | None = None,
         provider: str | None = None,
-        model: str | None = None
+        model: str | None = None,
+        response_format: dict | None = None,
     ) -> str:
         """
         Send a prompt with chart image for pattern analysis.
@@ -157,7 +174,9 @@ class ModelManager:
         """
         messages = self._prepare_messages(prompt, system_message)
         effective_provider = provider if provider else self.provider
-        result = await self._orchestrator.get_chart_response(effective_provider, messages, chart_image, model)  # type: ignore[reportOptionalMemberAccess]
+        result = await self._orchestrator.get_chart_response(  # type: ignore[reportOptionalMemberAccess]
+            effective_provider, messages, chart_image, model, response_format=response_format,
+        )
         if not result.success:
             raise ValueError(result.error or "invalid response")
         return await self._process_result(result)
@@ -230,6 +249,7 @@ class ModelManager:
             return self.unified_parser.format_error_response("Invalid API response format")  # type: ignore
         if not response.choices or not response.choices[0].message:
             return self.unified_parser.format_error_response("No content in response")  # type: ignore
+        self.last_finish_reason = getattr(response.choices[0], "finish_reason", None)
         content = response.choices[0].message.content
         self.logger.info("Full response content: %s", content)
         await self._track_cost(result, response, content)

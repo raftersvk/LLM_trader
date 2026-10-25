@@ -217,3 +217,63 @@ def test_litellm_params_use_safe_timeout_fallback():
     params = client._build_litellm_params({"max_tokens": 123})
 
     assert params["timeout"] == DEFAULT_REQUEST_TIMEOUT == 120
+
+
+@pytest.mark.asyncio
+async def test_response_format_is_forwarded_only_when_requested():
+    """Structured output is opt-in: default calls must not send response_format."""
+    client = _client()
+    calls = []
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="{}"), finish_reason="stop")],
+        usage=None,
+        id="response-id",
+        model="deepseek-v4.1-flash",
+    )
+
+    async def fake_acompletion(**kwargs):
+        calls.append(dict(kwargs))
+        return response
+
+    with patch("src.platforms.ai_providers.litellm_client.acompletion", new=fake_acompletion):
+        await client.chat_completion("deepseek-v4.1-flash", [{"role": "user", "content": "hi"}], {})
+        await client.chat_completion(
+            "deepseek-v4.1-flash",
+            [{"role": "user", "content": "hi"}],
+            {"response_format": {"type": "json_object"}},
+        )
+
+    assert "response_format" not in calls[0]
+    assert calls[1]["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_unsupported_response_format_degrades_without_breaking_the_call():
+    """A provider rejecting response_format is retried once without it."""
+    client = _client()
+    calls = []
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="{}"), finish_reason="stop")],
+        usage=None,
+        id="response-id",
+        model="deepseek-v4.1-flash",
+    )
+
+    async def fake_acompletion(**kwargs):
+        calls.append(dict(kwargs))
+        if "response_format" in kwargs:
+            raise ValueError("400 unsupported parameter: response_format")
+        return response
+
+    with patch("src.platforms.ai_providers.litellm_client.acompletion", new=fake_acompletion):
+        result = await client.chat_completion(
+            "deepseek-v4.1-flash",
+            [{"role": "user", "content": "hi"}],
+            {"response_format": {"type": "json_object"}},
+        )
+
+    assert result is not None
+    assert result.choices[0].message.content == "{}"
+    assert len(calls) == 2
+    assert "response_format" in calls[0]
+    assert "response_format" not in calls[1]

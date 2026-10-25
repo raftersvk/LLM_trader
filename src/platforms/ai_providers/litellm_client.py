@@ -111,16 +111,33 @@ class LitellmAIClient(BaseAIClient):
         )
 
         try:
-            response = await acompletion(
-                model=full_model,
-                messages=messages,
-                **params,
-                **self.litellm_kwargs,
-            )
+            try:
+                response = await acompletion(
+                    model=full_model,
+                    messages=messages,
+                    **params,
+                    **self.litellm_kwargs,
+                )
+            except Exception as format_error:  # noqa: BLE001
+                # Opt-in structured output must never break a provider that does
+                # not implement response_format: drop it and retry exactly once.
+                if "response_format" not in params or not self._is_response_format_rejection(format_error):
+                    raise
+                self.logger.warning(
+                    "LiteLLM provider rejected response_format, retrying without it: %s",
+                    self._redact(str(format_error)),
+                )
+                params = {key: value for key, value in params.items() if key != "response_format"}
+                response = await acompletion(
+                    model=full_model,
+                    messages=messages,
+                    **params,
+                    **self.litellm_kwargs,
+                )
             self.logger.debug("LiteLLM response received successfully")
             return self._create_response_from_litellm(response)
         except Exception as e:
-            self.logger.error("Erreur LiteLLM request: %s", str(e), exc_info=True)
+            self.logger.error("Erreur LiteLLM request: %s", self._redact(str(e)), exc_info=True)
             error_response = self._handle_litellm_exception(e, full_model)
             if error_response:
                 return error_response
@@ -188,16 +205,31 @@ class LitellmAIClient(BaseAIClient):
                 len(messages),
                 params,
             )
-            response = await acompletion(
-                model=full_model,
-                messages=messages_with_image,
-                **params,
-                **self.litellm_kwargs,
-            )
+            try:
+                response = await acompletion(
+                    model=full_model,
+                    messages=messages_with_image,
+                    **params,
+                    **self.litellm_kwargs,
+                )
+            except Exception as format_error:  # noqa: BLE001
+                if "response_format" not in params or not self._is_response_format_rejection(format_error):
+                    raise
+                self.logger.warning(
+                    "LiteLLM vision provider rejected response_format, retrying without it: %s",
+                    self._redact(str(format_error)),
+                )
+                params = {key: value for key, value in params.items() if key != "response_format"}
+                response = await acompletion(
+                    model=full_model,
+                    messages=messages_with_image,
+                    **params,
+                    **self.litellm_kwargs,
+                )
             self.logger.debug("LiteLLM chart analysis response received")
             return self._create_response_from_litellm(response)
         except Exception as e:
-            self.logger.error("Erreur LiteLLM chart analysis: %s", str(e), exc_info=True)
+            self.logger.error("Erreur LiteLLM chart analysis: %s", self._redact(str(e)), exc_info=True)
             error_response = self._handle_litellm_exception(e, full_model)
             if error_response:
                 return error_response
@@ -297,6 +329,10 @@ class LitellmAIClient(BaseAIClient):
             params["frequency_penalty"] = model_config["frequency_penalty"]
         if "presence_penalty" in model_config:
             params["presence_penalty"] = model_config["presence_penalty"]
+        # Opt-in structured output: only callers that set it (the signal
+        # analysis path) send it; every other LiteLLM call keeps its old params.
+        if model_config.get("response_format"):
+            params["response_format"] = model_config["response_format"]
 
         params["timeout"] = model_config.get("timeout", DEFAULT_REQUEST_TIMEOUT)
         # base_url is in litellm_kwargs
@@ -368,9 +404,35 @@ class LitellmAIClient(BaseAIClient):
             self.logger.debug("Erreur extraction chunk streaming: %s", e)
         return None
 
+    @staticmethod
+    def _is_response_format_rejection(exception: Exception) -> bool:
+        """Return True when a provider refused the response_format parameter.
+
+        Only 400/422-style "unsupported parameter" errors qualify: a transient
+        failure or a bad model id must not be silently retried without the
+        structured-output contract.
+        """
+        message = str(exception).lower()
+        return any(
+            marker in message
+            for marker in (
+                "response_format",
+                "json_object",
+                "json schema",
+                "unsupported parameter",
+                "extra fields not permitted",
+            )
+        )
+
+    def _redact(self, message: str) -> str:
+        """Never let a configured API key reach a log line or an error payload."""
+        if self.api_key and self.api_key in message:
+            return message.replace(self.api_key, "<redacted>")
+        return message
+
     def _handle_litellm_exception(self, exception: Exception, model: str) -> Optional[ChatResponseModel]:
         """Handle LiteLLM exceptions and convert to standardized responses."""
-        error_message = str(exception)
+        error_message = self._redact(str(exception))
         error_message_lower = error_message.lower()
 
         if "rate_limit" in error_message_lower or "429" in error_message:

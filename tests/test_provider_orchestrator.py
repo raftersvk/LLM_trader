@@ -420,3 +420,33 @@ async def test_unknown_vision_capacity_is_refused():
 
     assert result.success is False
     assert "Context window is not configured" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_invoke_forwards_response_format_without_mutating_provider_config():
+    """The signal path's response_format reaches the request but never the shared config."""
+    client = LitellmAIClient(config=LITELLM_CONFIG, logger=MagicMock())
+    orchestrator = _orchestrator(ProviderClients(litellm=client))
+    captured = []
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="{}"), finish_reason="stop")],
+        usage=None,
+        id="response-id",
+        model="deepseek-v4.1-flash",
+    )
+
+    async def fake_acompletion(**kwargs):
+        captured.append(dict(kwargs))
+        return response
+
+    with patch("src.platforms.ai_providers.litellm_client.acompletion", new=fake_acompletion):
+        await orchestrator.invoke(
+            "litellm",
+            [{"role": "user", "content": "hi"}],
+            response_format={"type": "json_object"},
+        )
+        await orchestrator.invoke("litellm", [{"role": "user", "content": "hi"}])
+
+    assert captured[0]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in captured[1]
+    assert "response_format" not in orchestrator.get_metadata("litellm").config

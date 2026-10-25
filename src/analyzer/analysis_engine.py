@@ -224,12 +224,15 @@ class AnalysisEngine:
         current_ticker: dict[str, Any] | None = None,
         dynamic_thresholds: dict[str, Any] | None = None,
         ev_context: str | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run the full market analysis workflow and return the result dict.
 
         provider/model are admin-only overrides. position_context and
         performance_context go into the system prompt; last_analysis_time is a
         formatted timestamp; current_ticker avoids a redundant API call.
+        ``response_format`` is the opt-in structured-output request used by the
+        signal service; the live bot leaves it unset.
         """
         try:
             if not await self._collect_market_data():
@@ -303,6 +306,7 @@ class AnalysisEngine:
                 brain_context, last_analysis_time, dynamic_thresholds,
                 precomputed_chart=(chart_image, has_chart_analysis),
                 ev_context=ev_context,
+                response_format=response_format,
             )
 
             assert self.prompt_builder is not None
@@ -522,6 +526,7 @@ class AnalysisEngine:
         dynamic_thresholds: dict[str, Any] | None = None,
         precomputed_chart: tuple[io.BytesIO | None, bool] | None = None,
         ev_context: str | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Generate AI analysis using prompt builder and result processor."""
 
@@ -569,9 +574,17 @@ class AnalysisEngine:
         self.last_prompt_lint = prompt_lint
         if prompt_lint["warnings"]:
             self.logger.warning("Prompt preflight warnings: %s", prompt_lint["warnings"])
-        analysis_result = await self._execute_ai_request(
-            system_prompt, prompt, provider, model, chart_image
-        )
+        if response_format is None:
+            # Keep the historical call shape for callers/tests that substitute
+            # _execute_ai_request; only the signal path opts into the extra arg.
+            analysis_result = await self._execute_ai_request(
+                system_prompt, prompt, provider, model, chart_image
+            )
+        else:
+            analysis_result = await self._execute_ai_request(
+                system_prompt, prompt, provider, model, chart_image,
+                response_format=response_format,
+            )
 
         analysis_result["article_urls"] = self.article_urls
         assert self.context is not None
@@ -606,7 +619,8 @@ class AnalysisEngine:
         prompt: str,
         provider: str | None,
         model: str | None,
-        chart_image: io.BytesIO | None = None
+        chart_image: io.BytesIO | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute the AI request with optional chart image for visual analysis.
         Returns:
@@ -627,7 +641,8 @@ class AnalysisEngine:
 
         assert self.result_processor is not None
         result = await self.result_processor.process_analysis(
-            system_prompt, prompt, chart_image=chart_image, provider=provider, model=model
+            system_prompt, prompt, chart_image=chart_image, provider=provider, model=model,
+            response_format=response_format,
         )
         self.last_llm_response = result.get("raw_response")
         self.last_response_timestamp = datetime.now(timezone.utc).isoformat()

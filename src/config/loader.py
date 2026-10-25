@@ -1086,6 +1086,20 @@ class Config:
         return float(self.get_config('jev', 'timeout_seconds', 8.0))
 
     @property
+    def SIGNAL_JSON_RESPONSE_FORMAT(self) -> bool:
+        """Whether signal analysis requests opt into JSON-object structured output.
+
+        Only the signal service reads this flag; dashboard, RAG and news calls
+        keep their historical request parameters. Defaults to enabled so a
+        hardened signal pipeline needs no extra configuration, and can be
+        disabled with ``[signal_service] json_response_format = false``.
+        """
+        value = self.get_config('signal_service', 'json_response_format', True)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+    @property
     def LITELLM_API_KEY(self):
         return self.get_env('LITELLM_API_KEY')
 

@@ -58,6 +58,18 @@ PROMPT_VERSION = "llm-trader-signal-v1"
 _UNKNOWN_LABELS = frozenset({"", "unknown", "unspecified", "none", "null"})
 _NEWS_ORIGINAL_ATTR = "_signal_service_original_retrieve_context"
 
+#: One-shot repair instruction. Kept short so a repair reuses the original
+#: answer instead of paying for a second full market-analysis prompt.
+JSON_REPAIR_INSTRUCTION = "Return ONLY the JSON object matching the response schema, no prose."
+JSON_REPAIR_SYSTEM = (
+    "You convert a trading analysis answer into the required JSON object. "
+    "Do not add commentary."
+)
+#: Cap on the previous answer embedded in the repair prompt. The decision and
+#: narrative normally sit at the end, so keep the tail when truncating.
+MAX_REPAIR_SOURCE_CHARS = 24000
+REPAIR_FAILED_REASON = "invalid LLM output: JSON parse error after repair"
+
 
 def _as_utc(moment: datetime) -> datetime:
     """Normalize a datetime to timezone-aware UTC."""
@@ -176,6 +188,7 @@ class PairAnalyzer:
         use_news: bool = True,
         use_chart: bool = True,
         jev_gate: Optional[JevGate] = None,
+        json_response_format: Optional[bool] = None,
     ) -> None:
         """Bind a dedicated engine for a single pair.
 
@@ -189,6 +202,9 @@ class PairAnalyzer:
             use_chart: Enable chart image analysis (ablation flag).
             jev_gate: Optional JEV gate; modes pre/post/pre_post. When omitted
                 or off, no JEV call is made and behaviour is unchanged.
+            json_response_format: Opt into response_format={"type":"json_object"}
+                for this pair's signal analysis only. ``None`` reads
+                [signal_service] json_response_format from the engine config.
         """
         self.engine = engine
         self.symbol = symbol
@@ -198,6 +214,7 @@ class PairAnalyzer:
         self.use_news = use_news
         self.use_chart = use_chart
         self.jev_gate = jev_gate
+        self.json_response_format = json_response_format
         self._flags_applied = False
 
     # ------------------------------------------------------------ ablation flags
@@ -306,6 +323,29 @@ class PairAnalyzer:
         if isinstance(result, dict):
             raw_response = getattr(self.engine, "last_llm_response", None) or result.get("raw_response") or ""
 
+        if self._is_json_parse_error(result):
+            original_raw = raw_response
+            finish_reason = self._last_finish_reason(result)
+            logger.warning(
+                "JSON parse error for %s: requesting one repair (finish_reason=%s, content_chars=%d)",
+                self.symbol, finish_reason or "unknown", len(original_raw),
+            )
+            repaired = await self._repair_json_response(result, original_raw)
+            if repaired is None:
+                logger.warning(
+                    "Invalid LLM response for %s: %s (finish_reason=%s, content_chars=%d)",
+                    self.symbol, REPAIR_FAILED_REASON, finish_reason or "unknown", len(original_raw),
+                )
+                model, provider = self._resolve_model_provider(result if isinstance(result, dict) else {})
+                return self._hold_fallback(
+                    reasoning=REPAIR_FAILED_REASON,
+                    candle_open_dt=candle_open_dt,
+                    model=model,
+                    provider=provider,
+                    raw_response_hash=hash_raw_response(original_raw) if original_raw else None,
+                )
+            result, raw_response = repaired
+
         invalid_reason = self._invalid_response_reason(result, raw_response)
         if invalid_reason:
             logger.warning("Invalid LLM response for %s: %s", self.symbol, invalid_reason)
@@ -326,7 +366,10 @@ class PairAnalyzer:
             # yields an empty/whitespace reasoning is unusable. Accepting it
             # would persist a maximum-confidence HOLD backed by no analysis.
             if not draft.reasoning.strip():
-                logger.warning("Invalid LLM response for %s: empty reasoning", self.symbol)
+                logger.warning(
+                    "Invalid LLM response for %s: empty reasoning (finish_reason=%s, content_chars=%d)",
+                    self.symbol, self._last_finish_reason(result) or "unknown", len(raw_response),
+                )
                 return self._hold_fallback(
                     reasoning="invalid LLM output: empty reasoning",
                     candle_open_dt=candle_open_dt,
@@ -470,6 +513,107 @@ class PairAnalyzer:
             provider = fallback_provider or "unknown"
         return model, provider
 
+    def _json_format_enabled(self) -> bool:
+        """Resolve the opt-in structured-output flag for this analyzer."""
+        if self.json_response_format is not None:
+            return bool(self.json_response_format)
+        config = getattr(self.engine, "config", None)
+        if config is None:
+            return True
+        value = getattr(config, "SIGNAL_JSON_RESPONSE_FORMAT", None)
+        if value is None:
+            getter = getattr(config, "get_config", None)
+            if callable(getter):
+                value = getter("signal_service", "json_response_format", True)
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+    def _json_response_format(self) -> Optional[Dict[str, str]]:
+        """Return the response_format payload for the signal call, if enabled."""
+        return {"type": "json_object"} if self._json_format_enabled() else None
+
+    @staticmethod
+    def _is_json_parse_error(result: Any) -> bool:
+        """Detect the parser's explicit json_parse_error signal."""
+        if not isinstance(result, dict):
+            return False
+        if result.get("parse_error"):
+            return True
+        validation = result.get("response_validation")
+        if not isinstance(validation, dict):
+            return False
+        return any(
+            isinstance(error, dict) and error.get("type") == "json_parse_error"
+            for error in validation.get("errors", [])
+        )
+
+    def _last_finish_reason(self, result: Any) -> Optional[str]:
+        """Best-effort provider finish_reason for diagnostics (never the body)."""
+        if isinstance(result, dict) and result.get("finish_reason"):
+            return str(result["finish_reason"])
+        model_manager = getattr(self.engine, "model_manager", None)
+        reason = getattr(model_manager, "last_finish_reason", None)
+        return str(reason) if reason else None
+
+    async def _repair_json_response(
+        self, result: Any, raw_response: str,
+    ) -> Optional[tuple[Dict[str, Any], str]]:
+        """Relaunch exactly once with a short JSON-only repair instruction.
+
+        Reuses the original answer instead of re-running the full market
+        analysis. Returns ``(result, repaired_text)`` only when the repaired
+        answer parses as a JSON object; otherwise None (the caller falls back
+        to HOLD). Raises nothing: a repair failure is never fatal.
+        """
+        if not raw_response.strip():
+            return None
+        model_manager = getattr(self.engine, "model_manager", None)
+        send_prompt = getattr(model_manager, "send_prompt", None)
+        if not callable(send_prompt):
+            logger.warning("Cannot repair JSON for %s: model manager has no send_prompt", self.symbol)
+            return None
+        source = raw_response.strip()
+        if len(source) > MAX_REPAIR_SOURCE_CHARS:
+            source = source[-MAX_REPAIR_SOURCE_CHARS:]
+        prompt = f"{JSON_REPAIR_INSTRUCTION}\n\nPrevious analysis response:\n{source}"
+        try:
+            repaired_text = await send_prompt(
+                prompt=prompt,
+                system_message=JSON_REPAIR_SYSTEM,
+                response_format={"type": "json_object"},
+            )
+        except TypeError:
+            # Test doubles / older model managers may not accept response_format.
+            logger.warning("Cannot repair JSON for %s: send_prompt lacks response_format", self.symbol)
+            return None
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("JSON repair request failed for %s: %s", self.symbol, exc)
+            return None
+        if not isinstance(repaired_text, str) or not repaired_text.strip():
+            return None
+        parser = self._unified_parser()
+        if parser is None:
+            return None
+        parsed = parser.parse_json_object(repaired_text)
+        if parsed is None:
+            return None
+        repaired_result = dict(result) if isinstance(result, dict) else {}
+        repaired_result.pop("parse_error", None)
+        repaired_result.pop("error", None)
+        repaired_result["raw_response"] = repaired_text
+        repaired_result["response_validation"] = {
+            "schema": "1.0", "status": "valid", "valid": True, "errors": [],
+        }
+        try:
+            self.engine.last_llm_response = repaired_text
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
+        logger.info("JSON repair succeeded for %s", self.symbol)
+        return repaired_result, repaired_text
+
     def _invalid_response_reason(self, result: Any, raw_response: str) -> Optional[str]:
         """Return why an LLM response is unusable, or None when it is usable.
 
@@ -505,6 +649,7 @@ class PairAnalyzer:
             performance_context="",
             brain_service=None,
             dynamic_thresholds=None,
+            response_format=self._json_response_format(),
         )
 
 
