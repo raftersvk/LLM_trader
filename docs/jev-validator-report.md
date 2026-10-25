@@ -65,7 +65,7 @@ Useful flags:
 | --- | --- |
 | `--signals-dir` | Directory of per-pair `*.jsonl` files (read-only). |
 | `--cost-pct` | Round-trip cost in percentage points (default 0.10). |
-| `--horizons` | Comma-separated holding periods in hours (default `1,2,4`). |
+| `--horizons` | Comma-separated holding periods in **hours** (default `1,2,4`). A horizon is measured in wall-clock hours: on a 15m signal it is four candles, and it is skipped (counted in the report) when it is not a whole number of candles for the signal's timeframe (e.g. 1h on a 4h signal). |
 | `--target` | BUY/SELL signals needed for a verdict (default 200). |
 | `--out` | Markdown output path. |
 | `--candles-cache` | Local candle cache directory (default `runtime/jev_bench/candles_cache`). |
@@ -121,6 +121,10 @@ not evidence that the role works; it is a reason to collect more data.
   first reading), the report only describes the veto in that market phase.
 - **Cost model.** A fixed `--cost-pct` ignores slippage, spread variation and
   funding. It is a simplifying assumption, not an execution simulator.
+- **Timeframe alignment.** Horizons are hours, converted to candles for each
+  signal's timeframe; a horizon that is not a whole number of candles for that
+  timeframe is skipped and counted as `Skipped (not whole candles)` instead of
+  being rounded or silently held for a different duration.
 - **Signal timestamp.** The entry is the close of the candle stored in
   `candle_open_time`, not the wall-clock time the signal was written. A signal
   produced late for an older candle is still measured on that candle.

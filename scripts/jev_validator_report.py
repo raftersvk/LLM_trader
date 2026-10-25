@@ -223,6 +223,7 @@ class HorizonStats:
     false_veto_count: int = 0
     false_veto_cost_pct: float = 0.0
     loss_avoided_pct: float = 0.0
+    skipped_horizon: int = 0
 
 
 @dataclass
@@ -645,13 +646,19 @@ def counterfactual(
 
     Returns:
         A counterfactual with ``status`` ``ok``, ``missing_entry``,
-        ``missing_exit`` or ``invalid_price``.
+        ``missing_exit``, ``invalid_price`` or ``unsupported_horizon`` (when
+        the horizon is not a whole number of candles for this timeframe).
     """
+    # Horizons are hours, not candle counts: 1 hour on a 15m signal is four
+    # candles, and on a 4h signal no whole number of candles exists.
+    period_seconds = timeframe_seconds(record.timeframe)
+    horizon_seconds = horizon * 3600
+    if horizon_seconds % period_seconds:
+        return Counterfactual(horizon=horizon, status="unsupported_horizon")
     entry = candles_by_open.get(record.candle_open_time)
     if entry is None or not _is_finite(entry.close) or entry.close <= 0:
         return Counterfactual(horizon=horizon, status="missing_entry")
-    period = timeframe_seconds(record.timeframe)
-    exit_at = record.candle_open_time + timedelta(seconds=period * horizon)
+    exit_at = record.candle_open_time + timedelta(seconds=horizon_seconds)
     exit_candle = candles_by_open.get(exit_at)
     if exit_candle is None or not _is_finite(exit_candle.close) or exit_candle.close <= 0:
         return Counterfactual(
@@ -768,6 +775,9 @@ def _accumulate(
     """Add one signal's counterfactual result to a horizon bucket."""
     if item.status == "approved":
         bucket.approved_total += 1
+        if result.status == "unsupported_horizon":
+            bucket.skipped_horizon += 1
+            return
         if result.net_pct is not None and _is_finite(result.net_pct):
             bucket.approved_evaluable += 1
             bucket.approved_net_pct += result.net_pct
@@ -775,6 +785,9 @@ def _accumulate(
     if item.status != "vetoed":
         return
     bucket.vetoed_total += 1
+    if result.status == "unsupported_horizon":
+        bucket.skipped_horizon += 1
+        return
     if result.net_pct is None or not _is_finite(result.net_pct):
         return
     bucket.vetoed_evaluable += 1
@@ -881,11 +894,12 @@ def _render_overall_pnl(data: ReportData) -> List[str]:
         "## Counterfactual P&L, all symbols (net of cost)",
         "",
         "Avoided net is the P&L the vetoed trades would have produced: negative means the veto saved money. "
-        "False-veto cost is the sum of the vetoed trades that would have been profitable.",
+        "False-veto cost is the sum of the vetoed trades that would have been profitable. Horizons are hours "
+        "and are skipped when they are not a whole number of candles for a signal's timeframe.",
         "",
         "| Horizon | Approved evaluated | Approved net | Vetoed evaluated | Avoided net | False vetoes "
-        "| False-veto cost | Loss avoided |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| False-veto cost | Loss avoided | Skipped (not whole candles) |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for horizon in data.horizons:
         stats = data.overall[horizon]
@@ -895,7 +909,7 @@ def _render_overall_pnl(data: ReportData) -> List[str]:
             f"| {horizon}h | {stats.approved_evaluable} | {_signed_pct(approved_net)} "
             f"| {stats.vetoed_evaluable} | {_signed_pct(avoided_net)} "
             f"| {stats.false_veto_count} | {_signed_pct(stats.false_veto_cost_pct)} "
-            f"| {_signed_pct(stats.loss_avoided_pct)} |"
+            f"| {_signed_pct(stats.loss_avoided_pct)} | {stats.skipped_horizon} |"
         )
     lines.append("")
     return lines
@@ -1210,9 +1224,8 @@ def _collect_candles(
     candles: Dict[Tuple[str, str], List[Candle]] = {}
     notes: List[str] = []
     for (symbol, timeframe), opens in sorted(groups.items()):
-        period = timeframe_seconds(timeframe)
         start = min(opens)
-        end = max(opens) + timedelta(seconds=period * max(horizons))
+        end = max(opens) + timedelta(hours=max(horizons))
         try:
             candles[(symbol, timeframe)] = list(source(symbol, timeframe, start, end))
         except CandleSourceError as exc:

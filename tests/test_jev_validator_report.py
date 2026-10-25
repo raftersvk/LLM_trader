@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -40,13 +40,14 @@ def _record(
     jev: Optional[Dict[str, object]] = None,
     symbol: str = "BTC/USDT",
     decision_id: Optional[str] = None,
+    timeframe: str = "1h",
 ) -> report.SignalRecord:
     """Build one stored signal record."""
     opened = datetime.fromisoformat(open_iso.replace("Z", "+00:00"))
     return report.SignalRecord(
         decision_id=decision_id or f"{symbol}-{open_iso}-{action}",
         symbol=symbol,
-        timeframe="1h",
+        timeframe=timeframe,
         candle_open_time=opened,
         action=action,
         risk_approved=risk_approved,
@@ -487,3 +488,71 @@ def test_horizon_validated_rejects_non_finite_stats():
         "non-finite P&L in sample",
     )
     assert report._signed_pct(float("nan")) == "n/a"
+
+
+def test_horizon_is_hours_not_candles():
+    """A 1h horizon on a 15m signal is four candles; on a 4h signal it is skipped."""
+    entry = datetime(2026, 1, 1, 0, tzinfo=timezone.utc)
+    hour_later = datetime(2026, 1, 1, 1, tzinfo=timezone.utc)
+    four_hours = datetime(2026, 1, 1, 4, tzinfo=timezone.utc)
+
+    fifteen = _record("2026-01-01T00:00:00Z", "BUY", timeframe="15m")
+    fifteen_candles = {
+        entry: _candle("2026-01-01T00:00:00Z", 100.0),
+        hour_later: _candle("2026-01-01T01:00:00Z", 110.0),
+    }
+    result = report.counterfactual(fifteen, fifteen_candles, 1, 0.10)
+    assert result.status == "ok"
+    assert result.net_pct == pytest.approx(9.9)
+
+    four_hour = _record("2026-01-01T00:00:00Z", "BUY", timeframe="4h")
+    four_hour_candles = {
+        entry: _candle("2026-01-01T00:00:00Z", 100.0),
+        four_hours: _candle("2026-01-01T04:00:00Z", 90.0),
+    }
+    unsupported = report.counterfactual(four_hour, four_hour_candles, 1, 0.10)
+    assert unsupported.status == "unsupported_horizon"
+    assert unsupported.net_pct is None
+    assert report.counterfactual(
+        four_hour, four_hour_candles, 4, 0.10
+    ).net_pct == pytest.approx(-10.1)
+
+
+def test_summarize_counts_skipped_non_aligned_horizons():
+    """Non-whole-candle horizons are counted as skipped, not as zero P&L."""
+    record = _record(
+        "2026-01-01T00:00:00Z",
+        "SELL",
+        reasoning="[JEV veto: not tradeable (noul=0.200 < 0.5)]",
+        timeframe="4h",
+    )
+    candles = {
+        ("BTC/USDT", "4h"): [
+            _candle("2026-01-01T00:00:00Z", 100.0),
+            _candle("2026-01-01T04:00:00Z", 95.0),
+        ]
+    }
+    evaluated = report.evaluate_signals([record], candles, (1, 4), 0.10)
+    data = report.summarize(evaluated, (1, 4), 0.10, 1, report.LoadStats())
+
+    assert data.overall[1].skipped_horizon == 1
+    assert data.overall[1].vetoed_evaluable == 0
+    assert data.overall[1].vetoed_net_pct == 0.0
+    assert data.overall[4].skipped_horizon == 0
+    assert data.overall[4].vetoed_evaluable == 1
+    assert data.overall[4].vetoed_net_pct == pytest.approx(4.9)
+
+
+def test_collect_candles_uses_hour_window():
+    """The fetch window is measured in hours, independent of the timeframe."""
+    calls = []
+
+    def source(symbol, timeframe, start, end):
+        calls.append((symbol, timeframe, start, end))
+        return []
+
+    record = _record("2026-01-01T00:00:00Z", "BUY", timeframe="4h")
+    report._collect_candles([record], source, (1, 4))
+
+    assert len(calls) == 1
+    assert calls[0][3] - calls[0][2] == timedelta(hours=4)

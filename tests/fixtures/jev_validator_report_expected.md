@@ -26,12 +26,12 @@ Read-only measurement of the JEV **post** gate as validator of `risk_approved`, 
 
 ## Counterfactual P&L, all symbols (net of cost)
 
-Avoided net is the P&L the vetoed trades would have produced: negative means the veto saved money. False-veto cost is the sum of the vetoed trades that would have been profitable.
+Avoided net is the P&L the vetoed trades would have produced: negative means the veto saved money. False-veto cost is the sum of the vetoed trades that would have been profitable. Horizons are hours and are skipped when they are not a whole number of candles for a signal's timeframe.
 
-| Horizon | Approved evaluated | Approved net | Vetoed evaluated | Avoided net | False vetoes | False-veto cost | Loss avoided |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1h | 1 | +2.99% | 2 | +2.69% | 1 | +4.90% | -2.21% |
-| 2h | 1 | +7.12% | 2 | -2.46% | 1 | +2.90% | -5.36% |
+| Horizon | Approved evaluated | Approved net | Vetoed evaluated | Avoided net | False vetoes | False-veto cost | Loss avoided | Skipped (not whole candles) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1h | 1 | +2.99% | 2 | +2.69% | 1 | +4.90% | -2.21% | 0 |
+| 2h | 1 | +7.12% | 2 | -2.46% | 1 | +2.90% | -5.36% | 0 |
 
 ## P&L by symbol and horizon
 
