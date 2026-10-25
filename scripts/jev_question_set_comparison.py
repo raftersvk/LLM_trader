@@ -360,6 +360,102 @@ def _load_by_symbol(
 
 
 # ------------------------------------------------------------------- analysis
+def _dataset_signature(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the dataset fields that must match across the two versions."""
+    dataset = report.get("dataset") or {}
+    return {
+        "source": dataset.get("source"),
+        "timeframe": dataset.get("timeframe"),
+        "horizon": dataset.get("horizon"),
+        "move_threshold_pct": dataset.get("move_threshold_pct"),
+        "candles": dataset.get("candles"),
+        "states": dataset.get("states"),
+    }
+
+
+def _verify_pair(
+    symbol: str,
+    v1_report: Dict[str, Any],
+    v2_report: Dict[str, Any],
+) -> None:
+    """Fail loudly unless both reports describe the same states and labels.
+
+    Pairing on ``index`` alone is not enough: two reports built from different
+    CSV snapshots or different ``--limit`` values can share index numbers while
+    naming different candles. This check compares the dataset signature, the
+    self-described question sets and the per-index candle time plus labels.
+    """
+    v1_dataset = v1_report.get("dataset") or {}
+    v2_dataset = v2_report.get("dataset") or {}
+    if v1_dataset.get("question_set") != "v1":
+        raise SystemExit(
+            f"{symbol}: v1 report must self-describe question_set='v1', "
+            f"got {v1_dataset.get('question_set')!r}"
+        )
+    if v2_dataset.get("question_set") != "v2":
+        raise SystemExit(
+            f"{symbol}: v2 report must self-describe question_set='v2', "
+            f"got {v2_dataset.get('question_set')!r}"
+        )
+    if v1_dataset.get("calibration_context") is not False:
+        raise SystemExit(
+            f"{symbol}: v1 report must have calibration_context=false, "
+            f"got {v1_dataset.get('calibration_context')!r}"
+        )
+    if v2_dataset.get("calibration_context") is not True:
+        raise SystemExit(
+            f"{symbol}: v2 report must have calibration_context=true, "
+            f"got {v2_dataset.get('calibration_context')!r}"
+        )
+
+    v1_signature = _dataset_signature(v1_report)
+    v2_signature = _dataset_signature(v2_report)
+    if v1_signature != v2_signature:
+        differences = {
+            key: (v1_signature[key], v2_signature[key])
+            for key in v1_signature
+            if v1_signature[key] != v2_signature[key]
+        }
+        raise SystemExit(
+            f"{symbol}: v1 and v2 datasets differ, refusing to compare: "
+            f"{differences}"
+        )
+    if v1_signature["move_threshold_pct"] != MOVE_THRESHOLD_PCT:
+        raise SystemExit(
+            f"{symbol}: label threshold is {v1_signature['move_threshold_pct']}, "
+            f"but the v2 question asks about {MOVE_THRESHOLD_PCT} %"
+        )
+    if v1_signature["horizon"] != HORIZON:
+        raise SystemExit(
+            f"{symbol}: primary horizon is {v1_signature['horizon']}, expected {HORIZON}"
+        )
+
+    v1_states = _scored_states(v1_report)
+    v2_states = _scored_states(v2_report)
+    if set(v1_states) != set(v2_states):
+        only_v1 = sorted(set(v1_states) - set(v2_states))[:5]
+        only_v2 = sorted(set(v2_states) - set(v1_states))[:5]
+        raise SystemExit(
+            f"{symbol}: state index sets differ; only in v1={only_v1}, "
+            f"only in v2={only_v2}"
+        )
+    for index in sorted(v1_states):
+        first = v1_states[index]
+        second = v2_states[index]
+        if first.get("candle_open_time") != second.get("candle_open_time"):
+            raise SystemExit(
+                f"{symbol}: index {index} names different candles "
+                f"({first.get('candle_open_time')!r} vs "
+                f"{second.get('candle_open_time')!r})"
+            )
+        if first["label"] != second["label"] or first["up"] != second["up"]:
+            raise SystemExit(
+                f"{symbol}: index {index} labels differ "
+                f"(worth {first['label']}/{second['label']}, "
+                f"up {first['up']}/{second['up']})"
+            )
+
+
 def compare_symbol(
     symbol: str,
     v1_report: Dict[str, Any],
@@ -673,22 +769,52 @@ def build_comparison(
     """Load both campaigns and compare every symbol present in both."""
     v1, v1_aborted = _load_by_symbol(v1_paths)
     v2, v2_aborted = _load_by_symbol(v2_paths)
+    only_v1 = sorted(set(v1) - set(v2))
+    only_v2 = sorted(set(v2) - set(v1))
+    if only_v1 or only_v2:
+        raise SystemExit(
+            "symbol exists in only one campaign; refusing a partial comparison: "
+            f"only v1={only_v1}, only v2={only_v2}; aborted="
+            f"{v1_aborted + v2_aborted}"
+        )
     symbols: List[Dict[str, Any]] = []
     for symbol in sorted(set(v1) & set(v2)):
+        _verify_pair(symbol, v1[symbol], v2[symbol])
         symbols.append(
             compare_symbol(symbol, v1[symbol], v2[symbol], resamples, seed)
         )
     if not symbols:
         raise SystemExit("no symbol is present in both the v1 and v2 reports")
+    v1_sets = {(report.get("dataset") or {}).get("question_set") for report in v1.values()}
+    v2_sets = {(report.get("dataset") or {}).get("question_set") for report in v2.values()}
+    v1_contexts = {
+        (report.get("dataset") or {}).get("calibration_context") for report in v1.values()
+    }
+    v2_contexts = {
+        (report.get("dataset") or {}).get("calibration_context") for report in v2.values()
+    }
+    if v1_sets != {"v1"} or v2_sets != {"v2"}:
+        raise SystemExit(f"unexpected question sets: v1={v1_sets}, v2={v2_sets}")
+    if v1_contexts != {False} or v2_contexts != {True}:
+        raise SystemExit(
+            f"unexpected calibration contexts: v1={v1_contexts}, v2={v2_contexts}"
+        )
     overall = _overall(symbols)
     metric_checks = len(symbols) * (3 + len(REJECT_FRACTIONS))
     return {
         "kind": "jev-question-set-comparison",
         "horizon": HORIZON,
         "move_threshold_pct": MOVE_THRESHOLD_PCT,
-        "v1_question_set": "v1",
-        "v2_question_set": "v2",
-        "v2_calibration_context": True,
+        "v1_question_set": next(iter(v1_sets)),
+        "v2_question_set": next(iter(v2_sets)),
+        "v1_calibration_context": next(iter(v1_contexts)),
+        "v2_calibration_context": next(iter(v2_contexts)),
+        "v1_dataset_signatures": {
+            symbol: _dataset_signature(report) for symbol, report in sorted(v1.items())
+        },
+        "v2_dataset_signatures": {
+            symbol: _dataset_signature(report) for symbol, report in sorted(v2.items())
+        },
         "bootstrap": {"resamples": resamples, "seed": seed, "paired": True},
         "multiple_testing": {
             "symbols": len(symbols),
@@ -781,6 +907,19 @@ def print_markdown(summary: Dict[str, Any]) -> None:
             f"{_fmt_delta(symbol['tradeability_auc']['delta_v2_minus_v1'])} | "
             f"{_fmt(direction_v1['value'])} ({_fmt_ci(direction_v1['ci95'])}) | "
             f"{_fmt(direction_v2['value'])} ({_fmt_ci(direction_v2['ci95'])}) |"
+        )
+
+    print("\n### Direction AUC of noul (not the intended channel)\n")
+    print("| Symbol | v1 noul direction AUC (95% CI) | v2 noul direction AUC (95% CI) | "
+          "v2-v1 (paired 95% CI) |")
+    print("| --- | --- | --- | --- |")
+    for symbol in summary["symbols"]:
+        direction = symbol["direction_auc_noul"]
+        print(
+            f"| {symbol['symbol']} | {_fmt(direction['v1']['value'])} "
+            f"({_fmt_ci(direction['v1']['ci95'])}) | "
+            f"{_fmt(direction['v2']['value'])} ({_fmt_ci(direction['v2']['ci95'])}) | "
+            f"{_fmt_delta(direction['delta_v2_minus_v1'])} |"
         )
 
     print("\n### Rank rejection (kept minus rejected event rate)\n")

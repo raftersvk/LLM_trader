@@ -4,7 +4,124 @@
   "move_threshold_pct": 1.0,
   "v1_question_set": "v1",
   "v2_question_set": "v2",
+  "v1_calibration_context": false,
   "v2_calibration_context": true,
+  "v1_dataset_signatures": {
+    "ARB/USDT": {
+      "source": "runtime/jev_bench/ARB_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "AVAX/USDT": {
+      "source": "runtime/jev_bench/AVAX_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "AXS/USDT": {
+      "source": "runtime/jev_bench/AXS_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "BTC/USDT": {
+      "source": "runtime/jev_bench/BTC_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "ETH/USDT": {
+      "source": "runtime/jev_bench/ETH_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "NEXO/USDT": {
+      "source": "runtime/jev_bench/NEXO_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "SOL/USDT": {
+      "source": "runtime/jev_bench/SOL_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    }
+  },
+  "v2_dataset_signatures": {
+    "ARB/USDT": {
+      "source": "runtime/jev_bench/ARB_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "AVAX/USDT": {
+      "source": "runtime/jev_bench/AVAX_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "AXS/USDT": {
+      "source": "runtime/jev_bench/AXS_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "BTC/USDT": {
+      "source": "runtime/jev_bench/BTC_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "ETH/USDT": {
+      "source": "runtime/jev_bench/ETH_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "NEXO/USDT": {
+      "source": "runtime/jev_bench/NEXO_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    },
+    "SOL/USDT": {
+      "source": "runtime/jev_bench/SOL_USDT_1h.csv",
+      "timeframe": "1h",
+      "horizon": 1,
+      "move_threshold_pct": 1.0,
+      "candles": 700,
+      "states": 200
+    }
+  },
   "bootstrap": {
     "resamples": 2000,
     "seed": 20261024,

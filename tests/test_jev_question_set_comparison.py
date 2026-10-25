@@ -192,3 +192,111 @@ def test_compare_symbol_flags_different_state_sets():
 
     assert result["same_states"] is False
     assert result["paired_states"] == 1
+
+
+def _full_report(
+    symbol: str,
+    question_set: str,
+    calibration_context: bool,
+    labels: List[bool],
+    ups: List[bool],
+    source: str = "runtime/jev_bench/X_USDT_1h.csv",
+    move_threshold_pct: float = 1.0,
+) -> Dict[str, Any]:
+    """Build a self-describing report for pair-verification tests."""
+    report = _report(
+        symbol,
+        [0.2 + 0.6 * label for label in labels],
+        ["long" if up else "short" for up in ups],
+        labels,
+        ups,
+    )
+    report["dataset"].update(
+        {
+            "question_set": question_set,
+            "calibration_context": calibration_context,
+            "source": source,
+            "timeframe": "1h",
+            "horizon": 1,
+            "move_threshold_pct": move_threshold_pct,
+            "candles": 700,
+            "states": len(labels),
+        }
+    )
+    return report
+
+
+def test_verify_pair_rejects_different_datasets():
+    labels = [False, True, False]
+    ups = [False, True, True]
+    v1 = _full_report("BTC/USDT", "v1", False, labels, ups)
+    v2 = _full_report("BTC/USDT", "v2", True, labels, ups, source="other.csv")
+
+    with pytest.raises(SystemExit, match="datasets differ"):
+        comparison._verify_pair("BTC/USDT", v1, v2)
+
+
+def test_verify_pair_rejects_wrong_question_set_or_context():
+    labels = [False, True]
+    ups = [False, True]
+    v1 = _full_report("BTC/USDT", "v2", False, labels, ups)
+    v2 = _full_report("BTC/USDT", "v2", True, labels, ups)
+    with pytest.raises(SystemExit, match="question_set='v1'"):
+        comparison._verify_pair("BTC/USDT", v1, v2)
+
+    v1 = _full_report("BTC/USDT", "v1", True, labels, ups)
+    with pytest.raises(SystemExit, match="calibration_context=false"):
+        comparison._verify_pair("BTC/USDT", v1, v2)
+
+
+def test_verify_pair_rejects_different_labels():
+    v1 = _full_report("BTC/USDT", "v1", False, [False, True], [False, True])
+    v2 = _full_report("BTC/USDT", "v2", True, [True, True], [False, True])
+    with pytest.raises(SystemExit, match="labels differ"):
+        comparison._verify_pair("BTC/USDT", v1, v2)
+
+
+def test_build_comparison_refuses_a_symbol_in_only_one_campaign(tmp_path):
+    labels = [False, True]
+    ups = [False, True]
+    v1_path = tmp_path / "calibration_btc_200_v1.json"
+    v2_path = tmp_path / "calibration_eth_200_v2.json"
+    v1_path.write_text(
+        __import__("json").dumps(_full_report("BTC/USDT", "v1", False, labels, ups)),
+        encoding="utf-8",
+    )
+    v2_path.write_text(
+        __import__("json").dumps(_full_report("ETH/USDT", "v2", True, labels, ups)),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="only one campaign"):
+        comparison.build_comparison(
+            [str(v1_path)], [str(v2_path)], resamples=50, seed=7
+        )
+
+
+def test_build_comparison_derives_provenance_from_reports(tmp_path):
+    labels = [False, True, False, True, False]
+    ups = [False, True, False, True, True]
+    v1_path = tmp_path / "calibration_btc_200_v1.json"
+    v2_path = tmp_path / "calibration_btc_200_v2.json"
+    v1_path.write_text(
+        __import__("json").dumps(_full_report("BTC/USDT", "v1", False, labels, ups)),
+        encoding="utf-8",
+    )
+    v2_path.write_text(
+        __import__("json").dumps(_full_report("BTC/USDT", "v2", True, labels, ups)),
+        encoding="utf-8",
+    )
+
+    summary = comparison.build_comparison(
+        [str(v1_path)], [str(v2_path)], resamples=50, seed=7
+    )
+
+    assert summary["v1_question_set"] == "v1"
+    assert summary["v2_question_set"] == "v2"
+    assert summary["v1_calibration_context"] is False
+    assert summary["v2_calibration_context"] is True
+    assert summary["v1_dataset_signatures"]["BTC/USDT"]["candles"] == 700
+    assert summary["all_pairs_use_same_states"] is True

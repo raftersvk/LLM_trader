@@ -83,6 +83,7 @@ from src.signal_service.jev_client import (  # noqa: E402
 )
 from src.signal_service.contract import iso_z  # noqa: E402
 from src.signal_service.jev_gate import (  # noqa: E402
+    CALIBRATION_MOVE_THRESHOLD_PCT,
     QUESTION_SETS,
     build_questions,
     parse_jev_signal,
@@ -989,6 +990,25 @@ def _apply_run_defaults(args: argparse.Namespace) -> None:
         args.calibration_context = False
 
 
+def _warn_if_v2_threshold_mismatch(args: argparse.Namespace) -> None:
+    """Warn when a v2 run scores a threshold other than the asked 1.0 %.
+
+    The v2 tradeability prompt hardcodes "at least 1.0 percent", while the
+    label threshold is a CLI option. A mismatch would score the question
+    against a different event, so the run is still allowed but loudly flagged.
+    """
+    if args.question_set != "v2":
+        return
+    if abs(float(args.move_threshold_pct) - CALIBRATION_MOVE_THRESHOLD_PCT) <= 1e-9:
+        return
+    logger.warning(
+        "v2 asks about a %.1f%% move but --move-threshold-pct is %.4g%%; "
+        "the label no longer matches the question",
+        CALIBRATION_MOVE_THRESHOLD_PCT,
+        args.move_threshold_pct,
+    )
+
+
 def build_report(
     records: Sequence[CalibrationRecord],
     args: argparse.Namespace,
@@ -1196,6 +1216,7 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
         if args.cost_pct is not None:
             for record in records:
                 record.cost_pct = args.cost_pct
+        _warn_if_v2_threshold_mismatch(args)
         scoring = existing.get("scoring") or {}
         return build_report(
             records,
@@ -1210,6 +1231,7 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
         )
 
     _apply_run_defaults(args)
+    _warn_if_v2_threshold_mismatch(args)
     horizons = _parse_horizons(args.horizons)
     if args.horizon is None:
         args.horizon = horizons[0]

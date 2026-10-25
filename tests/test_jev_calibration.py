@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -844,6 +845,24 @@ def test_report_records_question_set_and_calibration_context():
     )
     assert default["dataset"]["question_set"] == "v1"
     assert default["dataset"]["calibration_context"] is False
+
+
+def test_v2_threshold_mismatch_warns(caplog):
+    """The v2 prompt asks 1.0 %; scoring another threshold is flagged."""
+    args = jev_calibration._parse_args([
+        "--candles", "x.csv", "--question-set", "v2",
+        "--move-threshold-pct", "2.0",
+    ])
+    jev_calibration._apply_run_defaults(args)
+    with caplog.at_level(logging.WARNING):
+        jev_calibration._warn_if_v2_threshold_mismatch(args)
+    assert "label no longer matches the question" in caplog.text
+
+    caplog.clear()
+    args.question_set = "v1"
+    with caplog.at_level(logging.WARNING):
+        jev_calibration._warn_if_v2_threshold_mismatch(args)
+    assert "label no longer matches the question" not in caplog.text
 
 
 def test_question_set_cli_options_parse():

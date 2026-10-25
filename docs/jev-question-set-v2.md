@@ -34,9 +34,12 @@ This document reports the corrected protocol:
   and `dataset.calibration_context` (`false`/`true`) are stored and carried
   through `--aggregate-from`. A flag-free rebuild of a v2 report is
   **byte-identical** to the original (verified with `cmp`).
-- **Integrity is checked in the comparison tool:** all 7 pairs have identical
-  state indices, candle counts and labels (`same_states` / `same_labels`), and
-  the summary fails visibly if they do not.
+- **Integrity is checked in the comparison tool:** it compares the dataset
+  source, timeframe, horizon, label threshold and candle count, then every
+  paired index's candle time and label. All 7 pairs have identical indices and
+  labels; any mismatch raises `SystemExit` instead of producing metrics. A
+  symbol present in only one version is also refused, and aborted (429) reports
+  are listed and excluded.
 
 - **Window:** states span `2026-10-16T18:00Z` → `2026-10-25T01:00Z` (≈8.3 days,
   one market regime).
@@ -66,11 +69,16 @@ This document reports the corrected protocol:
    - `base_rate_move_1pct`: share of the last up-to-200 hourly simple returns
      with `abs(return) >= 1 %` (4 decimals);
    - `realized_vol_24h_pct`: 100 × the population standard deviation of the last
-     up-to-24 hourly simple returns (6 decimals), not annualised;
+     up-to-24 hourly simple returns (6 decimals), not annualised. The field name
+     follows the experiment brief; it is the dispersion of hourly returns over
+     a 24-hour window, not a volatility of 24-hour returns.
    - the lookback counts and threshold are included in the block.
 
 The block is off by default, so a v1 run stays byte-comparable. This experiment
 bundles the new wording **and** the block: it cannot separate their effects.
+Because the v2 prompt hardcodes a 1.0 % move, a v2 run with a different
+`--move-threshold-pct` logs a warning that the label no longer matches the
+question.
 
 ## Dataset and label integrity
 
@@ -184,10 +192,11 @@ observed event rate, whereas v1 was heavily overconfident.
 | SOL/USDT | 3.5 % | 0.239 / 0.331 | 46/200 | 0.029 / 0.047 | 2/200 |
 
 The Brier skill against a constant base-rate predictor moves from strongly
-negative under v1 (−0.35 to −45.3) to near zero under v2 (−0.48 to +0.06). Near
-zero is the honest reading: **v2 is close to predicting the base rate, not
-close to discriminating events.** The previous campaign already warned that
-Brier-vs-constant is not a ranking metric.
+negative under v1 (−0.35 to −45.3) to far less negative under v2 (−0.48 to
++0.06); only ETH (+0.06) and NEXO (+0.05) are slightly positive. That is the
+honest reading: **v2 is roughly at the base-rate level, not discriminating
+events.** The previous campaign already warned that Brier-vs-constant is not a
+ranking metric.
 
 This also means the production 0.5 threshold cannot be copied to v2: only
 1–43 of 200 v2 states per symbol clear it, versus 32–68 under v1. Any future
