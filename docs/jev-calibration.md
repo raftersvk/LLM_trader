@@ -12,11 +12,18 @@ misleading for a rare label and is not a valid basis for a threshold decision.
 - Latency: BTC p50 159 ms / p95 204 ms; ETH p50 153 ms / p95 160 ms.
 - Worth-trading label: `abs(forward_return_h1) >= 1.0 %`.
 - Base decision: rule-based 4-candle momentum proxy, **not an LLM**.
-- Repro: `scripts/jev_calibration.py`; machine reports in
-  `runtime/jev_bench/calibration_{btc,eth}_200.json`, observation log via
+- Repro: `scripts/jev_calibration.py`; the historical machine reports for this
+  two-symbol run are archived at
+  `runtime/jev_bench/archive/calibration_{btc,eth}_200_600candles.json`. The
+  un-suffixed `calibration_{btc,eth}_200.json` paths now hold the newer
+  7-symbol campaign rerun (700-candle aligned window), so the tables below are
+  not reproducible from the current files; observation log via
   `--observations runtime/jev_bench/observations.jsonl`.
 - Weekly policy layer: see [`jev-policy.md`](jev-policy.md). The policy uses a
   trade-P&L label (base direction, net of cost) over h1-h4.
+- Larger 7-symbol campaign (BTC, ETH, SOL, AXS, AVAX, NEXO, ARB; 1,400 calls):
+  see [`jev-campaign-7-symbols.md`](jev-campaign-7-symbols.md). Its conclusion is
+  that no rank-based rejection rule is reliable today; the fallback stays 0.5.
 
 ## What changed in this revision
 
