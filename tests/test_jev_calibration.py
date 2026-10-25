@@ -579,3 +579,212 @@ def test_record_payload_is_json_friendly():
     assert payload["worth_trading"] == {"1": True}
     assert payload["base_direction_correct"] == {"1": True}
     assert isinstance(payload["forward_returns"], Dict)
+
+
+# ------------------------------------------------------- ranking and skill
+def test_ranking_auc_known_value_and_ties():
+    """AUC is rank-based; tied scores contribute half a win."""
+    scores = [0.1, 0.4, 0.35, 0.8]
+    labels = [False, False, True, True]
+    assert jev_calibration.ranking_auc(scores, labels) == pytest.approx(0.75)
+    assert jev_calibration.ranking_auc([0.5, 0.5], [True, False]) == pytest.approx(0.5)
+    assert jev_calibration.ranking_auc([0.1, 0.2], [False, False]) is None
+    assert jev_calibration.ranking_auc([], []) is None
+
+
+def test_average_precision_known_value():
+    """PR-AUC is average precision over ranked scores."""
+    scores = [0.8, 0.4, 0.35, 0.1]
+    labels = [True, False, True, False]
+    assert jev_calibration.average_precision(scores, labels) == pytest.approx(5.0 / 6.0)
+    assert jev_calibration.average_precision([0.2], [False]) is None
+
+
+def test_brier_skill_score_reference_semantics():
+    """Skill is 1 minus the ratio to the reference; a tie scores zero."""
+    assert jev_calibration.brier_skill_score(0.25, 0.25) == pytest.approx(0.0)
+    assert jev_calibration.brier_skill_score(0.10, 0.25) == pytest.approx(0.6)
+    assert jev_calibration.brier_skill_score(0.10, None) is None
+    assert jev_calibration.brier_skill_score(0.10, 0.0) is None
+
+
+def test_logistic_baseline_is_finite_and_deterministic():
+    """The one-feature logistic baseline produces a usable, repeatable Brier."""
+    probabilities = [0.05, 0.1, 0.2, 0.4, 0.6, 0.7, 0.8, 0.9]
+    labels = [False, False, False, False, True, False, True, True]
+
+    first = jev_calibration.logistic_brier(probabilities, labels)
+    second = jev_calibration.logistic_brier(probabilities, labels)
+
+    assert first is not None and 0.0 <= first <= 1.0
+    assert first == second
+    model = jev_calibration.fit_logistic_regression(probabilities, labels)
+    assert model is not None
+    assert all(isinstance(value, float) for value in model)
+    assert jev_calibration.fit_logistic_regression([0.2, 0.3], [True, True]) is None
+
+
+def test_bootstrap_cis_are_deterministic():
+    """Bootstrap CIs depend on the fixed seed only, not on call order."""
+    scores = [0.1, 0.2, 0.3, 0.6, 0.7, 0.9]
+    labels = [False, False, True, False, True, True]
+
+    first_auc = jev_calibration.bootstrap_auc_ci(scores, labels, resamples=200)
+    second_auc = jev_calibration.bootstrap_auc_ci(scores, labels, resamples=200)
+    first_net = jev_calibration.bootstrap_net_ci([-0.2, 0.1, 0.3, -0.1], resamples=200)
+    second_net = jev_calibration.bootstrap_net_ci([-0.2, 0.1, 0.3, -0.1], resamples=200)
+
+    assert first_auc == second_auc
+    assert first_net == second_net
+    assert first_auc is not None and first_auc["low"] <= first_auc["high"]
+    assert first_net is not None and first_net["low"] <= first_net["high"]
+    assert jev_calibration.bootstrap_net_ci([0.1]) is None
+
+
+# ---------------------------------------------------------------- economics
+def _tail_records(forward: float, count: int = 10) -> list[Any]:
+    """Records with a tradeable chronological tail and inert training states."""
+    records = []
+    for index in range(count):
+        if index >= count - 3:
+            record = _record(0.9, "long", "BUY", forward)
+        else:
+            record = _record(0.1, "long", "HOLD", 0.001)
+        record.index = index
+        record.candle_open_time = f"2026-10-15T{index:02d}:00:00Z"
+        records.append(record)
+    return records
+
+
+def test_economics_cost_sensitivity_flags_sign_flip():
+    """A result that flips sign inside the cost range is not an edge."""
+    economics = jev_calibration.economics_report(_tail_records(0.0015), horizon=1)
+
+    assert economics["evaluated_on"] == "oos"
+    assert economics["oos_states"] == 3
+    assert economics["oos_first"] == "2026-10-15T07:00:00Z"
+    assert economics["cost_pct"]["0.05"]["net_pct"] > 0.0
+    assert economics["cost_pct"]["0.20"]["net_pct"] < 0.0
+    assert economics["sign_flip"] is True
+    assert economics["verdict"] == "no demonstrated edge (cost-sensitive sign flip)"
+
+
+def test_economics_uses_only_the_oos_tail():
+    """Training states never contribute trades to the economics block."""
+    records = _tail_records(0.0015)
+    for record in records[:7]:
+        record.noul = 0.99
+        record.base_action = "BUY"
+        record.base_direction_correct[1] = True
+        record.forward_returns[1] = 0.05
+
+    economics = jev_calibration.economics_report(records, horizon=1)
+
+    assert economics["train_states"] == 7
+    assert economics["oos_states"] == 3
+    assert economics["cost_pct"]["0.10"]["trades"] == 3
+
+
+def test_economics_keeps_symbols_separate():
+    """Each call consumes only its own states; nothing is pooled across symbols."""
+    btc = _tail_records(-0.01)
+    eth = _tail_records(0.01)
+
+    btc_economics = jev_calibration.economics_report(btc, horizon=1)
+    eth_economics = jev_calibration.economics_report(eth, horizon=1)
+    pooled = jev_calibration.economics_report(btc + eth, horizon=1)
+
+    assert btc_economics["oos_states"] == 3
+    assert eth_economics["oos_states"] == 3
+    assert pooled["oos_states"] == 6
+    assert btc_economics["cost_pct"]["0.10"]["net_pct"] < 0.0
+    assert eth_economics["cost_pct"]["0.10"]["net_pct"] > 0.0
+
+
+def test_report_has_ranking_metrics_and_low_prevalence_warning():
+    """A rare label yields skill scores, AUC/PR-AUC and an explicit warning."""
+    records = _tail_records(0.0015)
+    report = jev_calibration.build_report(
+        records, _source_args(), (1,), "2026-10-15T00:00:00Z", 0.0, False, None, "test"
+    )
+    metrics = report["by_horizon"]["h1"]
+
+    assert metrics["prevalence"] == pytest.approx(0.0)
+    assert metrics["brier_constant"] == pytest.approx(0.0)
+    assert metrics["prevalence_warning"] is not None
+    assert metrics["directional_auc"]["state_count"] == 3
+    assert any("trivially strong" in warning for warning in report["warnings"])
+    assert metrics["economics"]["evaluated_on"] == "oos"
+
+
+def test_build_report_is_deterministic():
+    """The same records must produce byte-identical JSON payloads."""
+    records = _tail_records(0.0015)
+    first = jev_calibration.build_report(
+        records, _source_args(), (1, 2), "2026-10-15T00:00:00Z", 0.0, False, None, "test"
+    )
+    second = jev_calibration.build_report(
+        records, _source_args(), (1, 2), "2026-10-15T00:00:00Z", 0.0, False, None, "test"
+    )
+    assert json.dumps(first) == json.dumps(second)
+
+
+def test_economics_positive_point_estimate_with_ci_including_zero_is_not_edge():
+    """A positive point estimate is not an edge while its CI contains zero."""
+    records = _tail_records(0.0015)
+    for record, forward in zip(records[-3:], (0.02, -0.005, 0.01)):
+        record.forward_returns[1] = forward
+        record.base_direction_correct[1] = forward > 0
+        record.worth_trading[1] = abs(forward) * 100.0 >= 1.0
+
+    economics = jev_calibration.economics_report(records, horizon=1)
+
+    assert economics["all_positive"] is True
+    assert economics["ci_excludes_zero"] is False
+    assert economics["demonstrated_edge"] is False
+    assert economics["verdict"] == "no demonstrated edge (CI includes zero)"
+    assert all(
+        entry["net_ci95"]["low"] <= 0.0
+        for entry in economics["cost_pct"].values()
+    )
+
+
+def test_economics_positive_verdict_requires_ci_excluding_zero():
+    """The positive verdict is reserved for a CI that excludes zero."""
+    economics = jev_calibration.economics_report(_tail_records(0.02), horizon=1)
+
+    assert economics["all_positive"] is True
+    assert economics["ci_excludes_zero"] is True
+    assert economics["demonstrated_edge"] is True
+    assert economics["verdict"] == "positive at all tested costs (CI excludes zero)"
+
+
+def test_report_emits_tradeability_auc_ci():
+    """Every horizon reports a deterministic AUC CI next to the point estimate."""
+    forwards = [0.02, -0.005, 0.02, -0.005, 0.02, -0.005, 0.02, -0.005]
+    records = []
+    for index, forward in enumerate(forwards):
+        record = _record(0.1 + index * 0.1, "long", "BUY" if index % 2 == 0 else "HOLD", forward)
+        record.index = index
+        record.candle_open_time = f"2026-10-15T{index:02d}:00:00Z"
+        records.append(record)
+
+    report = jev_calibration.build_report(
+        records, _source_args(horizon=1), (1,),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    metrics = report["by_horizon"]["h1"]
+    expected = jev_calibration.bootstrap_auc_ci(
+        [record.noul for record in records],
+        [record.worth_trading[1] for record in records],
+    )
+
+    assert metrics["auc_ci95"] == expected
+    assert metrics["auc_ci95"] is not None
+    assert metrics["auc_ci95"]["low"] <= metrics["auc_ci95"]["high"]
+    rebuilt = jev_calibration.build_report(
+        jev_calibration.records_from_payload(report["states"]),
+        _source_args(horizon=1), (1,),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert rebuilt["by_horizon"]["h1"]["auc_ci95"] == metrics["auc_ci95"]
