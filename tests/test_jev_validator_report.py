@@ -424,3 +424,66 @@ def test_resolve_signals_dir_honors_env_and_explicit_override(monkeypatch, tmp_p
     monkeypatch.setenv("LLM_TRADER_SIGNALS_DIR", str(tmp_path))
     assert report.resolve_signals_dir(None) == str(tmp_path)
     assert report.resolve_signals_dir("/explicit/signals") == "/explicit/signals"
+
+
+def _raw_candle(open_iso: str, close: float) -> report.Candle:
+    """Build a candle without any finite-value filtering (test-only)."""
+    opened = datetime.fromisoformat(open_iso.replace("Z", "+00:00"))
+    return report.Candle(
+        open_at=opened, open=close, high=close, low=close, close=close, volume=1.0
+    )
+
+
+def test_non_finite_candles_never_enter_pnl_or_cache(tmp_path):
+    """NaN/inf prices are dropped on read/write and can never validate a horizon."""
+    cache = tmp_path / "BTC_USDT_1h.csv"
+    cache.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-01-01T00:00:00Z,nan,nan,nan,nan,1\n"
+        "2026-01-01T01:00:00Z,100,100,100,inf,1\n"
+        "2026-01-01T02:00:00Z,100,101,99,100.5,1\n",
+        encoding="utf-8",
+    )
+    loaded = report.read_candles_csv(str(cache))
+    assert [candle.close for candle in loaded] == [100.5]
+
+    out = tmp_path / "out.csv"
+    report.write_candles_csv(
+        str(out),
+        [
+            _raw_candle("2026-01-01T00:00:00Z", float("nan")),
+            _raw_candle("2026-01-01T01:00:00Z", float("inf")),
+            _raw_candle("2026-01-01T02:00:00Z", 100.0),
+        ],
+    )
+    assert out.read_text(encoding="utf-8").count("\n") == 2  # header + one row
+
+    record = _record("2026-01-01T00:00:00Z", "BUY")
+    nan_entry = {record.candle_open_time: _raw_candle("2026-01-01T00:00:00Z", float("nan"))}
+    assert report.counterfactual(record, nan_entry, 1, 0.10).status == "missing_entry"
+
+    nan_exit = {
+        record.candle_open_time: _raw_candle("2026-01-01T00:00:00Z", 100.0),
+        datetime(2026, 1, 1, 1, tzinfo=timezone.utc): _raw_candle(
+            "2026-01-01T01:00:00Z", float("nan")
+        ),
+    }
+    result = report.counterfactual(record, nan_exit, 1, 0.10)
+    assert result.status == "missing_exit"
+    assert result.net_pct is None
+
+
+def test_horizon_validated_rejects_non_finite_stats():
+    """NaN P&L can never be reported as a validated veto role."""
+    nan_stats = report.HorizonStats(
+        horizon=1,
+        vetoed_evaluable=report.MIN_VETO_SAMPLE,
+        vetoed_net_pct=float("nan"),
+        false_veto_cost_pct=float("nan"),
+        loss_avoided_pct=float("nan"),
+    )
+    assert report.horizon_validated(nan_stats, True) == (
+        False,
+        "non-finite P&L in sample",
+    )
+    assert report._signed_pct(float("nan")) == "n/a"

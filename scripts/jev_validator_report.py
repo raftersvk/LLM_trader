@@ -31,6 +31,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -79,6 +80,48 @@ class Candle:
 
 #: A candle source maps (symbol, timeframe, start, end) to candle rows.
 CandleSource = Callable[[str, str, datetime, datetime], Sequence[Candle]]
+
+
+def _is_finite(value: object) -> bool:
+    """True for a real, finite number.
+
+    NaN and infinity compare false against every bound (``nan <= 0`` and
+    ``nan > 0`` are both False), so they must be rejected explicitly instead
+    of relying on a sign check.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(
+        float(value)
+    )
+
+
+def _candle_is_finite(candle: Candle) -> bool:
+    """True when every OHLCV number of a candle is finite."""
+    return all(
+        _is_finite(value)
+        for value in (candle.open, candle.high, candle.low, candle.close, candle.volume)
+    )
+
+
+def _make_candle(
+    open_at: datetime,
+    open_price: float,
+    high: float,
+    low: float,
+    close: float,
+    volume: float,
+) -> Optional[Candle]:
+    """Build a candle, returning None for any non-finite OHLCV value."""
+    values = (open_price, high, low, close, volume)
+    if not all(_is_finite(value) for value in values):
+        return None
+    return Candle(
+        open_at=open_at,
+        open=float(open_price),
+        high=float(high),
+        low=float(low),
+        close=float(close),
+        volume=float(volume),
+    )
 
 
 class CandleSourceError(RuntimeError):
@@ -407,18 +450,20 @@ def read_candles_csv(path: str) -> List[Candle]:
             if not row or len(row) < 6:
                 continue
             try:
-                candles.append(
-                    Candle(
-                        open_at=parse_iso(row[0]),
-                        open=float(row[1]),
-                        high=float(row[2]),
-                        low=float(row[3]),
-                        close=float(row[4]),
-                        volume=float(row[5]),
-                    )
+                candle = _make_candle(
+                    parse_iso(row[0]),
+                    float(row[1]),
+                    float(row[2]),
+                    float(row[3]),
+                    float(row[4]),
+                    float(row[5]),
                 )
             except (TypeError, ValueError):
                 continue
+            # A NaN/inf row from the exchange must never enter the cache or the
+            # P&L math; skip it like any other malformed row.
+            if candle is not None:
+                candles.append(candle)
     candles.sort(key=lambda candle: candle.open_at)
     return candles
 
@@ -432,6 +477,8 @@ def write_candles_csv(path: str, candles: Sequence[Candle]) -> None:
     with open(temporary, "w", encoding="utf-8", newline="") as handle:
         handle.write("time,open,high,low,close,volume\n")
         for candle in candles:
+            if not _candle_is_finite(candle):
+                continue
             handle.write(
                 f"{candle.open_at.strftime('%Y-%m-%dT%H:%M:%SZ')},"
                 f"{candle.open:.8f},{candle.high:.8f},{candle.low:.8f},"
@@ -516,18 +563,18 @@ class CcxtCandleSource:
                 break
             for row in batch:
                 try:
-                    fetched.append(
-                        Candle(
-                            open_at=datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc),
-                            open=float(row[1]),
-                            high=float(row[2]),
-                            low=float(row[3]),
-                            close=float(row[4]),
-                            volume=float(row[5]),
-                        )
+                    candle = _make_candle(
+                        datetime.fromtimestamp(row[0] / 1000, tz=timezone.utc),
+                        float(row[1]),
+                        float(row[2]),
+                        float(row[3]),
+                        float(row[4]),
+                        float(row[5]),
                     )
-                except (IndexError, TypeError, ValueError):
+                except (IndexError, TypeError, ValueError, OverflowError, OSError):
                     continue
+                if candle is not None:
+                    fetched.append(candle)
             last_open = int(batch[-1][0])
             next_cursor = last_open + period_ms
             if next_cursor <= cursor:
@@ -597,16 +644,16 @@ def counterfactual(
         cost_pct: Round-trip cost in percentage points.
 
     Returns:
-        A counterfactual with ``status`` ``ok``, ``missing_entry`` or
-        ``missing_exit``.
+        A counterfactual with ``status`` ``ok``, ``missing_entry``,
+        ``missing_exit`` or ``invalid_price``.
     """
     entry = candles_by_open.get(record.candle_open_time)
-    if entry is None or entry.close <= 0:
+    if entry is None or not _is_finite(entry.close) or entry.close <= 0:
         return Counterfactual(horizon=horizon, status="missing_entry")
     period = timeframe_seconds(record.timeframe)
     exit_at = record.candle_open_time + timedelta(seconds=period * horizon)
     exit_candle = candles_by_open.get(exit_at)
-    if exit_candle is None or exit_candle.close <= 0:
+    if exit_candle is None or not _is_finite(exit_candle.close) or exit_candle.close <= 0:
         return Counterfactual(
             horizon=horizon,
             status="missing_exit",
@@ -614,12 +661,20 @@ def counterfactual(
         )
     direction = ACTION_DIRECTION[record.action]
     gross_pct = direction * (exit_candle.close / entry.close - 1.0) * 100.0
+    net_pct = gross_pct - cost_pct
+    if not _is_finite(net_pct):
+        return Counterfactual(
+            horizon=horizon,
+            status="invalid_price",
+            entry_price=entry.close,
+            exit_price=exit_candle.close,
+        )
     return Counterfactual(
         horizon=horizon,
         status="ok",
         entry_price=entry.close,
         exit_price=exit_candle.close,
-        net_pct=gross_pct - cost_pct,
+        net_pct=net_pct,
     )
 
 
@@ -713,14 +768,14 @@ def _accumulate(
     """Add one signal's counterfactual result to a horizon bucket."""
     if item.status == "approved":
         bucket.approved_total += 1
-        if result.net_pct is not None:
+        if result.net_pct is not None and _is_finite(result.net_pct):
             bucket.approved_evaluable += 1
             bucket.approved_net_pct += result.net_pct
         return
     if item.status != "vetoed":
         return
     bucket.vetoed_total += 1
-    if result.net_pct is None:
+    if result.net_pct is None or not _is_finite(result.net_pct):
         return
     bucket.vetoed_evaluable += 1
     bucket.vetoed_net_pct += result.net_pct
@@ -743,6 +798,12 @@ def horizon_validated(
     Returns:
         ``(validated, reason)`` where reason explains a failure.
     """
+    if not (
+        _is_finite(stats.vetoed_net_pct)
+        and _is_finite(stats.false_veto_cost_pct)
+        and _is_finite(stats.loss_avoided_pct)
+    ):
+        return False, "non-finite P&L in sample"
     if not sample_sufficient:
         return False, "sample below target"
     if stats.vetoed_evaluable < MIN_VETO_SAMPLE:
@@ -757,7 +818,7 @@ def horizon_validated(
 # ------------------------------------------------------------------ rendering
 def _signed_pct(value: Optional[float]) -> str:
     """Format an optional signed percentage, normalizing negative zero."""
-    if value is None:
+    if value is None or not _is_finite(value):
         return "n/a"
     cleaned = 0.0 if abs(value) < 0.005 else value
     return f"{cleaned:+.2f}%"
@@ -765,7 +826,7 @@ def _signed_pct(value: Optional[float]) -> str:
 
 def _plain_pct(value: Optional[float]) -> str:
     """Format an optional unsigned percentage, normalizing negative zero."""
-    if value is None:
+    if value is None or not _is_finite(value):
         return "n/a"
     cleaned = 0.0 if abs(value) < 0.005 else value
     return f"{cleaned:.2f}%"
