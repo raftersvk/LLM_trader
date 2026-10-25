@@ -14,33 +14,33 @@ level much closer to the observed event rate, but that calibration gain does not
 translate into a better filter. **Production keeps v1 and the 0.5 threshold.**
 No service code changes.
 
-## Protocol: both versions re-run on one dataset
+## Protocol: same dataset, plus explicit provenance checks
 
-An earlier comparison attempt on this PR was withdrawn and replaced by this
-corrected run. The committed v1 reports at `b724255` already used the same
-700-candle files and the same last state as the v2 report (BTC index 695 at
-`2026-10-25T01:00Z`, with identical forward returns), so this document makes no
-claim that the datasets differed. Both versions were re-run anyway so every
-number below comes from one explicit, self-describing dataset.
+The committed v1 baseline at `b724255` was already built from the same
+700-candle files and the same states as v2: BTC's last state is index 695 at
+`2026-10-25T01:00Z`, with identical forward returns. To make that provenance
+explicit and independently reproducible, v1 and v2 were both re-run on the
+committed dataset. The v1 re-run reproduces the committed states and verdicts;
+it is belt-and-braces verification, not a repair of a dataset mismatch.
 
-This document reports the corrected protocol:
+The campaign protocol:
 
 - **One dataset per symbol for both versions.** Both v1 and v2 use
   `runtime/jev_bench/<BASE>_USDT_1h.csv` (700 candles), the same calendar
   window, `--limit 200`, h1 and `abs(forward return) >= 1.0 %`.
-- **Both versions were re-run today.** No earlier report is used as a baseline.
-  v1 uses `--question-set v1` (no calibration block); v2 uses
-  `--question-set v2 --calibration-context`.
+- **Both versions were re-run today.** v1 uses `--question-set v1` (no
+  calibration block); v2 uses `--question-set v2 --calibration-context`.
 - **Every report is self-describing:** `dataset.question_set` (`"v1"`/`"v2"`)
   and `dataset.calibration_context` (`false`/`true`) are stored and carried
   through `--aggregate-from`. A flag-free rebuild of a v2 report is
   **byte-identical** to the original (verified with `cmp`).
-- **Integrity is checked in the comparison tool:** it compares the dataset
-  source, timeframe, horizon, label threshold and candle count, then every
-  paired index's candle time and label. All 7 pairs have identical indices and
-  labels; any mismatch raises `SystemExit` instead of producing metrics. A
-  symbol present in only one version is also refused, and aborted (429) reports
-  are listed and excluded.
+- **Hardening for future comparisons:** the comparison tool verifies the full
+  dataset signature (source, timeframe, horizon, label threshold, candle count,
+  state count), every paired index's candle time and labels, the declared
+  question set/context, and it excludes and lists aborted reports. Any mismatch
+  raises `SystemExit`, and a symbol present in only one version is refused.
+  These guards are not a fix for a mismatch observed in this campaign; they
+  prevent a future partial or cross-dataset pair from producing silent metrics.
 
 - **Window:** states span `2026-10-16T18:00Z` → `2026-10-25T01:00Z` (≈8.3 days,
   one market regime).
