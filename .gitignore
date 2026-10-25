@@ -58,3 +58,7 @@ scripts/start_script_futures.ps1
 # Temporary & cloud sync files
 .tmp.driveupload/
 *.tmp
+
+# JEV validator report outputs
+/runtime/jev_bench/jev_validator_report.md
+/runtime/jev_bench/candles_cache/
