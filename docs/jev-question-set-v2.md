@@ -14,13 +14,14 @@ level much closer to the observed event rate, but that calibration gain does not
 translate into a better filter. **Production keeps v1 and the 0.5 threshold.**
 No service code changes.
 
-## Protocol correction (the first attempt was discarded)
+## Protocol: both versions re-run on one dataset
 
-The first v2 campaign was **discarded as invalid**. Its v1 baseline came from a
-different dataset than its v2 run: the BTC/ETH v1 reports had been produced from
-an older 600-candle file while v2 used the committed 700-candle file, so the
-states, labels and windows differed. Comparing those files would have measured
-the window, not the questions.
+An earlier comparison attempt on this PR was withdrawn and replaced by this
+corrected run. The committed v1 reports at `b724255` already used the same
+700-candle files and the same last state as the v2 report (BTC index 695 at
+`2026-10-25T01:00Z`, with identical forward returns), so this document makes no
+claim that the datasets differed. Both versions were re-run anyway so every
+number below comes from one explicit, self-describing dataset.
 
 This document reports the corrected protocol:
 
@@ -241,8 +242,8 @@ phrased. Production keeps `build_questions()` v1 and
   calibration block. This run cannot say which part (if either) caused the
   calibration-level shift; a future ablation would need separate runs.
 - **Provider drift remains possible within one run.** Both versions ran in the
-  same session, which removes the dataset/window mismatch of the discarded
-  attempt, but the provider is not seeded and could still answer the same state
+  same session on the same dataset, so any difference is not a dataset/window
+  artefact; the provider is still not seeded and could answer the same state
   differently at a different time.
 - **The base decision is a momentum proxy, not the LLM.** The label is raw
   forward price movement, so the base decision does not enter the AUC,
