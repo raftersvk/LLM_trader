@@ -520,8 +520,9 @@ def build_summary(
             "symbol_markets": len(symbols) + len(futures_symbols),
             "metric_checks": spot_checks + futures_checks,
             "note": (
-                "13 symbol-market evaluations, each with correlated AUC and "
-                "rank-rejection checks; a single good-looking symbol is not evidence"
+                f"{len(symbols) + len(futures_symbols)} symbol-market evaluations, "
+                "each with correlated AUC and rank-rejection checks; a single "
+                "good-looking symbol is not evidence"
             ),
         },
         "symbols": symbols,

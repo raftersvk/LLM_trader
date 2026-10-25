@@ -83,6 +83,8 @@ from src.signal_service.jev_client import (  # noqa: E402
 )
 from src.signal_service.contract import iso_z  # noqa: E402
 from src.signal_service.jev_gate import (  # noqa: E402
+    CALIBRATION_MOVE_THRESHOLD_PCT,
+    QUESTION_SETS,
     build_questions,
     parse_jev_signal,
 )
@@ -948,6 +950,10 @@ def _carry_aggregate_dataset(
         args.delay_seconds = dataset.get("delay_seconds", DEFAULT_DELAY_SECONDS)
     if args.market_type is None:
         args.market_type = dataset.get("market_type") or "spot"
+    if args.question_set is None:
+        args.question_set = dataset.get("question_set") or "v1"
+    if args.calibration_context is None:
+        args.calibration_context = bool(dataset.get("calibration_context", False))
     if args.candles is None:
         source = dataset.get("source")
         args.candles = source if isinstance(source, str) and source else None
@@ -978,6 +984,29 @@ def _apply_run_defaults(args: argparse.Namespace) -> None:
         args.cost_pct = DEFAULT_COST_PCT
     if args.market_type is None:
         args.market_type = "spot"
+    if args.question_set is None:
+        args.question_set = "v1"
+    if args.calibration_context is None:
+        args.calibration_context = False
+
+
+def _warn_if_v2_threshold_mismatch(args: argparse.Namespace) -> None:
+    """Warn when a v2 run scores a threshold other than the asked 1.0 %.
+
+    The v2 tradeability prompt hardcodes "at least 1.0 percent", while the
+    label threshold is a CLI option. A mismatch would score the question
+    against a different event, so the run is still allowed but loudly flagged.
+    """
+    if args.question_set != "v2":
+        return
+    if abs(float(args.move_threshold_pct) - CALIBRATION_MOVE_THRESHOLD_PCT) <= 1e-9:
+        return
+    logger.warning(
+        "v2 asks about a %.1f%% move but --move-threshold-pct is %.4g%%; "
+        "the label no longer matches the question",
+        CALIBRATION_MOVE_THRESHOLD_PCT,
+        args.move_threshold_pct,
+    )
 
 
 def build_report(
@@ -1099,6 +1128,8 @@ def build_report(
             "cost_pct": args.cost_pct,
             "base": "momentum-proxy (rule-based, NOT an LLM)",
             "delay_seconds": args.delay_seconds,
+            "question_set": getattr(args, "question_set", None) or "v1",
+            "calibration_context": bool(getattr(args, "calibration_context", False)),
             "model": model,
         },
         "scoring": {
@@ -1168,7 +1199,13 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
                 candles = []
             if candles:
                 args.candle_count = len(candles)
-                samples = build_samples(candles, args.symbol, args.timeframe, horizons=horizons)
+                samples = build_samples(
+                    candles,
+                    args.symbol,
+                    args.timeframe,
+                    horizons=horizons,
+                    calibration_context=args.calibration_context,
+                )
                 enrichment = {
                     index: (iso_z(candles[index].open_at), state.get("atr_pct"))
                     for index, state, _future in samples
@@ -1179,6 +1216,7 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
         if args.cost_pct is not None:
             for record in records:
                 record.cost_pct = args.cost_pct
+        _warn_if_v2_threshold_mismatch(args)
         scoring = existing.get("scoring") or {}
         return build_report(
             records,
@@ -1193,6 +1231,7 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
         )
 
     _apply_run_defaults(args)
+    _warn_if_v2_threshold_mismatch(args)
     horizons = _parse_horizons(args.horizons)
     if args.horizon is None:
         args.horizon = horizons[0]
@@ -1205,7 +1244,13 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
         raise SystemExit(f"not enough candles: {len(candles)}")
     args.candle_count = len(candles)
 
-    samples = build_samples(candles, args.symbol, args.timeframe, horizons=horizons)
+    samples = build_samples(
+        candles,
+        args.symbol,
+        args.timeframe,
+        horizons=horizons,
+        calibration_context=args.calibration_context,
+    )
     if not samples:
         raise SystemExit("no samples could be built from the dataset")
     if args.limit > 0 and len(samples) > args.limit:
@@ -1249,7 +1294,7 @@ async def run_calibration(args: argparse.Namespace) -> Dict[str, Any]:
             if args.delay_seconds > 0:
                 await asyncio.sleep(args.delay_seconds)
             try:
-                response = await client.ask(state, build_questions())
+                response = await client.ask(state, build_questions(args.question_set))
                 signal = parse_jev_signal(response)
             except JevRateLimitError as exc:
                 record.error = f"rate limit: {exc}"
@@ -1324,6 +1369,20 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--market-type", default=None, choices=("spot", "futures"),
         help="Market the candles came from (default spot, or the report's value on rebuild)",
+    )
+    parser.add_argument(
+        "--question-set", default=None, choices=QUESTION_SETS,
+        help=(
+            "JEV question wording: v1 is production (default), v2 separates "
+            "move magnitude from direction. Carried from the report on rebuild."
+        ),
+    )
+    parser.add_argument(
+        "--calibration-context", action="store_true", default=None,
+        help=(
+            "Add the optional past-only calibration block to each state "
+            "(default off; carried from the report on rebuild)"
+        ),
     )
     parser.add_argument("--limit", type=int, default=200, help="Most recent states to evaluate (0 = all)")
     parser.add_argument(

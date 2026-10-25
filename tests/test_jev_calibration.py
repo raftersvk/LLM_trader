@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -821,3 +822,81 @@ def test_report_emits_tradeability_auc_ci():
         "2026-10-15T00:00:00Z", 0.0, False, None, "test",
     )
     assert rebuilt["by_horizon"]["h1"]["auc_ci95"] == metrics["auc_ci95"]
+
+
+def test_report_records_question_set_and_calibration_context():
+    """The experiment provenance is part of the saved report."""
+    report = jev_calibration.build_report(
+        [_full_record(0, 0.4)],
+        _source_args(
+            question_set="v2",
+            calibration_context=True,
+            thresholds=jev_calibration.DEFAULT_THRESHOLDS,
+        ),
+        (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert report["dataset"]["question_set"] == "v2"
+    assert report["dataset"]["calibration_context"] is True
+
+    default = jev_calibration.build_report(
+        [_full_record(0, 0.4)], _source_args(), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert default["dataset"]["question_set"] == "v1"
+    assert default["dataset"]["calibration_context"] is False
+
+
+def test_v2_threshold_mismatch_warns(caplog):
+    """The v2 prompt asks 1.0 %; scoring another threshold is flagged."""
+    args = jev_calibration._parse_args([
+        "--candles", "x.csv", "--question-set", "v2",
+        "--move-threshold-pct", "2.0",
+    ])
+    jev_calibration._apply_run_defaults(args)
+    with caplog.at_level(logging.WARNING):
+        jev_calibration._warn_if_v2_threshold_mismatch(args)
+    assert "label no longer matches the question" in caplog.text
+
+    caplog.clear()
+    args.question_set = "v1"
+    with caplog.at_level(logging.WARNING):
+        jev_calibration._warn_if_v2_threshold_mismatch(args)
+    assert "label no longer matches the question" not in caplog.text
+
+
+def test_question_set_cli_options_parse():
+    """v2 and the calibration block are selectable without touching v1."""
+    args = jev_calibration._parse_args(
+        ["--question-set", "v2", "--calibration-context", "--candles", "x.csv"]
+    )
+    assert args.question_set == "v2"
+    assert args.calibration_context is True
+
+    defaults = jev_calibration._parse_args(["--candles", "x.csv"])
+    assert defaults.question_set is None
+    assert defaults.calibration_context is None
+
+
+@pytest.mark.asyncio
+async def test_aggregate_from_preserves_v2_provenance_byte_identically(tmp_path):
+    """A flag-free rebuild keeps the v2 question set and context block."""
+    report = jev_calibration.build_report(
+        [_full_record(0, 0.4), _full_record(1, 0.6)],
+        _source_args(
+            question_set="v2",
+            calibration_context=True,
+            thresholds=jev_calibration.DEFAULT_THRESHOLDS,
+        ),
+        (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    path = tmp_path / "calibration_btc_200_v2.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    args = jev_calibration._parse_args(["--aggregate-from", str(path)])
+    rebuilt = await jev_calibration.run_calibration(args)
+
+    assert rebuilt["dataset"]["question_set"] == "v2"
+    assert rebuilt["dataset"]["calibration_context"] is True
+    assert rebuilt == report

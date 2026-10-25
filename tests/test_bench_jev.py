@@ -242,3 +242,23 @@ def test_default_output_respects_env_override(monkeypatch, tmp_path):
     monkeypatch.setenv("JEV_BENCH_OUTPUT", target)
 
     assert bench_jev.default_output_path() == target
+
+
+def test_build_samples_calibration_context_is_optional():
+    """v1 samples stay unchanged; v2 can add the past-only reference block."""
+    candles = bench_jev.synthetic_candles(60, 5)
+    plain = bench_jev.build_samples(candles, "BTC/USDT", "1h", horizons=(1,))
+    contextual = bench_jev.build_samples(
+        candles, "BTC/USDT", "1h", horizons=(1,), calibration_context=True
+    )
+
+    assert "calibration_context" not in plain[-1][1]
+    block = contextual[-1][1]["calibration_context"]
+    assert block["lookback_hours"] == 200
+    assert 0.0 <= block["base_rate_move_1pct"] <= 1.0
+    assert block["realized_vol_24h_pct"] is not None
+    # The optional block is the only difference between the two states.
+    assert {
+        key: value for key, value in contextual[-1][1].items()
+        if key != "calibration_context"
+    } == plain[-1][1]
