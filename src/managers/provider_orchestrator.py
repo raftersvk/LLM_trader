@@ -216,10 +216,16 @@ class ProviderOrchestrator:
         *,
         chart: bool = False,
         chart_image: io.BytesIO | bytes | str | None = None,
-        model: str | None = None
+        model: str | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> InvocationResult:
         """
         Invoke a single provider and return structured result.
+
+        ``response_format`` is an opt-in structured-output request for the
+        signal analysis path only. It is forwarded to providers that support
+        it (LiteLLM/OpenAI-compatible) and ignored elsewhere.
+
         Returns:
             InvocationResult with success status, response, and metadata
         """
@@ -260,7 +266,10 @@ class ProviderOrchestrator:
         if provider == "deepseek":
             return await self._invoke_deepseek(metadata, messages, effective_model, chart, chart_image)
         if provider in ("litellm", "vision_litellm"):
-            return await self._invoke_litellm(metadata, messages, effective_model, chart, chart_image)
+            return await self._invoke_litellm(
+                metadata, messages, effective_model, chart, chart_image,
+                response_format=response_format,
+            )
         return InvocationResult(
             success=False,
             response=ChatResponseModel.from_error(f"Unknown provider '{provider}'"),
@@ -275,7 +284,8 @@ class ProviderOrchestrator:
         *,
         chart: bool = False,
         chart_image: io.BytesIO | bytes | str | None = None,
-        model: str | None = None
+        model: str | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> InvocationResult:
         """
         Try providers in order, returning first successful result.
@@ -286,7 +296,10 @@ class ProviderOrchestrator:
         for provider in self._circuit_open_providers(providers):
             effective_model = self.resolve_model(provider, model)
             self._log_attempt(provider, effective_model, chart)
-            result = await self.invoke(provider, messages, chart=chart, chart_image=chart_image, model=model)
+            result = await self.invoke(
+                provider, messages, chart=chart, chart_image=chart_image,
+                model=model, response_format=response_format,
+            )
             if result.success and not self._is_rate_limited(result.response):
                 if self.provider_health is not None:
                     self.provider_health.record_success(provider)
@@ -313,7 +326,8 @@ class ProviderOrchestrator:
         self,
         effective_provider: str,
         messages: list[dict[str, str]],
-        model: str | None = None
+        model: str | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> InvocationResult:
         """
         Get text response using single provider or fallback chain.
@@ -322,13 +336,15 @@ class ProviderOrchestrator:
         """
         if effective_provider == "all":
             result = await self.invoke_with_fallback(
-                self._all_text_chain(), messages, model=model
+                self._all_text_chain(), messages, model=model, response_format=response_format
             )
             return result
         if self.is_available(effective_provider):
             effective_model = self.resolve_model(effective_provider, model)
             self.logger.info("Using %s model: %s", self._providers[effective_provider].name, effective_model)
-            return await self.invoke(effective_provider, messages, model=model)
+            return await self.invoke(
+                effective_provider, messages, model=model, response_format=response_format,
+            )
         self._log_unavailable_guidance(effective_provider)
         return InvocationResult(
             success=False,
@@ -342,7 +358,8 @@ class ProviderOrchestrator:
         effective_provider: str,
         messages: list[dict[str, str]],
         chart_image: io.BytesIO | bytes | str,
-        model: str | None = None
+        model: str | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> InvocationResult:
         """
         Get chart analysis response using single provider or fallback chain.
@@ -357,7 +374,8 @@ class ProviderOrchestrator:
             if vision_available:
                 chain = ["vision_litellm"] + [p for p in chain if p != "vision_litellm"]
             return await self.invoke_with_fallback(
-                chain, messages, chart=True, chart_image=chart_image, model=model
+                chain, messages, chart=True, chart_image=chart_image, model=model,
+                response_format=response_format,
             )
 
         if effective_provider == "litellm" and vision_available:
@@ -369,6 +387,7 @@ class ProviderOrchestrator:
                 chart=True,
                 chart_image=chart_image,
                 model=model,
+                response_format=response_format,
             )
         if effective_provider == "local":
             return InvocationResult(
@@ -380,7 +399,10 @@ class ProviderOrchestrator:
         if self.is_available(effective_provider):
             effective_model = self.resolve_model(effective_provider, model)
             self.logger.info("Using %s for chart analysis: %s", self._providers[effective_provider].name, effective_model)
-            return await self.invoke(effective_provider, messages, chart=True, chart_image=chart_image, model=model)
+            return await self.invoke(
+                effective_provider, messages, chart=True, chart_image=chart_image,
+                model=model, response_format=response_format,
+            )
         self._log_unavailable_guidance(effective_provider)
         return InvocationResult(
             success=False,
@@ -643,6 +665,7 @@ class ProviderOrchestrator:
         effective_model: str,
         chart: bool,
         chart_image: io.BytesIO | bytes | str | None,
+        response_format: dict[str, Any] | None = None,
     ) -> InvocationResult:
         """Invoke the fork's LiteLLM/OpenCode Go client."""
         is_vision = metadata is self._providers.get("vision_litellm")
@@ -655,14 +678,19 @@ class ProviderOrchestrator:
                 provider=provider_name,
                 model=effective_model,
             )
+        model_config = metadata.config
+        if response_format is not None:
+            # Copy: the provider metadata config is shared process-wide and must
+            # not leak structured-output mode into dashboard/RAG/news calls.
+            model_config = {**metadata.config, "response_format": response_format}
         try:
             if chart and chart_image is not None:
                 response = await client.chat_completion_with_chart_analysis(
-                    effective_model, messages, chart_image, metadata.config
+                    effective_model, messages, chart_image, model_config
                 )
             else:
                 response = await client.chat_completion(
-                    effective_model, messages, metadata.config
+                    effective_model, messages, model_config
                 )
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("LiteLLM invocation failed")

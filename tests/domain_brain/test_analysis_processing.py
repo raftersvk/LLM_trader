@@ -651,3 +651,29 @@ async def test_full_markdown_report_survives_processing_and_python_rr_checks(jso
     block = result["raw_response"].split("```json", 1)[1].rsplit("```", 1)[0]
     assert json.loads(block)["analysis"]["signal"] == result["analysis"]["signal"]
     model_manager.send_prompt_streaming.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_analysis_forwards_response_format_to_text_and_chart_paths():
+    """Only signal callers set response_format; the processor must carry it through."""
+    text_processor, text_manager = make_json_parser_processor(VALID_ANALYSIS_RESPONSE)
+    await text_processor.process_analysis(
+        system_prompt="system", prompt="prompt",
+        response_format={"type": "json_object"},
+    )
+    assert (
+        text_manager.send_prompt_streaming.call_args.kwargs["response_format"]
+        == {"type": "json_object"}
+    )
+
+    chart_processor = make_processor(supports_image=True)
+    await chart_processor.process_analysis(
+        system_prompt="system", prompt="prompt", chart_image=b"img",
+        response_format={"type": "json_object"},
+    )
+    assert (
+        chart_processor.model_manager.send_prompt_with_chart_analysis.call_args.kwargs[
+            "response_format"
+        ]
+        == {"type": "json_object"}
+    )

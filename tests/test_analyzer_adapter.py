@@ -1276,3 +1276,215 @@ async def test_news_ablation_restored_for_shared_rag_engine():
     # A's second cycle must get live news back, not B's neutralized stub.
     await analyzer_a.analyze()
     assert await shared_rag.retrieve_context() == ("LIVE NEWS CONTEXT", {})
+
+
+PROSE_WITHOUT_JSON = (
+    "1) MARKET STRUCTURE: price is below the SMAs. "
+    "2) MOMENTUM: weak. ... 12) DECISION: HOLD"
+)
+REPAIRED_HOLD = '{"action": "HOLD", "confidence": 50, "reasoning": "repaired decision"}'
+
+
+class RepairModelManager(FakeModelManager):
+    """Fake model manager recording the single JSON-repair request."""
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    async def send_prompt(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.replies.pop(0)
+
+
+def _json_parse_error_result(raw: str) -> dict:
+    return {
+        **RESULT_META,
+        "raw_response": raw,
+        "parse_error": "Failed to parse response",
+        "response_validation": {
+            "schema": "1.0",
+            "status": "invalid",
+            "valid": False,
+            "errors": [{"field": "response", "message": "Failed to parse response JSON", "type": "json_parse_error"}],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_json_parse_error_is_repaired_once_and_the_decision_is_used():
+    """Malformed first answer -> one short repair -> parsed valid decision."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=PROSE_WITHOUT_JSON,
+        result=_json_parse_error_result(PROSE_WITHOUT_JSON),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(repair.calls) == 1
+    assert "Return ONLY the JSON object matching the response schema, no prose." in repair.calls[0]["prompt"]
+    assert repair.calls[0]["response_format"] == {"type": "json_object"}
+    assert engine.calls[-1]["response_format"] == {"type": "json_object"}
+    assert signal.action == "HOLD"
+    assert signal.reasoning == "repaired decision"
+    assert signal.risk_approved is False
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_json_parse_error_twice_falls_back_to_exact_hold_reason():
+    """A second malformed answer must stop immediately with the documented reason."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=PROSE_WITHOUT_JSON,
+        result=_json_parse_error_result(PROSE_WITHOUT_JSON),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([PROSE_WITHOUT_JSON + " still prose"])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(repair.calls) == 1, "repair must run exactly once, never loop"
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.reasoning == "invalid LLM output: JSON parse error after repair"
+    assert signal.raw_response_hash == hash_raw_response(PROSE_WITHOUT_JSON)
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_json_format_can_be_disabled_for_signal_analysis():
+    """The [signal_service] opt-in can be turned off explicitly."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=RAW_BUY,
+        result=dict(RESULT_META),
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=False,
+    )
+
+    await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert engine.calls[-1]["response_format"] is None
+
+
+@pytest.mark.asyncio
+async def test_truncated_parse_error_is_rejected_before_repair():
+    """finish_reason=length must keep its guard and never be repaired into a trade."""
+    raw = PROSE_WITHOUT_JSON
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=raw,
+        result=_json_parse_error_result(raw),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager(['{"action": "BUY", "confidence": "HIGH", "stop_loss": 1, "take_profit": 2, "reasoning": "x"}'])
+    engine.model_manager = repair
+    engine.model_manager.last_finish_reason = "length"
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert repair.calls == [], "a truncated answer must not be repaired"
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert "finish_reason=length" in signal.reasoning
+    assert "truncated content" in signal.reasoning
+
+
+@pytest.mark.asyncio
+async def test_empty_parse_error_keeps_the_empty_content_diagnostic():
+    """An empty completion must be reported as empty, not as a failed repair."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response="",
+        result=_json_parse_error_result(""),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert repair.calls == [], "an empty completion has nothing to repair"
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert "empty content" in signal.reasoning
+    assert "JSON parse error after repair" not in signal.reasoning
+
+
+@pytest.mark.asyncio
+async def test_content_filtered_parse_error_is_rejected_before_repair():
+    """finish_reason=content_filter keeps its guard and is never repaired."""
+    raw = PROSE_WITHOUT_JSON
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=raw,
+        result=_json_parse_error_result(raw),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    engine.model_manager.last_finish_reason = "content_filter"
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert repair.calls == []
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert "content filtered" in signal.reasoning
+
+
+ERROR_PAYLOAD = (
+    "```json\n"
+    '{"analysis": {"summary": "Analysis unavailable: Empty response from API. Please try again later."}}\n'
+    "```"
+)
+
+
+@pytest.mark.asyncio
+async def test_repair_error_payload_is_not_mistaken_for_a_decision():
+    """format_error_response() is JSON too, but must not count as a repair."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=PROSE_WITHOUT_JSON,
+        result=_json_parse_error_result(PROSE_WITHOUT_JSON),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([ERROR_PAYLOAD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(repair.calls) == 1
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.reasoning == "invalid LLM output: JSON parse error after repair"
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_repair_honours_the_json_format_opt_out():
+    """When structured output is disabled, the repair must not send response_format."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=PROSE_WITHOUT_JSON,
+        result=_json_parse_error_result(PROSE_WITHOUT_JSON),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=False,
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(repair.calls) == 1
+    assert repair.calls[0]["response_format"] is None
+    assert engine.calls[-1]["response_format"] is None
+    assert signal.reasoning == "repaired decision"

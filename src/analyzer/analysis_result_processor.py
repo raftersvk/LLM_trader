@@ -43,7 +43,8 @@ class AnalysisResultProcessor:
 
     async def process_analysis(self, system_prompt: str, prompt: str,
                               chart_image: io.BytesIO | bytes | str | None = None,
-                              provider: str | None = None, model: str | None = None) -> dict[str, Any]:
+                              provider: str | None = None, model: str | None = None,
+                              response_format: dict | None = None) -> dict[str, Any]:
         # pylint: disable=too-many-arguments, too-many-positional-arguments
         """
         Process analysis by sending prompts to AI model and formatting response.
@@ -67,7 +68,8 @@ class AnalysisResultProcessor:
                     chart_image=chart_image,
                     system_message=system_prompt,
                     provider=provider,
-                    model=model
+                    model=model,
+                    response_format=response_format,
                 )
             except (ValueError, Exception) as chart_error:  # pylint: disable=broad-exception-caught  # noqa: BLE001
                 self.logger.warning("Chart analysis failed: %s. Falling back to text-only analysis.", chart_error)
@@ -75,14 +77,16 @@ class AnalysisResultProcessor:
                     prompt=prompt,
                     system_message=system_prompt,
                     provider=provider,
-                    model=model
+                    model=model,
+                    response_format=response_format,
                 )
         else:
             complete_response = await self.model_manager.send_prompt_streaming(
                 prompt=prompt,
                 system_message=system_prompt,
                 provider=provider,
-                model=model
+                model=model,
+                response_format=response_format,
             )
 
         self.logger.debug("Received response from AI model")
@@ -118,6 +122,7 @@ class AnalysisResultProcessor:
                 system_message=system_prompt,
                 provider=provider,
                 model=model,
+                response_format=response_format,
             )
             cleaned_response = self._clean_response(complete_response)
             parsed_response = self.unified_parser.parse_ai_response(cleaned_response)

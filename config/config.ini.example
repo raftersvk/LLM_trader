@@ -395,3 +395,11 @@ timeout_seconds = 8
 # base_url = https://opencode.ai/inference/systemone
 # model = jev-1.13-free
 # api_key_env =
+
+
+# === Signal service ===
+[signal_service]
+# Ask the signal-analysis LLM for a single JSON object (response_format=json_object).
+# Only the signal path opts in; dashboard, RAG and news calls are unchanged.
+# Providers that reject the parameter are retried once without it.
+json_response_format = true
