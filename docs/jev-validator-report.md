@@ -48,8 +48,9 @@ From the repository root, with the project venv:
 
 Weekly routine:
 
-1. Run the command above (the default `--signals-dir` already points at the
-   live directory; it is treated as read-only).
+1. Run the command above. The explicit `--signals-dir` points at the live
+   stack; without it the tool uses `$LLM_TRADER_SIGNALS_DIR` or the repo-local
+   `data/signals`, like the other signal readers. The directory is read-only.
 2. Open `runtime/jev_bench/jev_validator_report.md`.
 3. Read the sample table first: if `BUY/SELL signals collected` is below
    `--target`, do not draw a conclusion.

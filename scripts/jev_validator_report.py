@@ -41,11 +41,11 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.signal_service.contract import parse_iso, timeframe_seconds  # noqa: E402
+from src.signal_service.storage import default_signals_dir  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_SIGNALS_DIR = "/home/djelinux/TradingBots/trading-stack/runtime/signals"
 DEFAULT_COST_PCT = 0.10
 DEFAULT_HORIZONS = (1, 2, 4)
 DEFAULT_TARGET = 200
@@ -1063,6 +1063,22 @@ def parse_horizons(value: str) -> Tuple[int, ...]:
     return tuple(sorted(set(horizons)))
 
 
+def resolve_signals_dir(value: Optional[str]) -> str:
+    """Resolve the signals directory, honoring ``LLM_TRADER_SIGNALS_DIR``.
+
+    An explicit ``--signals-dir`` always wins. Otherwise the shared
+    ``default_signals_dir()`` resolver is used, so the tool behaves like every
+    other signal reader instead of assuming this machine's live-stack path.
+
+    Args:
+        value: Explicit ``--signals-dir`` value, or None.
+
+    Returns:
+        The directory to read.
+    """
+    return value if value else default_signals_dir()
+
+
 def _ensure_outside(path: str, forbidden_dir: str, label: str) -> None:
     """Refuse to write under the read-only signals directory."""
     if not forbidden_dir:
@@ -1081,8 +1097,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--signals-dir",
-        default=DEFAULT_SIGNALS_DIR,
-        help="directory holding the per-pair signal JSONL files (read-only)",
+        default=None,
+        help=(
+            "directory holding the per-pair signal JSONL files, read-only "
+            "(default: $LLM_TRADER_SIGNALS_DIR or <repo>/data/signals; the live "
+            "stack uses .../trading-stack/runtime/signals)"
+        ),
     )
     parser.add_argument(
         "--cost-pct",
@@ -1148,11 +1168,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise SystemExit("--cost-pct must be non-negative")
     if args.target <= 0:
         raise SystemExit("--target must be positive")
-    _ensure_outside(args.out, args.signals_dir, "the report")
+    signals_dir = resolve_signals_dir(args.signals_dir)
+    _ensure_outside(args.out, signals_dir, "the report")
     if args.candles_cache:
-        _ensure_outside(args.candles_cache, args.signals_dir, "the candle cache")
+        _ensure_outside(args.candles_cache, signals_dir, "the candle cache")
 
-    records, stats = load_signals(args.signals_dir)
+    records, stats = load_signals(signals_dir)
     source = CcxtCandleSource(cache_dir=args.candles_cache or None)
     candles, notes = _collect_candles(records, source, args.horizons)
     evaluations = evaluate_signals(records, candles, args.horizons, args.cost_pct)
@@ -1164,7 +1185,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         stats,
         notes,
     )
-    report = render_report(data, args.signals_dir)
+    report = render_report(data, signals_dir)
 
     out_dir = os.path.dirname(os.path.abspath(args.out))
     if out_dir:

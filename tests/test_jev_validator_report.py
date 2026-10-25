@@ -417,3 +417,10 @@ def test_load_signals_rejects_bad_timeframe_and_string_flag(tmp_path):
     assert len(records) == 1
     assert records[0].risk_approved is False
     assert report.classify_signal(records[0]) == ("other_rejected", None, None)
+
+
+def test_resolve_signals_dir_honors_env_and_explicit_override(monkeypatch, tmp_path):
+    """The default follows LLM_TRADER_SIGNALS_DIR; an explicit flag wins."""
+    monkeypatch.setenv("LLM_TRADER_SIGNALS_DIR", str(tmp_path))
+    assert report.resolve_signals_dir(None) == str(tmp_path)
+    assert report.resolve_signals_dir("/explicit/signals") == "/explicit/signals"
