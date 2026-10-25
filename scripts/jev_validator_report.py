@@ -904,12 +904,15 @@ def _render_overall_pnl(data: ReportData) -> List[str]:
     for horizon in data.horizons:
         stats = data.overall[horizon]
         approved_net = stats.approved_net_pct if stats.approved_evaluable else None
-        avoided_net = stats.vetoed_net_pct if stats.vetoed_evaluable else None
+        priced = bool(stats.vetoed_evaluable)
+        avoided_net = stats.vetoed_net_pct if priced else None
+        false_cost = stats.false_veto_cost_pct if priced else None
+        loss_avoided = stats.loss_avoided_pct if priced else None
         lines.append(
             f"| {horizon}h | {stats.approved_evaluable} | {_signed_pct(approved_net)} "
             f"| {stats.vetoed_evaluable} | {_signed_pct(avoided_net)} "
-            f"| {stats.false_veto_count} | {_signed_pct(stats.false_veto_cost_pct)} "
-            f"| {_signed_pct(stats.loss_avoided_pct)} | {stats.skipped_horizon} |"
+            f"| {stats.false_veto_count} | {_signed_pct(false_cost)} "
+            f"| {_signed_pct(loss_avoided)} | {stats.skipped_horizon} |"
         )
     lines.append("")
     return lines
@@ -926,11 +929,13 @@ def _render_symbol_pnl(data: ReportData) -> List[str]:
         for horizon in data.horizons:
             stats = summary.horizons[horizon]
             approved_net = stats.approved_net_pct if stats.approved_evaluable else None
-            avoided_net = stats.vetoed_net_pct if stats.vetoed_evaluable else None
+            priced = bool(stats.vetoed_evaluable)
+            avoided_net = stats.vetoed_net_pct if priced else None
+            false_cost = stats.false_veto_cost_pct if priced else None
             lines.append(
                 f"| {summary.symbol} | {horizon}h | {_signed_pct(approved_net)} "
                 f"| {stats.vetoed_evaluable} | {_signed_pct(avoided_net)} "
-                f"| {stats.false_veto_count} | {_signed_pct(stats.false_veto_cost_pct)} |"
+                f"| {stats.false_veto_count} | {_signed_pct(false_cost)} |"
             )
     lines.append("")
     return lines
@@ -1014,9 +1019,13 @@ def _render_verdict(data: ReportData) -> List[str]:
         stats = data.overall[horizon]
         validated, reason = horizon_validated(stats, data.sample_is_sufficient)
         state = "VALIDATED" if validated else "NOT VALIDATED"
+        # Defaults stay 0.0 when nothing was priced; print n/a instead of a
+        # measured-looking zero, matching the P&L tables.
+        avoided = stats.vetoed_net_pct if stats.vetoed_evaluable else None
+        false_cost = stats.false_veto_cost_pct if stats.vetoed_evaluable else None
         lines.append(
-            f"- {horizon}h: **{state}** ({reason}); avoided {_signed_pct(stats.vetoed_net_pct)}, "
-            f"false-veto cost {_signed_pct(stats.false_veto_cost_pct)}."
+            f"- {horizon}h: **{state}** ({reason}); avoided {_signed_pct(avoided)}, "
+            f"false-veto cost {_signed_pct(false_cost)}."
         )
     lines.extend(
         [

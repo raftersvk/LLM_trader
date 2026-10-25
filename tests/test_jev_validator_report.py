@@ -556,3 +556,22 @@ def test_collect_candles_uses_hour_window():
 
     assert len(calls) == 1
     assert calls[0][3] - calls[0][2] == timedelta(hours=4)
+
+
+def test_verdict_prints_na_when_nothing_was_priced():
+    """No evaluated veto prints n/a, never a measured-looking +0.00%."""
+    record = _record(
+        "2026-01-01T00:00:00Z",
+        "SELL",
+        reasoning="[JEV veto: not tradeable (noul=0.200 < 0.5)]",
+        timeframe="4h",
+    )
+    candles = {
+        ("BTC/USDT", "4h"): [_candle("2026-01-01T00:00:00Z", 100.0)]
+    }
+    evaluated = report.evaluate_signals([record], candles, (1,), 0.10)
+    data = report.summarize(evaluated, (1,), 0.10, 1, report.LoadStats())
+    text = report.render_report(data, "<signals-dir>")
+
+    assert "- 1h: **NOT VALIDATED** (fewer than 20 vetoed signals with candles); avoided n/a, false-veto cost n/a." in text
+    assert "+0.00%" not in text
