@@ -489,6 +489,39 @@ def test_fresh_run_default_cost_is_applied_only_when_resolved():
     jev_calibration._apply_run_defaults(args)
     assert args.cost_pct == pytest.approx(0.10)
 
+
+def test_market_type_defaults_to_spot_and_can_be_overridden():
+    """Reports record the market type, defaulting to spot for older inputs."""
+    args = jev_calibration._parse_args(["--candles", "candles.csv"])
+    assert args.market_type is None
+    jev_calibration._apply_run_defaults(args)
+    assert args.market_type == "spot"
+
+    default_report = jev_calibration.build_report(
+        [_full_record(0, 0.4), _full_record(1, 0.6)], _source_args(), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert default_report["dataset"]["market_type"] == "spot"
+
+    # A parsed Namespace keeps market_type=None until defaults are applied.
+    none_report = jev_calibration.build_report(
+        [_full_record(0, 0.4), _full_record(1, 0.6)],
+        _source_args(market_type=None), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert none_report["dataset"]["market_type"] == "spot"
+
+    futures_args = jev_calibration._parse_args(
+        ["--candles", "futures.csv", "--market-type", "futures"]
+    )
+    assert futures_args.market_type == "futures"
+    futures_report = jev_calibration.build_report(
+        [_full_record(0, 0.4), _full_record(1, 0.6)],
+        _source_args(market_type="futures"), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert futures_report["dataset"]["market_type"] == "futures"
+
 def test_validate_calibration_report_accepts_and_rejects():
     """Validation requires a dataset, a non-empty states list and state keys."""
     report = jev_calibration.build_report(
