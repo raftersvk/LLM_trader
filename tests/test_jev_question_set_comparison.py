@@ -211,6 +211,8 @@ def _full_report(
         labels,
         ups,
     )
+    for index, state in enumerate(report["states"]):
+        state["candle_open_time"] = f"2026-01-01T{index:02d}:00:00Z"
     report["dataset"].update(
         {
             "question_set": question_set,
@@ -300,3 +302,68 @@ def test_build_comparison_derives_provenance_from_reports(tmp_path):
     assert summary["v2_calibration_context"] is True
     assert summary["v1_dataset_signatures"]["BTC/USDT"]["candles"] == 700
     assert summary["all_pairs_use_same_states"] is True
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("source", "other_snapshot.csv"),
+        ("timeframe", "4h"),
+        ("horizon", 2),
+        ("move_threshold_pct", 2.0),
+        ("candles", 600),
+        ("states", 100),
+    ],
+)
+def test_verify_pair_rejects_each_dataset_field_mismatch(field, value):
+    """Each dataset identity field can independently block the pairing."""
+    labels = [False, True, False]
+    ups = [False, True, True]
+    v1 = _full_report("BTC/USDT", "v1", False, labels, ups)
+    v2 = _full_report("BTC/USDT", "v2", True, labels, ups)
+    v2["dataset"][field] = value
+
+    with pytest.raises(SystemExit, match="datasets differ"):
+        comparison._verify_pair("BTC/USDT", v1, v2)
+
+
+def test_verify_pair_rejects_different_candle_times():
+    """Same index numbers are not enough if they name different candles."""
+    labels = [False, True]
+    ups = [False, True]
+    v1 = _full_report("BTC/USDT", "v1", False, labels, ups)
+    v2 = _full_report("BTC/USDT", "v2", True, labels, ups)
+    v2["states"][1]["candle_open_time"] = "2026-02-01T00:00:00Z"
+
+    with pytest.raises(SystemExit, match="names different candles"):
+        comparison._verify_pair("BTC/USDT", v1, v2)
+
+
+def test_build_comparison_lists_aborted_reports(tmp_path):
+    """A 429-truncated report is excluded from metrics and surfaced."""
+    labels = [False, True, False, True]
+    ups = [False, True, False, True]
+    v1_path = tmp_path / "calibration_btc_200_v1.json"
+    v2_path = tmp_path / "calibration_btc_200_v2.json"
+    aborted_path = tmp_path / "calibration_eth_200_v2.json"
+    v1_path.write_text(
+        __import__("json").dumps(_full_report("BTC/USDT", "v1", False, labels, ups)),
+        encoding="utf-8",
+    )
+    v2_path.write_text(
+        __import__("json").dumps(_full_report("BTC/USDT", "v2", True, labels, ups)),
+        encoding="utf-8",
+    )
+    aborted = _full_report("ETH/USDT", "v2", True, labels, ups)
+    aborted["aborted"] = True
+    aborted["abort_reason"] = "JEV rate limited (429)"
+    aborted["scoring"] = {"calls": 200, "scored": 80}
+    aborted_path.write_text(__import__("json").dumps(aborted), encoding="utf-8")
+
+    summary = comparison.build_comparison(
+        [str(v1_path)], [str(v2_path), str(aborted_path)], resamples=50, seed=7
+    )
+
+    assert [row["symbol"] for row in summary["aborted_reports"]] == ["ETH/USDT"]
+    assert summary["aborted_reports"][0]["scored"] == 80
+    assert [row["symbol"] for row in summary["symbols"]] == ["BTC/USDT"]
