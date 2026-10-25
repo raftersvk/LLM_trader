@@ -322,6 +322,19 @@ class PairAnalyzer:
         try:
             draft = self._extract_draft(result, raw_response)
 
+            # Part of the invalid-response guard above: a completion that only
+            # yields an empty/whitespace reasoning is unusable. Accepting it
+            # would persist a maximum-confidence HOLD backed by no analysis.
+            if not draft.reasoning.strip():
+                logger.warning("Invalid LLM response for %s: empty reasoning", self.symbol)
+                return self._hold_fallback(
+                    reasoning="invalid LLM output: empty reasoning",
+                    candle_open_dt=candle_open_dt,
+                    model=draft.model,
+                    provider=draft.provider,
+                    raw_response_hash=draft.raw_response_hash,
+                )
+
             post_result: Optional[GateResult] = None
             if self.jev_gate is not None and self.jev_gate.uses_post() and draft.action in ("BUY", "SELL"):
                 # Rebuild the state from the just-refreshed context: after
@@ -461,7 +474,8 @@ class PairAnalyzer:
         """Return why an LLM response is unusable, or None when it is usable.
 
         Detects the silent-HOLD trap: an empty/truncated completion must never
-        become a clean, risk-approved HOLD.
+        become a clean, risk-approved HOLD. The matching check on the extracted
+        reasoning (empty/whitespace-only) runs in ``analyze`` after extraction.
         """
         if not isinstance(result, dict):
             return "invalid LLM response: no result"

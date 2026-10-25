@@ -617,6 +617,61 @@ async def test_empty_truncated_response_is_not_a_clean_hold():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reasoning", ["", "   ", "\n\t "])
+async def test_empty_reasoning_response_is_an_invalid_hold(reasoning):
+    """An empty reasoning must never become a max-confidence, clean HOLD."""
+    raw = "```json\n" + json.dumps(
+        {"action": "HOLD", "confidence": 100, "reasoning": reasoning}
+    ) + "\n```"
+    engine = _attach_unified_parser(
+        FakeEngine(raw_response=raw, result=dict(RESULT_META), config=FakeEngineConfig())
+    )
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-24T17:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.confidence == 0.0
+    assert signal.risk_approved is False
+    assert signal.sl is None and signal.tp is None
+    assert "empty reasoning" in signal.reasoning
+    assert signal.model == "deepseek-v4.1-flash"
+    assert signal.provider == "litellm"
+    assert signal.raw_response_hash == hash_raw_response(raw)
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_non_empty_reasoning_keeps_action_and_confidence():
+    """A short but non-empty reasoning is legitimate: pass through untouched."""
+    raw = "```json\n" + json.dumps(
+        {"action": "HOLD", "confidence": 100, "reasoning": "ok"}
+    ) + "\n```"
+    engine = _attach_unified_parser(FakeEngine(raw_response=raw, result=dict(RESULT_META)))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-24T20:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.confidence == 1.0
+    assert signal.reasoning == "ok"
+    assert signal.raw_response_hash == hash_raw_response(raw)
+
+
+@pytest.mark.asyncio
+async def test_non_empty_reasoning_keeps_buy_action():
+    """A BUY with a non-empty reasoning is never downgraded by the guard."""
+    engine = _attach_unified_parser(FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META)))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze()
+
+    assert signal.action == "BUY"
+    assert signal.confidence == 0.90
+    assert signal.reasoning == "breakout"
+
+
+@pytest.mark.asyncio
 async def test_invalid_response_reports_real_model_not_unspecified():
     """A parsed response that reports 'unspecified' must use the configured model."""
     engine = FakeEngine(
