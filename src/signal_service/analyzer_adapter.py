@@ -69,6 +69,9 @@ JSON_REPAIR_SYSTEM = (
 #: narrative normally sit at the end, so keep the tail when truncating.
 MAX_REPAIR_SOURCE_CHARS = 24000
 REPAIR_FAILED_REASON = "invalid LLM output: JSON parse error after repair"
+#: Keys that make a repaired object a decision rather than a parser/provider error payload.
+_DECISION_KEYS = frozenset({"action", "recommendation", "signal", "decision"})
+_DECISION_CONTAINERS = ("analysis", "trading_decision", "decision")
 
 
 def _as_utc(moment: datetime) -> datetime:
@@ -574,6 +577,24 @@ class PairAnalyzer:
         reason = getattr(model_manager, "last_finish_reason", None)
         return str(reason) if reason else None
 
+    @classmethod
+    def _has_decision_payload(cls, parsed: Any) -> bool:
+        """Return True when a parsed object actually carries a trading decision.
+
+        A bare JSON object is not enough: ``format_error_response`` is also a
+        fenced JSON object (``{"analysis": {"summary": ...}}``), so accepting it
+        would turn a failed provider call into a fake "successful" repair.
+        """
+        if not isinstance(parsed, dict):
+            return False
+        if any(key in parsed for key in _DECISION_KEYS):
+            return True
+        for container_key in _DECISION_CONTAINERS:
+            nested = parsed.get(container_key)
+            if isinstance(nested, dict) and any(key in nested for key in _DECISION_KEYS):
+                return True
+        return False
+
     async def _repair_json_response(
         self, result: Any, raw_response: str,
     ) -> Optional[tuple[Dict[str, Any], str]]:
@@ -614,7 +635,11 @@ class PairAnalyzer:
         if parser is None:
             return None
         parsed = parser.parse_json_object(repaired_text)
-        if parsed is None:
+        if parsed is None or not self._has_decision_payload(parsed):
+            logger.warning(
+                "JSON repair for %s returned no decision payload; treating it as failed",
+                self.symbol,
+            )
             return None
         repaired_result = dict(result) if isinstance(result, dict) else {}
         repaired_result.pop("parse_error", None)

@@ -1438,3 +1438,31 @@ async def test_content_filtered_parse_error_is_rejected_before_repair():
     assert signal.action == "HOLD"
     assert signal.risk_approved is False
     assert "content filtered" in signal.reasoning
+
+
+ERROR_PAYLOAD = (
+    "```json\n"
+    '{"analysis": {"summary": "Analysis unavailable: Empty response from API. Please try again later."}}\n'
+    "```"
+)
+
+
+@pytest.mark.asyncio
+async def test_repair_error_payload_is_not_mistaken_for_a_decision():
+    """format_error_response() is JSON too, but must not count as a repair."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=PROSE_WITHOUT_JSON,
+        result=_json_parse_error_result(PROSE_WITHOUT_JSON),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([ERROR_PAYLOAD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(repair.calls) == 1
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.reasoning == "invalid LLM output: JSON parse error after repair"
+    signal.validate()
