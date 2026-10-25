@@ -145,8 +145,19 @@ def build_samples(
     timeframe: str,
     warmup: int = 30,
     horizons: Sequence[int] = DEFAULT_HORIZONS,
+    calibration_context: bool = False,
 ) -> List[Tuple[int, Dict[str, Any], Dict[int, float]]]:
-    """Build (index, state, forward returns) samples with strict no-look-ahead."""
+    """Build (index, state, forward returns) samples with strict no-look-ahead.
+
+    Args:
+        candles: Closed OHLCV candles ordered oldest first.
+        symbol: Trading pair.
+        timeframe: Candle timeframe label.
+        warmup: Candles skipped before the first evaluable state.
+        horizons: Forward horizons in candles.
+        calibration_context: Include the optional v2 reference block in each
+            state. It is computed from closed candles only.
+    """
     period = timeframe_seconds(timeframe)
     rows = [[c.open, c.high, c.low, c.close, c.volume] for c in candles]
     timestamps = [c.open_at for c in candles]
@@ -163,6 +174,7 @@ def build_samples(
                 candles=history_rows,
                 timestamps=history_times,
                 as_of=as_of,
+                calibration_context=calibration_context,
             )
         except ValueError:
             continue

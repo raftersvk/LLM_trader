@@ -32,6 +32,24 @@ logger = logging.getLogger(__name__)
 ALLOWED_BIAS = frozenset({"long", "short", "none"})
 ALLOWED_REGIME = frozenset({"trend", "range", "high_vol", "low_vol"})
 DEFAULT_TRADEABILITY_THRESHOLD = 0.5
+#: Default question set. v1 is the production wording and must stay the
+#: default so every existing run is byte-comparable.
+DEFAULT_QUESTION_SET = "v1"
+QUESTION_SETS = ("v1", "v2")
+#: Calibration context lookback and magnitude reference used by v2 states.
+CALIBRATION_LOOKBACK_HOURS = 200
+CALIBRATION_VOL_HOURS = 24
+CALIBRATION_MOVE_THRESHOLD_PCT = 1.0
+
+
+def normalize_question_set(value: Any) -> str:
+    """Return a validated question-set name (``v1`` or ``v2``)."""
+    text = str(value).strip().lower()
+    if text not in QUESTION_SETS:
+        raise ValueError(
+            f"Unknown JEV question set: {value!r} (expected {'|'.join(QUESTION_SETS)})"
+        )
+    return text
 
 
 class JevMode(str, Enum):
@@ -114,12 +132,66 @@ def closed_candles(
     return kept
 
 
+def _calibration_context(closes: Sequence[float]) -> Dict[str, Any]:
+    """Return the optional v2 reference block computed from past closes only.
+
+    The block is a small, documented summary of how this symbol has behaved
+    before ``as_of``; it never reads a future candle.
+
+    Formula (all candles are already closed and ordered oldest first):
+
+    * ``hourly_returns`` are simple returns ``close[i] / close[i-1] - 1`` for
+      adjacent closed candles with a non-zero previous close. Only the last
+      ``CALIBRATION_LOOKBACK_HOURS`` (200) returns are used.
+    * ``base_rate_move_1pct`` is the share of those returns whose absolute
+      value is at least ``CALIBRATION_MOVE_THRESHOLD_PCT`` percent.
+    * ``realized_vol_24h_pct`` is 100 times the population standard deviation
+      of the last ``CALIBRATION_VOL_HOURS`` (24) hourly simple returns, i.e.
+      the one-day dispersion of hourly returns in percent, not an annualised
+      volatility.
+
+    A zero previous close is skipped instead of raising ``ZeroDivisionError``.
+    Fields that cannot be computed from the available history are ``None``.
+    """
+    returns: List[float] = []
+    for index in range(1, len(closes)):
+        previous = closes[index - 1]
+        if previous == 0.0:
+            continue
+        returns.append(closes[index] / previous - 1.0)
+
+    window = returns[-CALIBRATION_LOOKBACK_HOURS:]
+    threshold = CALIBRATION_MOVE_THRESHOLD_PCT / 100.0
+    base_rate = (
+        sum(1 for value in window if abs(value) >= threshold) / len(window)
+        if window
+        else None
+    )
+    vol_window = returns[-CALIBRATION_VOL_HOURS:]
+    realized_vol_pct = None
+    if len(vol_window) >= 2:
+        mean = sum(vol_window) / len(vol_window)
+        variance = sum((value - mean) ** 2 for value in vol_window) / len(vol_window)
+        realized_vol_pct = 100.0 * math.sqrt(variance)
+
+    return {
+        "lookback_hours": CALIBRATION_LOOKBACK_HOURS,
+        "hourly_returns_used": len(window),
+        "move_threshold_pct": CALIBRATION_MOVE_THRESHOLD_PCT,
+        "base_rate_move_1pct": _round(base_rate, 4),
+        "vol_hours": CALIBRATION_VOL_HOURS,
+        "vol_returns_used": len(vol_window),
+        "realized_vol_24h_pct": _round(realized_vol_pct, 6),
+    }
+
+
 def build_state(
     symbol: str,
     timeframe: str,
     candles: Sequence[Sequence[Any]],
     timestamps: Optional[Sequence[datetime]] = None,
     as_of: Optional[datetime] = None,
+    calibration_context: bool = False,
 ) -> Dict[str, Any]:
     """Build the JEV state from closed candles only.
 
@@ -131,6 +203,8 @@ def build_state(
             fully closed at ``as_of`` is discarded. When omitted, all rows are
             assumed to be closed candles (caller responsibility).
         as_of: Reference time; defaults to the current UTC time.
+        calibration_context: Add the optional v2 reference block computed from
+            past closes only. ``False`` keeps the v1 state byte-comparable.
 
     Returns:
         A JSON-serializable state dict for JEV.
@@ -213,12 +287,14 @@ def build_state(
         },
         "recent_closes": [_round(value) for value in closes[-8:]],
     }
+    if calibration_context:
+        state["calibration_context"] = _calibration_context(closes)
     return state
 
 
 # ------------------------------------------------------------------ questions
-def build_questions() -> Dict[str, Dict[str, Any]]:
-    """Return the four typed JEV questions used by the gate."""
+def _build_questions_v1() -> Dict[str, Dict[str, Any]]:
+    """Return the production v1 question set used by the gate."""
     return {
         "tradeability": {
             "type": "noul",
@@ -271,6 +347,60 @@ def build_questions() -> Dict[str, Dict[str, Any]]:
             ],
         },
     }
+
+
+def _build_questions_v2() -> Dict[str, Dict[str, Any]]:
+    """Return the experiment question set separating magnitude and direction.
+
+    The tradeability question asks only whether a large move is likely,
+    regardless of its sign. The bias question asks only for direction and is
+    explicitly independent of magnitude. Regime and confidence are unchanged
+    from v1 so the only difference is the two questions under test.
+    """
+    questions = _build_questions_v1()
+    questions["tradeability"] = {
+        "type": "noul",
+        "instructions": (
+            "Answer yes if the absolute price change over the next hour is "
+            "likely to be at least 1.0 percent, regardless of direction."
+        ),
+        "criteria": {
+            "true": (
+                "An absolute price change of at least 1.0 percent over the "
+                "next hour is likely, no matter which way price moves."
+            ),
+            "false": (
+                "An absolute price change of at least 1.0 percent over the "
+                "next hour is unlikely."
+            ),
+        },
+    }
+    questions["bias"] = {
+        "type": "choice",
+        "instructions": (
+            "Direction only: which way is price most likely to move over the "
+            "next hour? This is independent of how large the move is."
+        ),
+        "criteria": {
+            "long": "Upward direction is more likely than downward, whatever the size.",
+            "short": "Downward direction is more likely than upward, whatever the size.",
+            "none": "There is no directional edge, whatever the potential size.",
+        },
+    }
+    return questions
+
+
+def build_questions(question_set: str = DEFAULT_QUESTION_SET) -> Dict[str, Dict[str, Any]]:
+    """Return a typed JEV question set.
+
+    Args:
+        question_set: ``v1`` (default, production wording) or ``v2`` (separated
+            magnitude/direction experiment). An unknown value raises
+            ``ValueError`` rather than silently falling back.
+    """
+    if normalize_question_set(question_set) == "v2":
+        return _build_questions_v2()
+    return _build_questions_v1()
 
 
 # --------------------------------------------------------------------- signal

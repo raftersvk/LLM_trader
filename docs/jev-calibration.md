@@ -25,6 +25,10 @@ misleading for a rare label and is not a valid basis for a threshold decision.
   see [`jev-campaign-7-symbols.md`](jev-campaign-7-symbols.md). Its conclusion is
   that no rank-based rejection rule is reliable today in either market, and all
   spot-vs-futures differences are within noise; the fallback stays 0.5.
+- Question-set experiment (v2 separates move magnitude from direction, with a
+  past-only calibration block, 1,400 calls): see
+  [`jev-question-set-v2.md`](jev-question-set-v2.md). It finds no ranking,
+  direction or rejection-rule improvement, so production keeps v1 and 0.5.
 
 ## What changed in this revision
 

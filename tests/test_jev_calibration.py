@@ -821,3 +821,35 @@ def test_report_emits_tradeability_auc_ci():
         "2026-10-15T00:00:00Z", 0.0, False, None, "test",
     )
     assert rebuilt["by_horizon"]["h1"]["auc_ci95"] == metrics["auc_ci95"]
+
+
+def test_report_records_question_set_and_calibration_context():
+    """The experiment provenance is part of the saved report."""
+    report = jev_calibration.build_report(
+        [_full_record(0, 0.4)],
+        _source_args(question_set="v2", calibration_context=True),
+        (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert report["dataset"]["question_set"] == "v2"
+    assert report["dataset"]["calibration_context"] is True
+
+    default = jev_calibration.build_report(
+        [_full_record(0, 0.4)], _source_args(), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert default["dataset"]["question_set"] == "v1"
+    assert default["dataset"]["calibration_context"] is False
+
+
+def test_question_set_cli_options_parse():
+    """v2 and the calibration block are selectable without touching v1."""
+    args = jev_calibration._parse_args(
+        ["--question-set", "v2", "--calibration-context", "--candles", "x.csv"]
+    )
+    assert args.question_set == "v2"
+    assert args.calibration_context is True
+
+    defaults = jev_calibration._parse_args(["--candles", "x.csv"])
+    assert defaults.question_set is None
+    assert defaults.calibration_context is None

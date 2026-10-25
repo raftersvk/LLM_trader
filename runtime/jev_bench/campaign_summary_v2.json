@@ -1,0 +1,1274 @@
+{
+  "kind": "jev-spot-futures-campaign-summary",
+  "horizon": 1,
+  "move_threshold_pct": 1.0,
+  "top_fraction": 0.3,
+  "reject_fractions": [
+    0.3,
+    0.4,
+    0.5
+  ],
+  "bootstrap": {
+    "resamples": 2000,
+    "seed": 20261024
+  },
+  "multiple_testing": {
+    "spot_symbols": 7,
+    "futures_symbols": 0,
+    "symbol_markets": 7,
+    "metric_checks": 35,
+    "note": "7 symbol-market evaluations, each with correlated AUC and rank-rejection checks; a single good-looking symbol is not evidence"
+  },
+  "symbols": [
+    {
+      "symbol": "ARB/USDT",
+      "market_type": "spot",
+      "report": "runtime/jev_bench/ARB_USDT_1h.csv",
+      "model": "vllm-sr/d3-flash",
+      "aborted": false,
+      "abort_reason": null,
+      "calls": 200,
+      "scored": 200,
+      "errors": 0,
+      "rate_limit_errors": 0,
+      "other_errors": 0,
+      "prevalence": {
+        "states": 200,
+        "events": 57,
+        "rate": 0.285,
+        "ci95": {
+          "low": 0.227,
+          "high": 0.3512
+        }
+      },
+      "tradeability_auc": {
+        "auc": 0.5128,
+        "ci95": {
+          "low": 0.4163,
+          "high": 0.6015,
+          "resamples": 2000
+        },
+        "proven_95": false
+      },
+      "top_vs_bottom": {
+        "fraction": 0.3,
+        "top": {
+          "states": 60,
+          "events": 19,
+          "rate": 0.3167,
+          "ci95": {
+            "low": 0.2131,
+            "high": 0.4423
+          }
+        },
+        "bottom": {
+          "states": 60,
+          "events": 19,
+          "rate": 0.3167,
+          "ci95": {
+            "low": 0.2131,
+            "high": 0.4423
+          }
+        },
+        "difference": {
+          "observed": 0.0,
+          "ci95": {
+            "low": -0.1667,
+            "high": 0.1667
+          },
+          "bootstrap_share_diff_le_zero": 0.5665,
+          "resamples": 2000
+        }
+      },
+      "direction": {
+        "states": 200,
+        "up_states": 90,
+        "auc": 0.5543,
+        "ci95": {
+          "low": 0.4735,
+          "high": 0.634,
+          "resamples": 2000
+        },
+        "direction_proven_95": false
+      },
+      "rank_rejection": [
+        {
+          "reject_fraction": 0.3,
+          "skipped_states": 60,
+          "kept_states": 140,
+          "kept": {
+            "states": 140,
+            "events": 38,
+            "rate": 0.2714,
+            "ci95": {
+              "low": 0.2046,
+              "high": 0.3505
+            }
+          },
+          "rejected": {
+            "states": 60,
+            "events": 19,
+            "rate": 0.3167,
+            "ci95": {
+              "low": 0.2131,
+              "high": 0.4423
+            }
+          },
+          "difference": {
+            "observed": -0.0452,
+            "ci95": {
+              "low": -0.1857,
+              "high": 0.1
+            },
+            "bootstrap_share_diff_le_zero": 0.73,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.4,
+          "skipped_states": 80,
+          "kept_states": 120,
+          "kept": {
+            "states": 120,
+            "events": 32,
+            "rate": 0.2667,
+            "ci95": {
+              "low": 0.1957,
+              "high": 0.3521
+            }
+          },
+          "rejected": {
+            "states": 80,
+            "events": 25,
+            "rate": 0.3125,
+            "ci95": {
+              "low": 0.2215,
+              "high": 0.4207
+            }
+          },
+          "difference": {
+            "observed": -0.0458,
+            "ci95": {
+              "low": -0.1833,
+              "high": 0.0833
+            },
+            "bootstrap_share_diff_le_zero": 0.7945,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.5,
+          "skipped_states": 100,
+          "kept_states": 100,
+          "kept": {
+            "states": 100,
+            "events": 29,
+            "rate": 0.29,
+            "ci95": {
+              "low": 0.2101,
+              "high": 0.3854
+            }
+          },
+          "rejected": {
+            "states": 100,
+            "events": 28,
+            "rate": 0.28,
+            "ci95": {
+              "low": 0.2014,
+              "high": 0.3749
+            }
+          },
+          "difference": {
+            "observed": 0.01,
+            "ci95": {
+              "low": -0.13,
+              "high": 0.14
+            },
+            "bootstrap_share_diff_le_zero": 0.502,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        }
+      ],
+      "verdict": "no reliable rejection rule today"
+    },
+    {
+      "symbol": "AVAX/USDT",
+      "market_type": "spot",
+      "report": "runtime/jev_bench/AVAX_USDT_1h.csv",
+      "model": "vllm-sr/d3-flash",
+      "aborted": false,
+      "abort_reason": null,
+      "calls": 200,
+      "scored": 200,
+      "errors": 0,
+      "rate_limit_errors": 0,
+      "other_errors": 0,
+      "prevalence": {
+        "states": 200,
+        "events": 19,
+        "rate": 0.095,
+        "ci95": {
+          "low": 0.0617,
+          "high": 0.1436
+        }
+      },
+      "tradeability_auc": {
+        "auc": 0.506,
+        "ci95": {
+          "low": 0.3494,
+          "high": 0.6559,
+          "resamples": 2000
+        },
+        "proven_95": false
+      },
+      "top_vs_bottom": {
+        "fraction": 0.3,
+        "top": {
+          "states": 60,
+          "events": 6,
+          "rate": 0.1,
+          "ci95": {
+            "low": 0.0466,
+            "high": 0.2015
+          }
+        },
+        "bottom": {
+          "states": 60,
+          "events": 5,
+          "rate": 0.0833,
+          "ci95": {
+            "low": 0.0361,
+            "high": 0.1807
+          }
+        },
+        "difference": {
+          "observed": 0.0167,
+          "ci95": {
+            "low": -0.0833,
+            "high": 0.1167
+          },
+          "bootstrap_share_diff_le_zero": 0.4485,
+          "resamples": 2000
+        }
+      },
+      "direction": {
+        "states": 200,
+        "up_states": 91,
+        "auc": 0.5362,
+        "ci95": {
+          "low": 0.451,
+          "high": 0.6172,
+          "resamples": 2000
+        },
+        "direction_proven_95": false
+      },
+      "rank_rejection": [
+        {
+          "reject_fraction": 0.3,
+          "skipped_states": 60,
+          "kept_states": 140,
+          "kept": {
+            "states": 140,
+            "events": 14,
+            "rate": 0.1,
+            "ci95": {
+              "low": 0.0605,
+              "high": 0.1609
+            }
+          },
+          "rejected": {
+            "states": 60,
+            "events": 5,
+            "rate": 0.0833,
+            "ci95": {
+              "low": 0.0361,
+              "high": 0.1807
+            }
+          },
+          "difference": {
+            "observed": 0.0167,
+            "ci95": {
+              "low": -0.0762,
+              "high": 0.0976
+            },
+            "bootstrap_share_diff_le_zero": 0.3765,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.4,
+          "skipped_states": 80,
+          "kept_states": 120,
+          "kept": {
+            "states": 120,
+            "events": 11,
+            "rate": 0.0917,
+            "ci95": {
+              "low": 0.052,
+              "high": 0.1567
+            }
+          },
+          "rejected": {
+            "states": 80,
+            "events": 8,
+            "rate": 0.1,
+            "ci95": {
+              "low": 0.0515,
+              "high": 0.1851
+            }
+          },
+          "difference": {
+            "observed": -0.0083,
+            "ci95": {
+              "low": -0.1042,
+              "high": 0.0875
+            },
+            "bootstrap_share_diff_le_zero": 0.5815,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.5,
+          "skipped_states": 100,
+          "kept_states": 100,
+          "kept": {
+            "states": 100,
+            "events": 7,
+            "rate": 0.07,
+            "ci95": {
+              "low": 0.0343,
+              "high": 0.1375
+            }
+          },
+          "rejected": {
+            "states": 100,
+            "events": 12,
+            "rate": 0.12,
+            "ci95": {
+              "low": 0.07,
+              "high": 0.1981
+            }
+          },
+          "difference": {
+            "observed": -0.05,
+            "ci95": {
+              "low": -0.13,
+              "high": 0.04
+            },
+            "bootstrap_share_diff_le_zero": 0.869,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        }
+      ],
+      "verdict": "no reliable rejection rule today"
+    },
+    {
+      "symbol": "AXS/USDT",
+      "market_type": "spot",
+      "report": "runtime/jev_bench/AXS_USDT_1h.csv",
+      "model": "vllm-sr/d3-flash",
+      "aborted": false,
+      "abort_reason": null,
+      "calls": 200,
+      "scored": 200,
+      "errors": 0,
+      "rate_limit_errors": 0,
+      "other_errors": 0,
+      "prevalence": {
+        "states": 200,
+        "events": 17,
+        "rate": 0.085,
+        "ci95": {
+          "low": 0.0537,
+          "high": 0.1319
+        }
+      },
+      "tradeability_auc": {
+        "auc": 0.6046,
+        "ci95": {
+          "low": 0.4331,
+          "high": 0.7709,
+          "resamples": 2000
+        },
+        "proven_95": false
+      },
+      "top_vs_bottom": {
+        "fraction": 0.3,
+        "top": {
+          "states": 60,
+          "events": 8,
+          "rate": 0.1333,
+          "ci95": {
+            "low": 0.0691,
+            "high": 0.2417
+          }
+        },
+        "bottom": {
+          "states": 60,
+          "events": 4,
+          "rate": 0.0667,
+          "ci95": {
+            "low": 0.0262,
+            "high": 0.1593
+          }
+        },
+        "difference": {
+          "observed": 0.0667,
+          "ci95": {
+            "low": -0.05,
+            "high": 0.1667
+          },
+          "bootstrap_share_diff_le_zero": 0.16,
+          "resamples": 2000
+        }
+      },
+      "direction": {
+        "states": 200,
+        "up_states": 83,
+        "auc": 0.5583,
+        "ci95": {
+          "low": 0.4717,
+          "high": 0.6433,
+          "resamples": 2000
+        },
+        "direction_proven_95": false
+      },
+      "rank_rejection": [
+        {
+          "reject_fraction": 0.3,
+          "skipped_states": 60,
+          "kept_states": 140,
+          "kept": {
+            "states": 140,
+            "events": 13,
+            "rate": 0.0929,
+            "ci95": {
+              "low": 0.0551,
+              "high": 0.1524
+            }
+          },
+          "rejected": {
+            "states": 60,
+            "events": 4,
+            "rate": 0.0667,
+            "ci95": {
+              "low": 0.0262,
+              "high": 0.1593
+            }
+          },
+          "difference": {
+            "observed": 0.0262,
+            "ci95": {
+              "low": -0.0571,
+              "high": 0.1048
+            },
+            "bootstrap_share_diff_le_zero": 0.2565,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.4,
+          "skipped_states": 80,
+          "kept_states": 120,
+          "kept": {
+            "states": 120,
+            "events": 12,
+            "rate": 0.1,
+            "ci95": {
+              "low": 0.0581,
+              "high": 0.1667
+            }
+          },
+          "rejected": {
+            "states": 80,
+            "events": 5,
+            "rate": 0.0625,
+            "ci95": {
+              "low": 0.027,
+              "high": 0.1381
+            }
+          },
+          "difference": {
+            "observed": 0.0375,
+            "ci95": {
+              "low": -0.0375,
+              "high": 0.1208
+            },
+            "bootstrap_share_diff_le_zero": 0.16,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.5,
+          "skipped_states": 100,
+          "kept_states": 100,
+          "kept": {
+            "states": 100,
+            "events": 11,
+            "rate": 0.11,
+            "ci95": {
+              "low": 0.0625,
+              "high": 0.1863
+            }
+          },
+          "rejected": {
+            "states": 100,
+            "events": 6,
+            "rate": 0.06,
+            "ci95": {
+              "low": 0.0278,
+              "high": 0.1248
+            }
+          },
+          "difference": {
+            "observed": 0.05,
+            "ci95": {
+              "low": -0.03,
+              "high": 0.12
+            },
+            "bootstrap_share_diff_le_zero": 0.155,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        }
+      ],
+      "verdict": "no reliable rejection rule today"
+    },
+    {
+      "symbol": "BTC/USDT",
+      "market_type": "spot",
+      "report": "runtime/jev_bench/BTC_USDT_1h.csv",
+      "model": "vllm-sr/d3-flash",
+      "aborted": false,
+      "abort_reason": null,
+      "calls": 200,
+      "scored": 200,
+      "errors": 0,
+      "rate_limit_errors": 0,
+      "other_errors": 0,
+      "prevalence": {
+        "states": 200,
+        "events": 1,
+        "rate": 0.005,
+        "ci95": {
+          "low": 0.0009,
+          "high": 0.0278
+        }
+      },
+      "tradeability_auc": {
+        "auc": 0.9799,
+        "ci95": {
+          "low": 0.9594,
+          "high": 0.995,
+          "resamples": 2000
+        },
+        "proven_95": true
+      },
+      "top_vs_bottom": {
+        "fraction": 0.3,
+        "top": {
+          "states": 60,
+          "events": 1,
+          "rate": 0.0167,
+          "ci95": {
+            "low": 0.0029,
+            "high": 0.0886
+          }
+        },
+        "bottom": {
+          "states": 60,
+          "events": 0,
+          "rate": 0.0,
+          "ci95": {
+            "low": 0.0,
+            "high": 0.0602
+          }
+        },
+        "difference": {
+          "observed": 0.0167,
+          "ci95": {
+            "low": 0.0,
+            "high": 0.05
+          },
+          "bootstrap_share_diff_le_zero": 0.373,
+          "resamples": 2000
+        }
+      },
+      "direction": {
+        "states": 200,
+        "up_states": 104,
+        "auc": 0.5341,
+        "ci95": {
+          "low": 0.4522,
+          "high": 0.6126,
+          "resamples": 2000
+        },
+        "direction_proven_95": false
+      },
+      "rank_rejection": [
+        {
+          "reject_fraction": 0.3,
+          "skipped_states": 60,
+          "kept_states": 140,
+          "kept": {
+            "states": 140,
+            "events": 1,
+            "rate": 0.0071,
+            "ci95": {
+              "low": 0.0013,
+              "high": 0.0393
+            }
+          },
+          "rejected": {
+            "states": 60,
+            "events": 0,
+            "rate": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0602
+            }
+          },
+          "difference": {
+            "observed": 0.0071,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0214
+            },
+            "bootstrap_share_diff_le_zero": 0.373,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.4,
+          "skipped_states": 80,
+          "kept_states": 120,
+          "kept": {
+            "states": 120,
+            "events": 1,
+            "rate": 0.0083,
+            "ci95": {
+              "low": 0.0015,
+              "high": 0.0457
+            }
+          },
+          "rejected": {
+            "states": 80,
+            "events": 0,
+            "rate": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0458
+            }
+          },
+          "difference": {
+            "observed": 0.0083,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.025
+            },
+            "bootstrap_share_diff_le_zero": 0.373,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.5,
+          "skipped_states": 100,
+          "kept_states": 100,
+          "kept": {
+            "states": 100,
+            "events": 1,
+            "rate": 0.01,
+            "ci95": {
+              "low": 0.0018,
+              "high": 0.0545
+            }
+          },
+          "rejected": {
+            "states": 100,
+            "events": 0,
+            "rate": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.037
+            }
+          },
+          "difference": {
+            "observed": 0.01,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.03
+            },
+            "bootstrap_share_diff_le_zero": 0.373,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        }
+      ],
+      "verdict": "no reliable rejection rule today"
+    },
+    {
+      "symbol": "ETH/USDT",
+      "market_type": "spot",
+      "report": "runtime/jev_bench/ETH_USDT_1h.csv",
+      "model": "vllm-sr/d3-flash",
+      "aborted": false,
+      "abort_reason": null,
+      "calls": 200,
+      "scored": 200,
+      "errors": 0,
+      "rate_limit_errors": 0,
+      "other_errors": 0,
+      "prevalence": {
+        "states": 200,
+        "events": 8,
+        "rate": 0.04,
+        "ci95": {
+          "low": 0.0204,
+          "high": 0.0769
+        }
+      },
+      "tradeability_auc": {
+        "auc": 0.5488,
+        "ci95": {
+          "low": 0.2362,
+          "high": 0.852,
+          "resamples": 2000
+        },
+        "proven_95": false
+      },
+      "top_vs_bottom": {
+        "fraction": 0.3,
+        "top": {
+          "states": 60,
+          "events": 4,
+          "rate": 0.0667,
+          "ci95": {
+            "low": 0.0262,
+            "high": 0.1593
+          }
+        },
+        "bottom": {
+          "states": 60,
+          "events": 3,
+          "rate": 0.05,
+          "ci95": {
+            "low": 0.0171,
+            "high": 0.137
+          }
+        },
+        "difference": {
+          "observed": 0.0167,
+          "ci95": {
+            "low": -0.0833,
+            "high": 0.1
+          },
+          "bootstrap_share_diff_le_zero": 0.498,
+          "resamples": 2000
+        }
+      },
+      "direction": {
+        "states": 200,
+        "up_states": 107,
+        "auc": 0.4925,
+        "ci95": {
+          "low": 0.4122,
+          "high": 0.5705,
+          "resamples": 2000
+        },
+        "direction_proven_95": false
+      },
+      "rank_rejection": [
+        {
+          "reject_fraction": 0.3,
+          "skipped_states": 60,
+          "kept_states": 140,
+          "kept": {
+            "states": 140,
+            "events": 5,
+            "rate": 0.0357,
+            "ci95": {
+              "low": 0.0153,
+              "high": 0.0809
+            }
+          },
+          "rejected": {
+            "states": 60,
+            "events": 3,
+            "rate": 0.05,
+            "ci95": {
+              "low": 0.0171,
+              "high": 0.137
+            }
+          },
+          "difference": {
+            "observed": -0.0143,
+            "ci95": {
+              "low": -0.0952,
+              "high": 0.0333
+            },
+            "bootstrap_share_diff_le_zero": 0.7655,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.4,
+          "skipped_states": 80,
+          "kept_states": 120,
+          "kept": {
+            "states": 120,
+            "events": 4,
+            "rate": 0.0333,
+            "ci95": {
+              "low": 0.013,
+              "high": 0.0826
+            }
+          },
+          "rejected": {
+            "states": 80,
+            "events": 4,
+            "rate": 0.05,
+            "ci95": {
+              "low": 0.0196,
+              "high": 0.1216
+            }
+          },
+          "difference": {
+            "observed": -0.0167,
+            "ci95": {
+              "low": -0.075,
+              "high": 0.0375
+            },
+            "bootstrap_share_diff_le_zero": 0.742,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.5,
+          "skipped_states": 100,
+          "kept_states": 100,
+          "kept": {
+            "states": 100,
+            "events": 4,
+            "rate": 0.04,
+            "ci95": {
+              "low": 0.0157,
+              "high": 0.0984
+            }
+          },
+          "rejected": {
+            "states": 100,
+            "events": 4,
+            "rate": 0.04,
+            "ci95": {
+              "low": 0.0157,
+              "high": 0.0984
+            }
+          },
+          "difference": {
+            "observed": 0.0,
+            "ci95": {
+              "low": -0.05,
+              "high": 0.05
+            },
+            "bootstrap_share_diff_le_zero": 0.581,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        }
+      ],
+      "verdict": "no reliable rejection rule today"
+    },
+    {
+      "symbol": "NEXO/USDT",
+      "market_type": "spot",
+      "report": "runtime/jev_bench/NEXO_USDT_1h.csv",
+      "model": "vllm-sr/d3-flash",
+      "aborted": false,
+      "abort_reason": null,
+      "calls": 200,
+      "scored": 200,
+      "errors": 0,
+      "rate_limit_errors": 0,
+      "other_errors": 0,
+      "prevalence": {
+        "states": 200,
+        "events": 6,
+        "rate": 0.03,
+        "ci95": {
+          "low": 0.0138,
+          "high": 0.0639
+        }
+      },
+      "tradeability_auc": {
+        "auc": 0.7414,
+        "ci95": {
+          "low": 0.4654,
+          "high": 0.9746,
+          "resamples": 2000
+        },
+        "proven_95": false
+      },
+      "top_vs_bottom": {
+        "fraction": 0.3,
+        "top": {
+          "states": 60,
+          "events": 4,
+          "rate": 0.0667,
+          "ci95": {
+            "low": 0.0262,
+            "high": 0.1593
+          }
+        },
+        "bottom": {
+          "states": 60,
+          "events": 1,
+          "rate": 0.0167,
+          "ci95": {
+            "low": 0.0029,
+            "high": 0.0886
+          }
+        },
+        "difference": {
+          "observed": 0.05,
+          "ci95": {
+            "low": 0.0,
+            "high": 0.1333
+          },
+          "bootstrap_share_diff_le_zero": 0.078,
+          "resamples": 2000
+        }
+      },
+      "direction": {
+        "states": 200,
+        "up_states": 87,
+        "auc": 0.4612,
+        "ci95": {
+          "low": 0.3838,
+          "high": 0.5431,
+          "resamples": 2000
+        },
+        "direction_proven_95": false
+      },
+      "rank_rejection": [
+        {
+          "reject_fraction": 0.3,
+          "skipped_states": 60,
+          "kept_states": 140,
+          "kept": {
+            "states": 140,
+            "events": 5,
+            "rate": 0.0357,
+            "ci95": {
+              "low": 0.0153,
+              "high": 0.0809
+            }
+          },
+          "rejected": {
+            "states": 60,
+            "events": 1,
+            "rate": 0.0167,
+            "ci95": {
+              "low": 0.0029,
+              "high": 0.0886
+            }
+          },
+          "difference": {
+            "observed": 0.019,
+            "ci95": {
+              "low": -0.019,
+              "high": 0.0714
+            },
+            "bootstrap_share_diff_le_zero": 0.106,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.4,
+          "skipped_states": 80,
+          "kept_states": 120,
+          "kept": {
+            "states": 120,
+            "events": 5,
+            "rate": 0.0417,
+            "ci95": {
+              "low": 0.0179,
+              "high": 0.0938
+            }
+          },
+          "rejected": {
+            "states": 80,
+            "events": 1,
+            "rate": 0.0125,
+            "ci95": {
+              "low": 0.0022,
+              "high": 0.0675
+            }
+          },
+          "difference": {
+            "observed": 0.0292,
+            "ci95": {
+              "low": -0.0208,
+              "high": 0.075
+            },
+            "bootstrap_share_diff_le_zero": 0.1415,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.5,
+          "skipped_states": 100,
+          "kept_states": 100,
+          "kept": {
+            "states": 100,
+            "events": 4,
+            "rate": 0.04,
+            "ci95": {
+              "low": 0.0157,
+              "high": 0.0984
+            }
+          },
+          "rejected": {
+            "states": 100,
+            "events": 2,
+            "rate": 0.02,
+            "ci95": {
+              "low": 0.0055,
+              "high": 0.07
+            }
+          },
+          "difference": {
+            "observed": 0.02,
+            "ci95": {
+              "low": -0.02,
+              "high": 0.07
+            },
+            "bootstrap_share_diff_le_zero": 0.26,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        }
+      ],
+      "verdict": "no reliable rejection rule today"
+    },
+    {
+      "symbol": "SOL/USDT",
+      "market_type": "spot",
+      "report": "runtime/jev_bench/SOL_USDT_1h.csv",
+      "model": "vllm-sr/d3-flash",
+      "aborted": false,
+      "abort_reason": null,
+      "calls": 200,
+      "scored": 200,
+      "errors": 0,
+      "rate_limit_errors": 0,
+      "other_errors": 0,
+      "prevalence": {
+        "states": 200,
+        "events": 7,
+        "rate": 0.035,
+        "ci95": {
+          "low": 0.0171,
+          "high": 0.0705
+        }
+      },
+      "tradeability_auc": {
+        "auc": 0.5218,
+        "ci95": {
+          "low": 0.1718,
+          "high": 0.8523,
+          "resamples": 2000
+        },
+        "proven_95": false
+      },
+      "top_vs_bottom": {
+        "fraction": 0.3,
+        "top": {
+          "states": 60,
+          "events": 3,
+          "rate": 0.05,
+          "ci95": {
+            "low": 0.0171,
+            "high": 0.137
+          }
+        },
+        "bottom": {
+          "states": 60,
+          "events": 3,
+          "rate": 0.05,
+          "ci95": {
+            "low": 0.0171,
+            "high": 0.137
+          }
+        },
+        "difference": {
+          "observed": 0.0,
+          "ci95": {
+            "low": -0.0833,
+            "high": 0.0833
+          },
+          "bootstrap_share_diff_le_zero": 0.564,
+          "resamples": 2000
+        }
+      },
+      "direction": {
+        "states": 200,
+        "up_states": 104,
+        "auc": 0.576,
+        "ci95": {
+          "low": 0.4955,
+          "high": 0.6515,
+          "resamples": 2000
+        },
+        "direction_proven_95": false
+      },
+      "rank_rejection": [
+        {
+          "reject_fraction": 0.3,
+          "skipped_states": 60,
+          "kept_states": 140,
+          "kept": {
+            "states": 140,
+            "events": 4,
+            "rate": 0.0286,
+            "ci95": {
+              "low": 0.0112,
+              "high": 0.0712
+            }
+          },
+          "rejected": {
+            "states": 60,
+            "events": 3,
+            "rate": 0.05,
+            "ci95": {
+              "low": 0.0171,
+              "high": 0.137
+            }
+          },
+          "difference": {
+            "observed": -0.0214,
+            "ci95": {
+              "low": -0.0882,
+              "high": 0.0333
+            },
+            "bootstrap_share_diff_le_zero": 0.743,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.4,
+          "skipped_states": 80,
+          "kept_states": 120,
+          "kept": {
+            "states": 120,
+            "events": 4,
+            "rate": 0.0333,
+            "ci95": {
+              "low": 0.013,
+              "high": 0.0826
+            }
+          },
+          "rejected": {
+            "states": 80,
+            "events": 3,
+            "rate": 0.0375,
+            "ci95": {
+              "low": 0.0128,
+              "high": 0.1045
+            }
+          },
+          "difference": {
+            "observed": -0.0042,
+            "ci95": {
+              "low": -0.0625,
+              "high": 0.0458
+            },
+            "bootstrap_share_diff_le_zero": 0.588,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        },
+        {
+          "reject_fraction": 0.5,
+          "skipped_states": 100,
+          "kept_states": 100,
+          "kept": {
+            "states": 100,
+            "events": 4,
+            "rate": 0.04,
+            "ci95": {
+              "low": 0.0157,
+              "high": 0.0984
+            }
+          },
+          "rejected": {
+            "states": 100,
+            "events": 3,
+            "rate": 0.03,
+            "ci95": {
+              "low": 0.0103,
+              "high": 0.0845
+            }
+          },
+          "difference": {
+            "observed": 0.01,
+            "ci95": {
+              "low": -0.04,
+              "high": 0.06
+            },
+            "bootstrap_share_diff_le_zero": 0.429,
+            "resamples": 2000
+          },
+          "better_than_noise": false
+        }
+      ],
+      "verdict": "no reliable rejection rule today"
+    }
+  ],
+  "futures_symbols": [],
+  "futures_skipped": [
+    {
+      "symbol": "ARB/USDT",
+      "reason": "no futures report supplied"
+    },
+    {
+      "symbol": "AVAX/USDT",
+      "reason": "no futures report supplied"
+    },
+    {
+      "symbol": "AXS/USDT",
+      "reason": "no futures report supplied"
+    },
+    {
+      "symbol": "BTC/USDT",
+      "reason": "no futures report supplied"
+    },
+    {
+      "symbol": "ETH/USDT",
+      "reason": "no futures report supplied"
+    },
+    {
+      "symbol": "NEXO/USDT",
+      "reason": "no Binance USDT-M perpetual market"
+    },
+    {
+      "symbol": "SOL/USDT",
+      "reason": "no futures report supplied"
+    }
+  ],
+  "comparisons": []
+}

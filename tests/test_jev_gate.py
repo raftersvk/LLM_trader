@@ -777,3 +777,76 @@ def test_jev_state_fails_open_on_unexpected_state_error(monkeypatch):
     monkeypatch.setattr("src.signal_service.analyzer_adapter.build_state", _boom)
 
     assert analyzer._jev_state(_timestamps()[-1] + timedelta(hours=1)) is None
+
+
+# ------------------------------------------------------------------- v2 sets
+def test_build_questions_default_is_v1_and_byte_comparable():
+    """The default question set must stay exactly the production v1 payload."""
+    assert build_questions() == build_questions("v1")
+    tradeability = build_questions()["tradeability"]
+    assert "short-term directional trade" in tradeability["instructions"]
+    assert "short-term directional trade" in tradeability["criteria"]["true"]
+
+
+def test_build_questions_v2_separates_magnitude_and_direction():
+    questions = build_questions("v2")
+    assert set(questions) == {"tradeability", "bias", "regime", "confidence"}
+    tradeability = questions["tradeability"]
+    assert tradeability["type"] == "noul"
+    assert set(tradeability["criteria"]) == {"true", "false"}
+    assert "1.0 percent" in tradeability["instructions"]
+    assert "regardless of direction" in tradeability["instructions"]
+    # The magnitude question must not ask for a direction.
+    assert "long" not in tradeability["instructions"].lower()
+    assert "short" not in tradeability["instructions"].lower()
+    bias = questions["bias"]
+    assert "direction only" in bias["instructions"].lower()
+    assert "independent of how large" in bias["instructions"].lower()
+    assert set(bias["criteria"]) == ALLOWED_BIAS
+    # Regime and confidence are identical to v1.
+    v1 = build_questions("v1")
+    assert questions["regime"] == v1["regime"]
+    assert questions["confidence"] == v1["confidence"]
+
+
+def test_build_questions_rejects_unknown_set():
+    with pytest.raises(ValueError):
+        build_questions("v3")
+
+
+def test_v1_state_has_no_calibration_context():
+    state = build_state(SYMBOL, "1h", _candles(), _timestamps(), as_of=BASE + timedelta(hours=6))
+    assert "calibration_context" not in state
+
+
+def test_calibration_context_uses_closed_candles_only():
+    # A huge future shock must not enter any calibration field.
+    candles = _candles(6)
+    candles[4] = [10_000.0, 20_000.0, 9_000.0, 15_000.0, 99.0]
+    as_of = BASE + timedelta(hours=3)
+
+    state = build_state(
+        SYMBOL, "1h", candles, _timestamps(), as_of=as_of, calibration_context=True
+    )
+    block = state["calibration_context"]
+
+    assert state["candles_used"] == 3
+    assert block["lookback_hours"] == 200
+    assert block["hourly_returns_used"] == 2
+    # Closes 100 -> 101 (+1.00 %) -> 102 (+0.99 %): one of two clears 1 %.
+    assert block["base_rate_move_1pct"] == pytest.approx(0.5)
+    assert block["move_threshold_pct"] == pytest.approx(1.0)
+    assert block["vol_returns_used"] == 2
+    assert block["realized_vol_24h_pct"] == pytest.approx(0.0049505, rel=1e-3)
+
+
+def test_calibration_context_ignores_zero_previous_close():
+    rows = [[0.0, 0.0, 0.0, 0.0, 1.0], [1.0, 2.0, 0.5, 1.0, 1.0], [1.0, 3.0, 0.5, 2.0, 1.0]]
+    state = build_state(
+        SYMBOL, "1h", rows, as_of=BASE + timedelta(hours=3), calibration_context=True
+    )
+    block = state["calibration_context"]
+    assert block["hourly_returns_used"] == 1
+    assert block["base_rate_move_1pct"] == pytest.approx(1.0)
+    # One return cannot produce a standard deviation.
+    assert block["realized_vol_24h_pct"] is None

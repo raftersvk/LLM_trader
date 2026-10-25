@@ -1,0 +1,1984 @@
+{
+  "kind": "jev-question-set-comparison",
+  "horizon": 1,
+  "move_threshold_pct": 1.0,
+  "v1_question_set": "v1",
+  "v2_question_set": "v2",
+  "v2_calibration_context": true,
+  "bootstrap": {
+    "resamples": 2000,
+    "seed": 20261024,
+    "paired": true
+  },
+  "multiple_testing": {
+    "symbols": 7,
+    "metric_checks": 42,
+    "familywise_note": "Each symbol contributes correlated tradeability, direction and rejection checks; 7 symbols times 6 checks is about 42 comparisons, so roughly 2 intervals can clear zero by chance at 95 %. A lone symbol is not evidence; look for a consistent pattern and a median delta in the same direction."
+  },
+  "symbols": [
+    {
+      "symbol": "ARB/USDT",
+      "v1_model": "vllm-sr/d3-flash",
+      "v2_model": "vllm-sr/d3-flash",
+      "prevalence": {
+        "states": 200,
+        "events": 57,
+        "rate": 0.285,
+        "ci95": {
+          "low": 0.227,
+          "high": 0.3512
+        }
+      },
+      "tradeability_auc": {
+        "v1": {
+          "value": 0.5537,
+          "ci95": {
+            "low": 0.4588,
+            "high": 0.6437,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.5128,
+          "ci95": {
+            "low": 0.4163,
+            "high": 0.6015,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": -0.0409,
+          "ci95": {
+            "low": -0.1186,
+            "high": 0.0319
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.872,
+          "resamples": 2000
+        }
+      },
+      "direction_auc_noul": {
+        "v1": {
+          "value": 0.5399,
+          "ci95": {
+            "low": 0.4613,
+            "high": 0.6173,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.5543,
+          "ci95": {
+            "low": 0.4735,
+            "high": 0.634,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0144,
+          "ci95": {
+            "low": -0.0514,
+            "high": 0.0801
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.328,
+          "resamples": 2000
+        }
+      },
+      "direction_bias": {
+        "v1": {
+          "value": 0.4897,
+          "ci95": {
+            "low": 0.4139,
+            "high": 0.5631,
+            "resamples": 2000
+          },
+          "directional_states": 142,
+          "coverage": {
+            "value": 0.71,
+            "ci95": {
+              "low": 0.645,
+              "high": 0.77,
+              "resamples": 2000
+            }
+          }
+        },
+        "v2": {
+          "value": 0.4826,
+          "ci95": {
+            "low": 0.4082,
+            "high": 0.5537,
+            "resamples": 2000
+          },
+          "directional_states": 149,
+          "coverage": {
+            "value": 0.745,
+            "ci95": {
+              "low": 0.68,
+              "high": 0.805,
+              "resamples": 2000
+            }
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": -0.0071,
+          "ci95": {
+            "low": -0.0287,
+            "high": 0.0138
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.7395,
+          "resamples": 2000
+        }
+      },
+      "rank_rejection": {
+        "30": {
+          "reject_fraction": 0.3,
+          "v1": {
+            "value": 0.0738,
+            "ci95": {
+              "low": -0.0834,
+              "high": 0.1881,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": -0.0452,
+            "ci95": {
+              "low": -0.1857,
+              "high": 0.1,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": -0.119,
+            "ci95": {
+              "low": -0.2381,
+              "high": 0.0476
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.929,
+            "resamples": 2000
+          }
+        },
+        "40": {
+          "reject_fraction": 0.4,
+          "v1": {
+            "value": 0.0167,
+            "ci95": {
+              "low": -0.1083,
+              "high": 0.1667,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": -0.0458,
+            "ci95": {
+              "low": -0.1833,
+              "high": 0.0833,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": -0.0625,
+            "ci95": {
+              "low": -0.2083,
+              "high": 0.0417
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.9215,
+            "resamples": 2000
+          }
+        },
+        "50": {
+          "reject_fraction": 0.5,
+          "v1": {
+            "value": 0.05,
+            "ci95": {
+              "low": -0.0903,
+              "high": 0.17,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.01,
+            "ci95": {
+              "low": -0.13,
+              "high": 0.14,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": -0.04,
+            "ci95": {
+              "low": -0.16,
+              "high": 0.1
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.7505,
+            "resamples": 2000
+          }
+        }
+      },
+      "v2_rejection_usable_all_cuts": false,
+      "v2_rejection_cuts_better_than_noise": 0
+    },
+    {
+      "symbol": "AVAX/USDT",
+      "v1_model": "vllm-sr/d3-flash",
+      "v2_model": "vllm-sr/d3-flash",
+      "prevalence": {
+        "states": 200,
+        "events": 19,
+        "rate": 0.095,
+        "ci95": {
+          "low": 0.0617,
+          "high": 0.1436
+        }
+      },
+      "tradeability_auc": {
+        "v1": {
+          "value": 0.5097,
+          "ci95": {
+            "low": 0.3591,
+            "high": 0.665,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.506,
+          "ci95": {
+            "low": 0.3494,
+            "high": 0.6559,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": -0.0038,
+          "ci95": {
+            "low": -0.1183,
+            "high": 0.1037
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.5345,
+          "resamples": 2000
+        }
+      },
+      "direction_auc_noul": {
+        "v1": {
+          "value": 0.514,
+          "ci95": {
+            "low": 0.4322,
+            "high": 0.595,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.5362,
+          "ci95": {
+            "low": 0.451,
+            "high": 0.6172,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0223,
+          "ci95": {
+            "low": -0.0576,
+            "high": 0.1017
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.2815,
+          "resamples": 2000
+        }
+      },
+      "direction_bias": {
+        "v1": {
+          "value": 0.4323,
+          "ci95": {
+            "low": 0.3589,
+            "high": 0.5129,
+            "resamples": 2000
+          },
+          "directional_states": 124,
+          "coverage": {
+            "value": 0.62,
+            "ci95": {
+              "low": 0.555,
+              "high": 0.685,
+              "resamples": 2000
+            }
+          }
+        },
+        "v2": {
+          "value": 0.4368,
+          "ci95": {
+            "low": 0.3644,
+            "high": 0.5173,
+            "resamples": 2000
+          },
+          "directional_states": 127,
+          "coverage": {
+            "value": 0.635,
+            "ci95": {
+              "low": 0.5699,
+              "high": 0.695,
+              "resamples": 2000
+            }
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0045,
+          "ci95": {
+            "low": -0.0241,
+            "high": 0.0357
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.378,
+          "resamples": 2000
+        }
+      },
+      "rank_rejection": {
+        "30": {
+          "reject_fraction": 0.3,
+          "v1": {
+            "value": -0.0071,
+            "ci95": {
+              "low": -0.1071,
+              "high": 0.0738,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.0167,
+            "ci95": {
+              "low": -0.0762,
+              "high": 0.0976,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0238,
+            "ci95": {
+              "low": -0.0476,
+              "high": 0.0958
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.3305,
+            "resamples": 2000
+          }
+        },
+        "40": {
+          "reject_fraction": 0.4,
+          "v1": {
+            "value": -0.0083,
+            "ci95": {
+              "low": -0.0875,
+              "high": 0.075,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": -0.0083,
+            "ci95": {
+              "low": -0.1042,
+              "high": 0.0875,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0,
+            "ci95": {
+              "low": -0.1047,
+              "high": 0.1042
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.585,
+            "resamples": 2000
+          }
+        },
+        "50": {
+          "reject_fraction": 0.5,
+          "v1": {
+            "value": 0.01,
+            "ci95": {
+              "low": -0.07,
+              "high": 0.09,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": -0.05,
+            "ci95": {
+              "low": -0.13,
+              "high": 0.04,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": -0.06,
+            "ci95": {
+              "low": -0.14,
+              "high": 0.04
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.9065,
+            "resamples": 2000
+          }
+        }
+      },
+      "v2_rejection_usable_all_cuts": false,
+      "v2_rejection_cuts_better_than_noise": 0
+    },
+    {
+      "symbol": "AXS/USDT",
+      "v1_model": "vllm-sr/d3-flash",
+      "v2_model": "vllm-sr/d3-flash",
+      "prevalence": {
+        "states": 200,
+        "events": 17,
+        "rate": 0.085,
+        "ci95": {
+          "low": 0.0537,
+          "high": 0.1319
+        }
+      },
+      "tradeability_auc": {
+        "v1": {
+          "value": 0.6075,
+          "ci95": {
+            "low": 0.4686,
+            "high": 0.7492,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.6046,
+          "ci95": {
+            "low": 0.4331,
+            "high": 0.7709,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": -0.0029,
+          "ci95": {
+            "low": -0.1741,
+            "high": 0.1438
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.5065,
+          "resamples": 2000
+        }
+      },
+      "direction_auc_noul": {
+        "v1": {
+          "value": 0.5115,
+          "ci95": {
+            "low": 0.4306,
+            "high": 0.5917,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.5583,
+          "ci95": {
+            "low": 0.4717,
+            "high": 0.6433,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0469,
+          "ci95": {
+            "low": -0.0395,
+            "high": 0.1349
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.1425,
+          "resamples": 2000
+        }
+      },
+      "direction_bias": {
+        "v1": {
+          "value": 0.4649,
+          "ci95": {
+            "low": 0.3847,
+            "high": 0.5455,
+            "resamples": 2000
+          },
+          "directional_states": 123,
+          "coverage": {
+            "value": 0.615,
+            "ci95": {
+              "low": 0.545,
+              "high": 0.68,
+              "resamples": 2000
+            }
+          }
+        },
+        "v2": {
+          "value": 0.4586,
+          "ci95": {
+            "low": 0.3789,
+            "high": 0.5373,
+            "resamples": 2000
+          },
+          "directional_states": 130,
+          "coverage": {
+            "value": 0.65,
+            "ci95": {
+              "low": 0.585,
+              "high": 0.715,
+              "resamples": 2000
+            }
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": -0.0063,
+          "ci95": {
+            "low": -0.0439,
+            "high": 0.0309
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.628,
+          "resamples": 2000
+        }
+      },
+      "rank_rejection": {
+        "30": {
+          "reject_fraction": 0.3,
+          "v1": {
+            "value": 0.05,
+            "ci95": {
+              "low": -0.0167,
+              "high": 0.1286,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.0262,
+            "ci95": {
+              "low": -0.0571,
+              "high": 0.1048,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": -0.0238,
+            "ci95": {
+              "low": -0.119,
+              "high": 0.0476
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.8555,
+            "resamples": 2000
+          }
+        },
+        "40": {
+          "reject_fraction": 0.4,
+          "v1": {
+            "value": 0.0375,
+            "ci95": {
+              "low": -0.0333,
+              "high": 0.1208,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.0375,
+            "ci95": {
+              "low": -0.0375,
+              "high": 0.1208,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0,
+            "ci95": {
+              "low": -0.1042,
+              "high": 0.0833
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.631,
+            "resamples": 2000
+          }
+        },
+        "50": {
+          "reject_fraction": 0.5,
+          "v1": {
+            "value": 0.03,
+            "ci95": {
+              "low": -0.05,
+              "high": 0.11,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.05,
+            "ci95": {
+              "low": -0.03,
+              "high": 0.12,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.02,
+            "ci95": {
+              "low": -0.08,
+              "high": 0.12
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.476,
+            "resamples": 2000
+          }
+        }
+      },
+      "v2_rejection_usable_all_cuts": false,
+      "v2_rejection_cuts_better_than_noise": 0
+    },
+    {
+      "symbol": "BTC/USDT",
+      "v1_model": "vllm-sr/d3-flash",
+      "v2_model": "vllm-sr/d3-flash",
+      "prevalence": {
+        "states": 200,
+        "events": 1,
+        "rate": 0.005,
+        "ci95": {
+          "low": 0.0009,
+          "high": 0.0278
+        }
+      },
+      "tradeability_auc": {
+        "v1": {
+          "value": 0.9749,
+          "ci95": {
+            "low": 0.9497,
+            "high": 0.9949,
+            "resamples": 1254
+          }
+        },
+        "v2": {
+          "value": 0.9799,
+          "ci95": {
+            "low": 0.9594,
+            "high": 0.995,
+            "resamples": 1254
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.005,
+          "ci95": {
+            "low": -0.0151,
+            "high": 0.0253
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.4179,
+          "resamples": 1254
+        }
+      },
+      "direction_auc_noul": {
+        "v1": {
+          "value": 0.5135,
+          "ci95": {
+            "low": 0.4325,
+            "high": 0.5929,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.5341,
+          "ci95": {
+            "low": 0.4522,
+            "high": 0.6126,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0205,
+          "ci95": {
+            "low": -0.0575,
+            "high": 0.1064
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.308,
+          "resamples": 2000
+        }
+      },
+      "direction_bias": {
+        "v1": {
+          "value": 0.4673,
+          "ci95": {
+            "low": 0.3811,
+            "high": 0.5498,
+            "resamples": 2000
+          },
+          "directional_states": 124,
+          "coverage": {
+            "value": 0.62,
+            "ci95": {
+              "low": 0.555,
+              "high": 0.6851,
+              "resamples": 2000
+            }
+          }
+        },
+        "v2": {
+          "value": 0.4872,
+          "ci95": {
+            "low": 0.4002,
+            "high": 0.5732,
+            "resamples": 2000
+          },
+          "directional_states": 124,
+          "coverage": {
+            "value": 0.62,
+            "ci95": {
+              "low": 0.55,
+              "high": 0.69,
+              "resamples": 2000
+            }
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0199,
+          "ci95": {
+            "low": -0.0142,
+            "high": 0.0551
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.126,
+          "resamples": 2000
+        }
+      },
+      "rank_rejection": {
+        "30": {
+          "reject_fraction": 0.3,
+          "v1": {
+            "value": 0.0071,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0214,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.0071,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0214,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0
+            },
+            "excludes_zero": false,
+            "share_le_zero": 1.0,
+            "resamples": 2000
+          }
+        },
+        "40": {
+          "reject_fraction": 0.4,
+          "v1": {
+            "value": 0.0083,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.025,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.0083,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.025,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0
+            },
+            "excludes_zero": false,
+            "share_le_zero": 1.0,
+            "resamples": 2000
+          }
+        },
+        "50": {
+          "reject_fraction": 0.5,
+          "v1": {
+            "value": 0.01,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.03,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.01,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.03,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0
+            },
+            "excludes_zero": false,
+            "share_le_zero": 1.0,
+            "resamples": 2000
+          }
+        }
+      },
+      "v2_rejection_usable_all_cuts": false,
+      "v2_rejection_cuts_better_than_noise": 0
+    },
+    {
+      "symbol": "ETH/USDT",
+      "v1_model": "vllm-sr/d3-flash",
+      "v2_model": "vllm-sr/d3-flash",
+      "prevalence": {
+        "states": 200,
+        "events": 8,
+        "rate": 0.04,
+        "ci95": {
+          "low": 0.0204,
+          "high": 0.0769
+        }
+      },
+      "tradeability_auc": {
+        "v1": {
+          "value": 0.5469,
+          "ci95": {
+            "low": 0.2699,
+            "high": 0.8139,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.5488,
+          "ci95": {
+            "low": 0.2362,
+            "high": 0.852,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.002,
+          "ci95": {
+            "low": -0.1375,
+            "high": 0.1296
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.4805,
+          "resamples": 2000
+        }
+      },
+      "direction_auc_noul": {
+        "v1": {
+          "value": 0.4863,
+          "ci95": {
+            "low": 0.4046,
+            "high": 0.5666,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.4925,
+          "ci95": {
+            "low": 0.4122,
+            "high": 0.5705,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0062,
+          "ci95": {
+            "low": -0.0682,
+            "high": 0.0786
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.436,
+          "resamples": 2000
+        }
+      },
+      "direction_bias": {
+        "v1": {
+          "value": 0.4939,
+          "ci95": {
+            "low": 0.409,
+            "high": 0.5791,
+            "resamples": 2000
+          },
+          "directional_states": 129,
+          "coverage": {
+            "value": 0.645,
+            "ci95": {
+              "low": 0.575,
+              "high": 0.71,
+              "resamples": 2000
+            }
+          }
+        },
+        "v2": {
+          "value": 0.4896,
+          "ci95": {
+            "low": 0.4023,
+            "high": 0.5733,
+            "resamples": 2000
+          },
+          "directional_states": 130,
+          "coverage": {
+            "value": 0.65,
+            "ci95": {
+              "low": 0.585,
+              "high": 0.7101,
+              "resamples": 2000
+            }
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": -0.0042,
+          "ci95": {
+            "low": -0.0372,
+            "high": 0.0264
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.6115,
+          "resamples": 2000
+        }
+      },
+      "rank_rejection": {
+        "30": {
+          "reject_fraction": 0.3,
+          "v1": {
+            "value": 0.0095,
+            "ci95": {
+              "low": -0.0524,
+              "high": 0.0619,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": -0.0143,
+            "ci95": {
+              "low": -0.0952,
+              "high": 0.0333,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": -0.0238,
+            "ci95": {
+              "low": -0.0952,
+              "high": 0.0
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.998,
+            "resamples": 2000
+          }
+        },
+        "40": {
+          "reject_fraction": 0.4,
+          "v1": {
+            "value": -0.0167,
+            "ci95": {
+              "low": -0.0625,
+              "high": 0.0583,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": -0.0167,
+            "ci95": {
+              "low": -0.075,
+              "high": 0.0375,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0,
+            "ci95": {
+              "low": -0.0833,
+              "high": 0.0
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.999,
+            "resamples": 2000
+          }
+        },
+        "50": {
+          "reject_fraction": 0.5,
+          "v1": {
+            "value": 0.0,
+            "ci95": {
+              "low": -0.05,
+              "high": 0.05,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.0,
+            "ci95": {
+              "low": -0.05,
+              "high": 0.05,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0
+            },
+            "excludes_zero": false,
+            "share_le_zero": 1.0,
+            "resamples": 2000
+          }
+        }
+      },
+      "v2_rejection_usable_all_cuts": false,
+      "v2_rejection_cuts_better_than_noise": 0
+    },
+    {
+      "symbol": "NEXO/USDT",
+      "v1_model": "vllm-sr/d3-flash",
+      "v2_model": "vllm-sr/d3-flash",
+      "prevalence": {
+        "states": 200,
+        "events": 6,
+        "rate": 0.03,
+        "ci95": {
+          "low": 0.0138,
+          "high": 0.0639
+        }
+      },
+      "tradeability_auc": {
+        "v1": {
+          "value": 0.6555,
+          "ci95": {
+            "low": 0.4194,
+            "high": 0.9141,
+            "resamples": 1994
+          }
+        },
+        "v2": {
+          "value": 0.7414,
+          "ci95": {
+            "low": 0.4654,
+            "high": 0.9746,
+            "resamples": 1994
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0859,
+          "ci95": {
+            "low": -0.1615,
+            "high": 0.3522
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.2653,
+          "resamples": 1994
+        }
+      },
+      "direction_auc_noul": {
+        "v1": {
+          "value": 0.4548,
+          "ci95": {
+            "low": 0.374,
+            "high": 0.5368,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.4612,
+          "ci95": {
+            "low": 0.3838,
+            "high": 0.5431,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0064,
+          "ci95": {
+            "low": -0.0774,
+            "high": 0.0985
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.42,
+          "resamples": 2000
+        }
+      },
+      "direction_bias": {
+        "v1": {
+          "value": 0.3657,
+          "ci95": {
+            "low": 0.2843,
+            "high": 0.4498,
+            "resamples": 2000
+          },
+          "directional_states": 119,
+          "coverage": {
+            "value": 0.595,
+            "ci95": {
+              "low": 0.525,
+              "high": 0.665,
+              "resamples": 2000
+            }
+          }
+        },
+        "v2": {
+          "value": 0.3649,
+          "ci95": {
+            "low": 0.2871,
+            "high": 0.4469,
+            "resamples": 2000
+          },
+          "directional_states": 126,
+          "coverage": {
+            "value": 0.63,
+            "ci95": {
+              "low": 0.56,
+              "high": 0.7,
+              "resamples": 2000
+            }
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": -0.0008,
+          "ci95": {
+            "low": -0.0295,
+            "high": 0.0297
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.531,
+          "resamples": 2000
+        }
+      },
+      "rank_rejection": {
+        "30": {
+          "reject_fraction": 0.3,
+          "v1": {
+            "value": 0.0429,
+            "ci95": {
+              "low": 0.0024,
+              "high": 0.0786,
+              "resamples": 2000
+            },
+            "better_than_noise": true
+          },
+          "v2": {
+            "value": 0.019,
+            "ci95": {
+              "low": -0.019,
+              "high": 0.0714,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": -0.0238,
+            "ci95": {
+              "low": -0.0714,
+              "high": 0.0238
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.94,
+            "resamples": 2000
+          }
+        },
+        "40": {
+          "reject_fraction": 0.4,
+          "v1": {
+            "value": 0.0292,
+            "ci95": {
+              "low": -0.025,
+              "high": 0.0708,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.0292,
+            "ci95": {
+              "low": -0.0208,
+              "high": 0.075,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0,
+            "ci95": {
+              "low": -0.0625,
+              "high": 0.0625
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.6365,
+            "resamples": 2000
+          }
+        },
+        "50": {
+          "reject_fraction": 0.5,
+          "v1": {
+            "value": 0.0,
+            "ci95": {
+              "low": -0.05,
+              "high": 0.05,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.02,
+            "ci95": {
+              "low": -0.02,
+              "high": 0.07,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.02,
+            "ci95": {
+              "low": -0.04,
+              "high": 0.08
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.427,
+            "resamples": 2000
+          }
+        }
+      },
+      "v2_rejection_usable_all_cuts": false,
+      "v2_rejection_cuts_better_than_noise": 0
+    },
+    {
+      "symbol": "SOL/USDT",
+      "v1_model": "vllm-sr/d3-flash",
+      "v2_model": "vllm-sr/d3-flash",
+      "prevalence": {
+        "states": 200,
+        "events": 7,
+        "rate": 0.035,
+        "ci95": {
+          "low": 0.0171,
+          "high": 0.0705
+        }
+      },
+      "tradeability_auc": {
+        "v1": {
+          "value": 0.587,
+          "ci95": {
+            "low": 0.317,
+            "high": 0.8645,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.5218,
+          "ci95": {
+            "low": 0.1718,
+            "high": 0.8523,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": -0.0651,
+          "ci95": {
+            "low": -0.3642,
+            "high": 0.1744
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.697,
+          "resamples": 2000
+        }
+      },
+      "direction_auc_noul": {
+        "v1": {
+          "value": 0.5118,
+          "ci95": {
+            "low": 0.4307,
+            "high": 0.5899,
+            "resamples": 2000
+          }
+        },
+        "v2": {
+          "value": 0.576,
+          "ci95": {
+            "low": 0.4955,
+            "high": 0.6515,
+            "resamples": 2000
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0642,
+          "ci95": {
+            "low": -0.0142,
+            "high": 0.1459
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.0585,
+          "resamples": 2000
+        }
+      },
+      "direction_bias": {
+        "v1": {
+          "value": 0.427,
+          "ci95": {
+            "low": 0.3398,
+            "high": 0.5087,
+            "resamples": 2000
+          },
+          "directional_states": 129,
+          "coverage": {
+            "value": 0.645,
+            "ci95": {
+              "low": 0.575,
+              "high": 0.71,
+              "resamples": 2000
+            }
+          }
+        },
+        "v2": {
+          "value": 0.4591,
+          "ci95": {
+            "low": 0.3808,
+            "high": 0.5369,
+            "resamples": 2000
+          },
+          "directional_states": 150,
+          "coverage": {
+            "value": 0.75,
+            "ci95": {
+              "low": 0.69,
+              "high": 0.805,
+              "resamples": 2000
+            }
+          }
+        },
+        "delta_v2_minus_v1": {
+          "observed": 0.0321,
+          "ci95": {
+            "low": -0.0094,
+            "high": 0.0741
+          },
+          "excludes_zero": false,
+          "share_le_zero": 0.065,
+          "resamples": 2000
+        }
+      },
+      "rank_rejection": {
+        "30": {
+          "reject_fraction": 0.3,
+          "v1": {
+            "value": 0.0262,
+            "ci95": {
+              "low": -0.0381,
+              "high": 0.0714,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": -0.0214,
+            "ci95": {
+              "low": -0.0882,
+              "high": 0.0333,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": -0.0476,
+            "ci95": {
+              "low": -0.119,
+              "high": 0.0238
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.9715,
+            "resamples": 2000
+          }
+        },
+        "40": {
+          "reject_fraction": 0.4,
+          "v1": {
+            "value": -0.0042,
+            "ci95": {
+              "low": -0.0583,
+              "high": 0.0458,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": -0.0042,
+            "ci95": {
+              "low": -0.0625,
+              "high": 0.0458,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0,
+            "ci95": {
+              "low": -0.0625,
+              "high": 0.0625
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.684,
+            "resamples": 2000
+          }
+        },
+        "50": {
+          "reject_fraction": 0.5,
+          "v1": {
+            "value": 0.01,
+            "ci95": {
+              "low": -0.04,
+              "high": 0.06,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "v2": {
+            "value": 0.01,
+            "ci95": {
+              "low": -0.04,
+              "high": 0.06,
+              "resamples": 2000
+            },
+            "better_than_noise": false
+          },
+          "delta_v2_minus_v1": {
+            "observed": 0.0,
+            "ci95": {
+              "low": -0.06,
+              "high": 0.06
+            },
+            "excludes_zero": false,
+            "share_le_zero": 0.667,
+            "resamples": 2000
+          }
+        }
+      },
+      "v2_rejection_usable_all_cuts": false,
+      "v2_rejection_cuts_better_than_noise": 0
+    }
+  ],
+  "overall": {
+    "tradeability_auc": {
+      "symbols": 7,
+      "v2_better": 3,
+      "v1_better": 4,
+      "outside_noise_v2_better": 0,
+      "outside_noise_v1_better": 0,
+      "outside_noise_v2_better_symbols": [],
+      "outside_noise_v1_better_symbols": [],
+      "median_delta": -0.0029,
+      "deltas": [
+        {
+          "symbol": "ARB/USDT",
+          "delta": -0.0409,
+          "ci95": {
+            "low": -0.1186,
+            "high": 0.0319
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "AVAX/USDT",
+          "delta": -0.0038,
+          "ci95": {
+            "low": -0.1183,
+            "high": 0.1037
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "AXS/USDT",
+          "delta": -0.0029,
+          "ci95": {
+            "low": -0.1741,
+            "high": 0.1438
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "BTC/USDT",
+          "delta": 0.005,
+          "ci95": {
+            "low": -0.0151,
+            "high": 0.0253
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "ETH/USDT",
+          "delta": 0.002,
+          "ci95": {
+            "low": -0.1375,
+            "high": 0.1296
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "NEXO/USDT",
+          "delta": 0.0859,
+          "ci95": {
+            "low": -0.1615,
+            "high": 0.3522
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "SOL/USDT",
+          "delta": -0.0651,
+          "ci95": {
+            "low": -0.3642,
+            "high": 0.1744
+          },
+          "excludes_zero": false
+        }
+      ]
+    },
+    "direction_auc_noul": {
+      "symbols": 7,
+      "v2_better": 7,
+      "v1_better": 0,
+      "outside_noise_v2_better": 0,
+      "outside_noise_v1_better": 0,
+      "outside_noise_v2_better_symbols": [],
+      "outside_noise_v1_better_symbols": [],
+      "median_delta": 0.0205,
+      "deltas": [
+        {
+          "symbol": "ARB/USDT",
+          "delta": 0.0144,
+          "ci95": {
+            "low": -0.0514,
+            "high": 0.0801
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "AVAX/USDT",
+          "delta": 0.0223,
+          "ci95": {
+            "low": -0.0576,
+            "high": 0.1017
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "AXS/USDT",
+          "delta": 0.0469,
+          "ci95": {
+            "low": -0.0395,
+            "high": 0.1349
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "BTC/USDT",
+          "delta": 0.0205,
+          "ci95": {
+            "low": -0.0575,
+            "high": 0.1064
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "ETH/USDT",
+          "delta": 0.0062,
+          "ci95": {
+            "low": -0.0682,
+            "high": 0.0786
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "NEXO/USDT",
+          "delta": 0.0064,
+          "ci95": {
+            "low": -0.0774,
+            "high": 0.0985
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "SOL/USDT",
+          "delta": 0.0642,
+          "ci95": {
+            "low": -0.0142,
+            "high": 0.1459
+          },
+          "excludes_zero": false
+        }
+      ]
+    },
+    "direction_bias_auc": {
+      "symbols": 7,
+      "v2_better": 3,
+      "v1_better": 4,
+      "outside_noise_v2_better": 0,
+      "outside_noise_v1_better": 0,
+      "outside_noise_v2_better_symbols": [],
+      "outside_noise_v1_better_symbols": [],
+      "median_delta": -0.0008,
+      "deltas": [
+        {
+          "symbol": "ARB/USDT",
+          "delta": -0.0071,
+          "ci95": {
+            "low": -0.0287,
+            "high": 0.0138
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "AVAX/USDT",
+          "delta": 0.0045,
+          "ci95": {
+            "low": -0.0241,
+            "high": 0.0357
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "AXS/USDT",
+          "delta": -0.0063,
+          "ci95": {
+            "low": -0.0439,
+            "high": 0.0309
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "BTC/USDT",
+          "delta": 0.0199,
+          "ci95": {
+            "low": -0.0142,
+            "high": 0.0551
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "ETH/USDT",
+          "delta": -0.0042,
+          "ci95": {
+            "low": -0.0372,
+            "high": 0.0264
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "NEXO/USDT",
+          "delta": -0.0008,
+          "ci95": {
+            "low": -0.0295,
+            "high": 0.0297
+          },
+          "excludes_zero": false
+        },
+        {
+          "symbol": "SOL/USDT",
+          "delta": 0.0321,
+          "ci95": {
+            "low": -0.0094,
+            "high": 0.0741
+          },
+          "excludes_zero": false
+        }
+      ]
+    },
+    "rejection_difference": {
+      "30": {
+        "symbols": 7,
+        "v2_better": 1,
+        "v1_better": 5,
+        "outside_noise_v2_better": 0,
+        "outside_noise_v1_better": 0,
+        "outside_noise_v2_better_symbols": [],
+        "outside_noise_v1_better_symbols": [],
+        "median_delta": -0.0238,
+        "deltas": [
+          {
+            "symbol": "ARB/USDT",
+            "delta": -0.119,
+            "ci95": {
+              "low": -0.2381,
+              "high": 0.0476
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "AVAX/USDT",
+            "delta": 0.0238,
+            "ci95": {
+              "low": -0.0476,
+              "high": 0.0958
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "AXS/USDT",
+            "delta": -0.0238,
+            "ci95": {
+              "low": -0.119,
+              "high": 0.0476
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "BTC/USDT",
+            "delta": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "ETH/USDT",
+            "delta": -0.0238,
+            "ci95": {
+              "low": -0.0952,
+              "high": 0.0
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "NEXO/USDT",
+            "delta": -0.0238,
+            "ci95": {
+              "low": -0.0714,
+              "high": 0.0238
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "SOL/USDT",
+            "delta": -0.0476,
+            "ci95": {
+              "low": -0.119,
+              "high": 0.0238
+            },
+            "excludes_zero": false
+          }
+        ]
+      },
+      "40": {
+        "symbols": 7,
+        "v2_better": 0,
+        "v1_better": 1,
+        "outside_noise_v2_better": 0,
+        "outside_noise_v1_better": 0,
+        "outside_noise_v2_better_symbols": [],
+        "outside_noise_v1_better_symbols": [],
+        "median_delta": 0.0,
+        "deltas": [
+          {
+            "symbol": "ARB/USDT",
+            "delta": -0.0625,
+            "ci95": {
+              "low": -0.2083,
+              "high": 0.0417
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "AVAX/USDT",
+            "delta": 0.0,
+            "ci95": {
+              "low": -0.1047,
+              "high": 0.1042
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "AXS/USDT",
+            "delta": 0.0,
+            "ci95": {
+              "low": -0.1042,
+              "high": 0.0833
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "BTC/USDT",
+            "delta": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "ETH/USDT",
+            "delta": 0.0,
+            "ci95": {
+              "low": -0.0833,
+              "high": 0.0
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "NEXO/USDT",
+            "delta": 0.0,
+            "ci95": {
+              "low": -0.0625,
+              "high": 0.0625
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "SOL/USDT",
+            "delta": 0.0,
+            "ci95": {
+              "low": -0.0625,
+              "high": 0.0625
+            },
+            "excludes_zero": false
+          }
+        ]
+      },
+      "50": {
+        "symbols": 7,
+        "v2_better": 2,
+        "v1_better": 2,
+        "outside_noise_v2_better": 0,
+        "outside_noise_v1_better": 0,
+        "outside_noise_v2_better_symbols": [],
+        "outside_noise_v1_better_symbols": [],
+        "median_delta": 0.0,
+        "deltas": [
+          {
+            "symbol": "ARB/USDT",
+            "delta": -0.04,
+            "ci95": {
+              "low": -0.16,
+              "high": 0.1
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "AVAX/USDT",
+            "delta": -0.06,
+            "ci95": {
+              "low": -0.14,
+              "high": 0.04
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "AXS/USDT",
+            "delta": 0.02,
+            "ci95": {
+              "low": -0.08,
+              "high": 0.12
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "BTC/USDT",
+            "delta": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "ETH/USDT",
+            "delta": 0.0,
+            "ci95": {
+              "low": 0.0,
+              "high": 0.0
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "NEXO/USDT",
+            "delta": 0.02,
+            "ci95": {
+              "low": -0.04,
+              "high": 0.08
+            },
+            "excludes_zero": false
+          },
+          {
+            "symbol": "SOL/USDT",
+            "delta": 0.0,
+            "ci95": {
+              "low": -0.06,
+              "high": 0.06
+            },
+            "excludes_zero": false
+          }
+        ]
+      }
+    },
+    "v2_symbols_with_usable_rejection_at_all_cuts": 0,
+    "v2_symbols_with_at_least_one_usable_cut": 0,
+    "v1_symbols_with_any_usable_cut": 1,
+    "direction_bias_ci_excludes_chance": {
+      "v1": [
+        "NEXO/USDT"
+      ],
+      "v2": [
+        "NEXO/USDT"
+      ]
+    }
+  },
+  "verdict": {
+    "magnitude_gain": false,
+    "direction_gain": false,
+    "rejection_rule_usable": false,
+    "v2_rejection_usable_symbols": 0,
+    "symbols": 7,
+    "text": "no improvement; keep v1"
+  }
+}
