@@ -575,3 +575,72 @@ def test_verdict_prints_na_when_nothing_was_priced():
 
     assert "- 1h: **NOT VALIDATED** (fewer than 20 vetoed signals with candles); avoided n/a, false-veto cost n/a." in text
     assert "+0.00%" not in text
+
+
+def test_conclusions_distinguish_why_no_veto_was_priced():
+    """No vetoes, skipped horizons, fetch failures and missing candles differ."""
+    approved = _record("2026-01-01T00:00:00Z", "BUY", risk_approved=True)
+    approved_candles = {
+        ("BTC/USDT", "1h"): [
+            _candle("2026-01-01T00:00:00Z", 100.0),
+            _candle("2026-01-01T01:00:00Z", 101.0),
+        ]
+    }
+    approved_data = report.summarize(
+        report.evaluate_signals([approved], approved_candles, (1,), 0.10),
+        (1,),
+        0.10,
+        1,
+        report.LoadStats(),
+    )
+    approved_text = report.render_report(approved_data, "<signals-dir>")
+    assert "No vetoes to measure" in approved_text
+    assert "lack matching candles" not in approved_text
+
+    vetoed = _record(
+        "2026-01-01T00:00:00Z",
+        "SELL",
+        reasoning="[JEV veto: not tradeable (noul=0.200 < 0.5)]",
+    )
+    missing_data = report.summarize(
+        report.evaluate_signals([vetoed], {}, (1,), 0.10),
+        (1,),
+        0.10,
+        1,
+        report.LoadStats(),
+    )
+    missing_text = report.render_report(missing_data, "<signals-dir>")
+    assert "no matching entry or exit candle" in missing_text
+
+    fetched_data = report.summarize(
+        report.evaluate_signals([vetoed], {}, (1,), 0.10),
+        (1,),
+        0.10,
+        1,
+        report.LoadStats(),
+        ["BTC/USDT 1h: candle fetch failed (ExchangeError: timeout)"],
+    )
+    fetched_text = report.render_report(fetched_data, "<signals-dir>")
+    assert "Candle data could not be fetched" in fetched_text
+    assert "no matching entry or exit candle" not in fetched_text
+
+    four_hour = _record(
+        "2026-01-01T00:00:00Z",
+        "SELL",
+        reasoning="[JEV veto: not tradeable (noul=0.200 < 0.5)]",
+        timeframe="4h",
+    )
+    skipped_data = report.summarize(
+        report.evaluate_signals(
+            [four_hour],
+            {("BTC/USDT", "4h"): [_candle("2026-01-01T00:00:00Z", 100.0)]},
+            (1,),
+            0.10,
+        ),
+        (1,),
+        0.10,
+        1,
+        report.LoadStats(),
+    )
+    skipped_text = report.render_report(skipped_data, "<signals-dir>")
+    assert "not a whole number of candles" in skipped_text

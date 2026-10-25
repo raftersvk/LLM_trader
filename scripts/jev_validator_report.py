@@ -1056,11 +1056,29 @@ def _render_conclusions(data: ReportData) -> List[str]:
         )
     if h1 is None:
         lines.append("- No 1h horizon was requested, so the headline number is unavailable.")
-    elif h1.vetoed_evaluable == 0:
+    elif h1.vetoed_total == 0:
         lines.append(
-            "- **No vetoed trade could be priced.** The signals lack matching candles, so the "
-            "validator cannot be judged from this run."
+            "- **No vetoes to measure.** No BUY/SELL signal was vetoed, so this role has no "
+            "measured impact at 1h in this sample."
         )
+    elif h1.vetoed_evaluable == 0:
+        if h1.skipped_horizon:
+            lines.append(
+                "- **No vetoed trade can be priced at 1h.** The horizon is not a whole number of "
+                "candles for these signals' timeframes (see the skipped column)."
+            )
+        elif data.notes:
+            lines.append(
+                "- **No vetoed trade can be priced at 1h.** Candle data could not be fetched for at "
+                "least one symbol (see the candle data notes); this is a data problem, not evidence "
+                "against the veto."
+            )
+        else:
+            lines.append(
+                "- **No vetoed trade could be priced at 1h.** The vetoed signals have no matching "
+                "entry or exit candle in the fetched data, so the validator cannot be judged from "
+                "this run."
+            )
     else:
         if h1.vetoed_net_pct < 0:
             effect = "would have lost money, so avoiding them was correct"
