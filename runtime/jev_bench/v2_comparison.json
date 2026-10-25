@@ -20,6 +20,19 @@
       "symbol": "ARB/USDT",
       "v1_model": "vllm-sr/d3-flash",
       "v2_model": "vllm-sr/d3-flash",
+      "v1_question_set": "v1",
+      "v2_question_set": "v2",
+      "v1_calibration_context": false,
+      "v2_calibration_context": true,
+      "v1_candles": 700,
+      "v2_candles": 700,
+      "v1_first_state": "2026-10-16T18:00:00Z",
+      "v1_last_state": "2026-10-25T01:00:00Z",
+      "v2_first_state": "2026-10-16T18:00:00Z",
+      "v2_last_state": "2026-10-25T01:00:00Z",
+      "paired_states": 200,
+      "same_states": true,
+      "same_labels": true,
       "prevalence": {
         "states": 200,
         "events": 57,
@@ -59,29 +72,29 @@
       },
       "direction_auc_noul": {
         "v1": {
-          "value": 0.5399,
+          "value": 0.5398,
           "ci95": {
-            "low": 0.4613,
+            "low": 0.4612,
             "high": 0.6173,
             "resamples": 2000
           }
         },
         "v2": {
-          "value": 0.5543,
+          "value": 0.5547,
           "ci95": {
-            "low": 0.4735,
-            "high": 0.634,
+            "low": 0.474,
+            "high": 0.6344,
             "resamples": 2000
           }
         },
         "delta_v2_minus_v1": {
-          "observed": 0.0144,
+          "observed": 0.0149,
           "ci95": {
-            "low": -0.0514,
-            "high": 0.0801
+            "low": -0.0509,
+            "high": 0.0809
           },
           "excludes_zero": false,
-          "share_le_zero": 0.328,
+          "share_le_zero": 0.3215,
           "resamples": 2000
         }
       },
@@ -233,6 +246,19 @@
       "symbol": "AVAX/USDT",
       "v1_model": "vllm-sr/d3-flash",
       "v2_model": "vllm-sr/d3-flash",
+      "v1_question_set": "v1",
+      "v2_question_set": "v2",
+      "v1_calibration_context": false,
+      "v2_calibration_context": true,
+      "v1_candles": 700,
+      "v2_candles": 700,
+      "v1_first_state": "2026-10-16T18:00:00Z",
+      "v1_last_state": "2026-10-25T01:00:00Z",
+      "v2_first_state": "2026-10-16T18:00:00Z",
+      "v2_last_state": "2026-10-25T01:00:00Z",
+      "paired_states": 200,
+      "same_states": true,
+      "same_labels": true,
       "prevalence": {
         "states": 200,
         "events": 19,
@@ -446,6 +472,19 @@
       "symbol": "AXS/USDT",
       "v1_model": "vllm-sr/d3-flash",
       "v2_model": "vllm-sr/d3-flash",
+      "v1_question_set": "v1",
+      "v2_question_set": "v2",
+      "v1_calibration_context": false,
+      "v2_calibration_context": true,
+      "v1_candles": 700,
+      "v2_candles": 700,
+      "v1_first_state": "2026-10-16T18:00:00Z",
+      "v1_last_state": "2026-10-25T01:00:00Z",
+      "v2_first_state": "2026-10-16T18:00:00Z",
+      "v2_last_state": "2026-10-25T01:00:00Z",
+      "paired_states": 200,
+      "same_states": true,
+      "same_labels": true,
       "prevalence": {
         "states": 200,
         "events": 17,
@@ -659,6 +698,19 @@
       "symbol": "BTC/USDT",
       "v1_model": "vllm-sr/d3-flash",
       "v2_model": "vllm-sr/d3-flash",
+      "v1_question_set": "v1",
+      "v2_question_set": "v2",
+      "v1_calibration_context": false,
+      "v2_calibration_context": true,
+      "v1_candles": 700,
+      "v2_candles": 700,
+      "v1_first_state": "2026-10-16T18:00:00Z",
+      "v1_last_state": "2026-10-25T01:00:00Z",
+      "v2_first_state": "2026-10-16T18:00:00Z",
+      "v2_last_state": "2026-10-25T01:00:00Z",
+      "paired_states": 200,
+      "same_states": true,
+      "same_labels": true,
       "prevalence": {
         "states": 200,
         "events": 1,
@@ -872,6 +924,19 @@
       "symbol": "ETH/USDT",
       "v1_model": "vllm-sr/d3-flash",
       "v2_model": "vllm-sr/d3-flash",
+      "v1_question_set": "v1",
+      "v2_question_set": "v2",
+      "v1_calibration_context": false,
+      "v2_calibration_context": true,
+      "v1_candles": 700,
+      "v2_candles": 700,
+      "v1_first_state": "2026-10-16T18:00:00Z",
+      "v1_last_state": "2026-10-25T01:00:00Z",
+      "v2_first_state": "2026-10-16T18:00:00Z",
+      "v2_last_state": "2026-10-25T01:00:00Z",
+      "paired_states": 200,
+      "same_states": true,
+      "same_labels": true,
       "prevalence": {
         "states": 200,
         "events": 8,
@@ -1085,6 +1150,19 @@
       "symbol": "NEXO/USDT",
       "v1_model": "vllm-sr/d3-flash",
       "v2_model": "vllm-sr/d3-flash",
+      "v1_question_set": "v1",
+      "v2_question_set": "v2",
+      "v1_calibration_context": false,
+      "v2_calibration_context": true,
+      "v1_candles": 700,
+      "v2_candles": 700,
+      "v1_first_state": "2026-10-16T18:00:00Z",
+      "v1_last_state": "2026-10-25T01:00:00Z",
+      "v2_first_state": "2026-10-16T18:00:00Z",
+      "v2_last_state": "2026-10-25T01:00:00Z",
+      "paired_states": 200,
+      "same_states": true,
+      "same_labels": true,
       "prevalence": {
         "states": 200,
         "events": 6,
@@ -1298,6 +1376,19 @@
       "symbol": "SOL/USDT",
       "v1_model": "vllm-sr/d3-flash",
       "v2_model": "vllm-sr/d3-flash",
+      "v1_question_set": "v1",
+      "v2_question_set": "v2",
+      "v1_calibration_context": false,
+      "v2_calibration_context": true,
+      "v1_candles": 700,
+      "v2_candles": 700,
+      "v1_first_state": "2026-10-16T18:00:00Z",
+      "v1_last_state": "2026-10-25T01:00:00Z",
+      "v2_first_state": "2026-10-16T18:00:00Z",
+      "v2_last_state": "2026-10-25T01:00:00Z",
+      "paired_states": 200,
+      "same_states": true,
+      "same_labels": true,
       "prevalence": {
         "states": 200,
         "events": 7,
@@ -1508,6 +1599,8 @@
       "v2_rejection_cuts_better_than_noise": 0
     }
   ],
+  "aborted_reports": [],
+  "all_pairs_use_same_states": true,
   "overall": {
     "tradeability_auc": {
       "symbols": 7,
@@ -1596,10 +1689,10 @@
       "deltas": [
         {
           "symbol": "ARB/USDT",
-          "delta": 0.0144,
+          "delta": 0.0149,
           "ci95": {
-            "low": -0.0514,
-            "high": 0.0801
+            "low": -0.0509,
+            "high": 0.0809
           },
           "excludes_zero": false
         },

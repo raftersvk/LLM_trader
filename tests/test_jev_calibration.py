@@ -827,7 +827,11 @@ def test_report_records_question_set_and_calibration_context():
     """The experiment provenance is part of the saved report."""
     report = jev_calibration.build_report(
         [_full_record(0, 0.4)],
-        _source_args(question_set="v2", calibration_context=True),
+        _source_args(
+            question_set="v2",
+            calibration_context=True,
+            thresholds=jev_calibration.DEFAULT_THRESHOLDS,
+        ),
         (1, 2, 3, 4),
         "2026-10-15T00:00:00Z", 0.0, False, None, "test",
     )
@@ -853,3 +857,27 @@ def test_question_set_cli_options_parse():
     defaults = jev_calibration._parse_args(["--candles", "x.csv"])
     assert defaults.question_set is None
     assert defaults.calibration_context is None
+
+
+@pytest.mark.asyncio
+async def test_aggregate_from_preserves_v2_provenance_byte_identically(tmp_path):
+    """A flag-free rebuild keeps the v2 question set and context block."""
+    report = jev_calibration.build_report(
+        [_full_record(0, 0.4), _full_record(1, 0.6)],
+        _source_args(
+            question_set="v2",
+            calibration_context=True,
+            thresholds=jev_calibration.DEFAULT_THRESHOLDS,
+        ),
+        (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    path = tmp_path / "calibration_btc_200_v2.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    args = jev_calibration._parse_args(["--aggregate-from", str(path)])
+    rebuilt = await jev_calibration.run_calibration(args)
+
+    assert rebuilt["dataset"]["question_set"] == "v2"
+    assert rebuilt["dataset"]["calibration_context"] is True
+    assert rebuilt == report

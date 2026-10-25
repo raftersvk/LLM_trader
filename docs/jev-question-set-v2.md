@@ -6,26 +6,50 @@ with *which way*. Does asking two separate questions help — one for magnitude
 (`noul`) and one for direction (`bias`) — with a small past-only calibration
 block added to the state?
 
-**Short answer: no, not for any decision-relevant metric.** On the same 1,400
-states the v2 wording does not rank 1 %-move states better than v1, does not
-predict direction, and does not produce a usable rank-rejection rule at 30 / 40
-/ 50 %. It does move the raw `noul` probability level much closer to the
-observed event rate, but that calibration gain does not translate into a better
-filter. **Production keeps v1 and the 0.5 threshold.** No service code changes.
+**Short answer: no, not for any decision-relevant metric.** On the same 2,800
+states (1,400 per version), the v2 wording does not rank 1 %-move states better
+than v1, does not predict direction, and does not produce a usable
+rank-rejection rule at 30 / 40 / 50 %. It does move the raw `noul` probability
+level much closer to the observed event rate, but that calibration gain does not
+translate into a better filter. **Production keeps v1 and the 0.5 threshold.**
+No service code changes.
 
-- **Baseline:** the committed v1 reports from PR #17
-  (`runtime/jev_bench/calibration_<base>_200.json`), not re-run.
-- **Variant:** `--question-set v2 --calibration-context` on the same 7 symbols,
-  same 700-candle inputs, same 200 states per symbol, same h1 horizon and
-  `abs(forward return) >= 1.0 %` label, 0.5 s pacing.
+## Protocol correction (the first attempt was discarded)
+
+The first v2 campaign was **discarded as invalid**. Its v1 baseline came from a
+different dataset than its v2 run: the BTC/ETH v1 reports had been produced from
+an older 600-candle file while v2 used the committed 700-candle file, so the
+states, labels and windows differed. Comparing those files would have measured
+the window, not the questions.
+
+This document reports the corrected protocol:
+
+- **One dataset per symbol for both versions.** Both v1 and v2 use
+  `runtime/jev_bench/<BASE>_USDT_1h.csv` (700 candles), the same calendar
+  window, `--limit 200`, h1 and `abs(forward return) >= 1.0 %`.
+- **Both versions were re-run today.** No earlier report is used as a baseline.
+  v1 uses `--question-set v1` (no calibration block); v2 uses
+  `--question-set v2 --calibration-context`.
+- **Every report is self-describing:** `dataset.question_set` (`"v1"`/`"v2"`)
+  and `dataset.calibration_context` (`false`/`true`) are stored and carried
+  through `--aggregate-from`. A flag-free rebuild of a v2 report is
+  **byte-identical** to the original (verified with `cmp`).
+- **Integrity is checked in the comparison tool:** all 7 pairs have identical
+  state indices, candle counts and labels (`same_states` / `same_labels`), and
+  the summary fails visibly if they do not.
+
 - **Window:** states span `2026-10-16T18:00Z` → `2026-10-25T01:00Z` (≈8.3 days,
   one market regime).
-- **Provider:** Decision 3.0 `vllm-sr/d3-flash`, one call per state.
-- **Calls:** 1,400/1,400 scored, 0 errors, 0 rate-limit (429) responses.
+- **Provider:** Decision 3.0 `vllm-sr/d3-flash`, one call per state, 0.5 s
+  pacing, priority order BTC, ETH, SOL, ARB, AXS, AVAX, NEXO.
+- **Calls:** **2,800/2,800 scored** (1,400 v1 + 1,400 v2), 0 errors, 0
+  rate-limit (429) responses, nothing skipped or aborted.
 - **Smoke first:** one call per question set per symbol = 14/14 accepted, no
   `400`, no `invalid_question` (`runtime/jev_bench/v2_question_smoke.json`).
 - **Machine outputs:**
+  `runtime/jev_bench/calibration_<base>_200_v1.json`,
   `runtime/jev_bench/calibration_<base>_200_v2.json`,
+  `runtime/jev_bench/campaign_summary_v1.json`,
   `runtime/jev_bench/campaign_summary_v2.json`,
   `runtime/jev_bench/v2_comparison.json`.
 
@@ -47,6 +71,17 @@ filter. **Production keeps v1 and the 0.5 threshold.** No service code changes.
 
 The block is off by default, so a v1 run stays byte-comparable. This experiment
 bundles the new wording **and** the block: it cannot separate their effects.
+
+## Dataset and label integrity
+
+Every paired report uses the same file, candle count, state indices and labels:
+
+| Symbols | Candles | States per version | State range | Same indices | Same labels |
+| --- | ---: | ---: | --- | --- | --- |
+| all 7 | 700 | 200 | `2026-10-16T18:00Z`–`2026-10-25T01:00Z` | yes | yes |
+
+Event counts (identical for v1 and v2 by construction): ARB 57/200, AVAX 19/200,
+AXS 17/200, BTC 1/200, ETH 8/200, NEXO 6/200, SOL 7/200.
 
 ## 1. Does v2 rank "big move" states better?
 
@@ -81,11 +116,11 @@ against `forward h1 return > 0`.
 | Symbol | v1 bias AUC (95 % CI) | v2 bias AUC (95 % CI) | v2 − v1 (paired 95 % CI) |
 | --- | --- | --- | --- |
 | ARB/USDT | 0.490 (0.414–0.563) | 0.483 (0.408–0.554) | −0.007 (−0.029 to +0.014) |
-| AVAX/USDT | 0.432 (0.359–0.513) | 0.437 (0.364–0.517) | +0.005 (−0.024 to +0.036) |
+| AVAX/USDT | 0.432 (0.359–0.513) | 0.437 (0.364–0.517) | +0.004 (−0.024 to +0.036) |
 | AXS/USDT | 0.465 (0.385–0.545) | 0.459 (0.379–0.537) | −0.006 (−0.044 to +0.031) |
 | BTC/USDT | 0.467 (0.381–0.550) | 0.487 (0.400–0.573) | +0.020 (−0.014 to +0.055) |
 | ETH/USDT | 0.494 (0.409–0.579) | 0.490 (0.402–0.573) | −0.004 (−0.037 to +0.026) |
-| NEXO/USDT | 0.366 (0.284–0.450) | 0.365 (0.287–0.447) | −0.001 (−0.030 to +0.030) |
+| NEXO/USDT | 0.366 (0.284–0.450) | 0.365 (0.287–0.447) | −0.001 (−0.029 to +0.030) |
 | SOL/USDT | 0.427 (0.340–0.509) | 0.459 (0.381–0.537) | +0.032 (−0.009 to +0.074) |
 
 - v2 is higher on 3 symbols and lower on 4; **no paired interval excludes zero**;
@@ -99,8 +134,8 @@ against `forward h1 return > 0`.
 
 The direction signal of `noul` (not the intended channel) moved up on all 7
 symbols but by a trivial amount: median paired delta **+0.021**, and **no**
-interval excludes zero. Since v2's `noul` question is explicitly
-direction-blind, that is noise, not direction skill.
+interval excludes zero. Since v2's `noul` question is explicitly direction-blind,
+that is noise, not direction skill.
 
 **Answer: v2 does not predict direction, and the separation did not unlock it.**
 
@@ -196,10 +231,10 @@ phrased. Production keeps `build_questions()` v1 and
 - **Bundled treatment.** v2 changes both the question wording and adds the
   calibration block. This run cannot say which part (if either) caused the
   calibration-level shift; a future ablation would need separate runs.
-- **Time gap between campaigns.** v1 reports are the committed baseline and
-  were not re-run. The model id is the same (`vllm-sr/d3-flash`), but provider
-  behaviour can drift between campaign dates; a same-day v1 re-run would remove
-  that ambiguity.
+- **Provider drift remains possible within one run.** Both versions ran in the
+  same session, which removes the dataset/window mismatch of the discarded
+  attempt, but the provider is not seeded and could still answer the same state
+  differently at a different time.
 - **The base decision is a momentum proxy, not the LLM.** The label is raw
   forward price movement, so the base decision does not enter the AUC,
   direction or rejection definitions. Nothing here is an LLM decision-quality
@@ -216,31 +251,35 @@ python scripts/jev_question_smoke.py \
   --csv-dir runtime/jev_bench \
   --output runtime/jev_bench/v2_question_smoke.json
 
-# 2. v2 campaign, same inputs/window/label as v1, 200 states per symbol
-for pair in BTC:btc ETH:eth SOL:sol AVAX:avax ARB:arb AXS:axs NEXO:nexo; do
+# 2. Both versions on the SAME committed 700-candle dataset, priority order
+for pair in BTC:btc ETH:eth SOL:sol ARB:arb AXS:axs AVAX:avax NEXO:nexo; do
   sym="${pair%%:*}"; base="${pair##*:}"
-  python scripts/jev_calibration.py \
-    --candles "runtime/jev_bench/${sym}_USDT_1h.csv" \
-    --symbol "${sym}/USDT" --market-type spot --timeframe 1h --limit 200 \
-    --delay-seconds 0.5 --question-set v2 --calibration-context \
-    --output "runtime/jev_bench/calibration_${base}_200_v2.json"
+  for qs in v1 v2; do
+    ctx=""
+    [ "$qs" = "v2" ] && ctx="--calibration-context"
+    python scripts/jev_calibration.py \
+      --candles "runtime/jev_bench/${sym}_USDT_1h.csv" \
+      --symbol "${sym}/USDT" --market-type spot --timeframe 1h --limit 200 \
+      --delay-seconds 0.5 --question-set "$qs" $ctx \
+      --output "runtime/jev_bench/calibration_${base}_200_${qs}.json"
+  done
 done
 
-# 3. Standalone v2 metrics in the same format as the v1 campaign summary
+# 3. Standalone metrics per version in the same campaign format
 python - <<'PY'
 import glob, json, sys
 sys.path.insert(0, "scripts")
 from jev_campaign_analysis import build_summary
-paths = [p for p in sorted(glob.glob("runtime/jev_bench/calibration_*_200_v2.json"))
-         if "_futures" not in p]
-summary = build_summary(paths, ())
-with open("runtime/jev_bench/campaign_summary_v2.json", "w") as fh:
-    json.dump(summary, fh, indent=2)
+for version in ("v1", "v2"):
+    paths = [p for p in sorted(glob.glob(
+        f"runtime/jev_bench/calibration_*_200_{version}.json")) if "_futures" not in p]
+    with open(f"runtime/jev_bench/campaign_summary_{version}.json", "w") as fh:
+        json.dump(build_summary(paths, ()), fh, indent=2)
 PY
 
-# 4. Paired v1-versus-v2 comparison (2000 resamples, seed 20261024)
+# 4. Paired comparison on identical states (2000 resamples, seed 20261024)
 python scripts/jev_question_set_comparison.py \
-  --v1-reports runtime/jev_bench/calibration_*_200.json \
+  --v1-reports runtime/jev_bench/calibration_*_200_v1.json \
   --v2-reports runtime/jev_bench/calibration_*_200_v2.json \
   --output runtime/jev_bench/v2_comparison.json
 ```

@@ -159,3 +159,36 @@ def test_overall_summary_and_verdict_are_derived_not_pooled():
     assert verdict["magnitude_gain"] is True
     assert verdict["direction_gain"] is True
     assert "partial improvement" in verdict["text"] or "improves" in verdict["text"]
+
+
+def test_load_by_symbol_skips_aborted_reports(tmp_path):
+    complete = _report("BTC/USDT", [0.2], ["long"], [False], [False])
+    aborted = _report("ETH/USDT", [0.2], ["long"], [False], [False])
+    aborted["aborted"] = True
+    aborted["abort_reason"] = "JEV rate limited (429)"
+    aborted["scoring"] = {"calls": 200, "scored": 80}
+    first = tmp_path / "calibration_btc_200_v1.json"
+    second = tmp_path / "calibration_eth_200_v1.json"
+    first.write_text(__import__("json").dumps(complete), encoding="utf-8")
+    second.write_text(__import__("json").dumps(aborted), encoding="utf-8")
+
+    loaded, aborted_rows = comparison._load_by_symbol([str(first), str(second)])
+
+    assert set(loaded) == {"BTC/USDT"}
+    assert len(aborted_rows) == 1
+    assert aborted_rows[0]["symbol"] == "ETH/USDT"
+    assert aborted_rows[0]["scored"] == 80
+    assert "429" in aborted_rows[0]["reason"]
+
+
+def test_compare_symbol_flags_different_state_sets():
+    v1 = _report("SOL/USDT", [0.2, 0.8], ["long", "short"], [False, True], [False, True])
+    v2 = _report("SOL/USDT", [0.2, 0.8], ["long", "short"], [False, True], [False, True])
+    v2["states"][1]["index"] = 9
+
+    result = comparison.compare_symbol(
+        "SOL/USDT", v1, v2, resamples=100, seed=7
+    )
+
+    assert result["same_states"] is False
+    assert result["paired_states"] == 1

@@ -83,10 +83,10 @@
       "direction": {
         "states": 200,
         "up_states": 90,
-        "auc": 0.5543,
+        "auc": 0.5547,
         "ci95": {
-          "low": 0.4735,
-          "high": 0.634,
+          "low": 0.474,
+          "high": 0.6344,
           "resamples": 2000
         },
         "direction_proven_95": false

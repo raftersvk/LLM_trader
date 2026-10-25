@@ -287,6 +287,7 @@ def _scored_states(report: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
             "bias": state.get("bias"),
             "label": bool(worth),
             "up": float(forward) > 0.0,
+            "candle_open_time": state.get("candle_open_time"),
         }
     return scored
 
@@ -307,6 +308,10 @@ def _paired_records(
                 "index": index,
                 "label": first["label"],
                 "up": first["up"],
+                "v1_label": first["label"],
+                "v1_up": first["up"],
+                "v2_label": second["label"],
+                "v2_up": second["up"],
                 "v1_noul": first["noul"],
                 "v2_noul": second["noul"],
                 "v1_bias": first["bias"],
@@ -316,19 +321,42 @@ def _paired_records(
     return records
 
 
-def _load_by_symbol(paths: Iterable[str], pattern: str = "") -> Dict[str, Dict[str, Any]]:
-    """Load reports and key them by their dataset symbol."""
+def _load_by_symbol(
+    paths: Iterable[str],
+    pattern: str = "",
+) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
+    """Load complete reports keyed by symbol, plus the aborted ones.
+
+    An aborted report (a partial run stopped by a 429) must never enter a
+    metric: its state set is incomplete and would bias every comparison.
+    """
     loaded: Dict[str, Dict[str, Any]] = {}
+    aborted: List[Dict[str, Any]] = []
     for path in sorted(paths):
         if pattern and pattern not in os.path.basename(path):
             continue
         with open(path, "r", encoding="utf-8") as handle:
             report = json.load(handle)
-        symbol = (report.get("dataset") or {}).get("symbol")
+        dataset = report.get("dataset") or {}
+        symbol = dataset.get("symbol")
         if not symbol:
             continue
+        if report.get("aborted"):
+            scoring = report.get("scoring") or {}
+            aborted.append(
+                {
+                    "symbol": symbol,
+                    "question_set": dataset.get("question_set"),
+                    "states": dataset.get("states"),
+                    "calls": scoring.get("calls"),
+                    "scored": scoring.get("scored"),
+                    "reason": report.get("abort_reason"),
+                    "report": dataset.get("source"),
+                }
+            )
+            continue
         loaded[symbol] = report
-    return loaded
+    return loaded, aborted
 
 
 # ------------------------------------------------------------------- analysis
@@ -341,6 +369,23 @@ def compare_symbol(
 ) -> Dict[str, Any]:
     """Compute every paired metric for one symbol."""
     records = _paired_records(v1_report, v2_report)
+    v1_dataset = v1_report.get("dataset") or {}
+    v2_dataset = v2_report.get("dataset") or {}
+    v1_states = _scored_states(v1_report)
+    v2_states = _scored_states(v2_report)
+    v1_times = [
+        state["candle_open_time"] for state in v1_states.values()
+        if state.get("candle_open_time")
+    ]
+    v2_times = [
+        state["candle_open_time"] for state in v2_states.values()
+        if state.get("candle_open_time")
+    ]
+    same_labels = bool(records) and all(
+        record["v1_label"] == record["v2_label"]
+        and record["v1_up"] == record["v2_up"]
+        for record in records
+    )
     events = sum(1 for record in records if record["label"])
     prevalence = {
         "states": len(records),
@@ -395,8 +440,24 @@ def compare_symbol(
 
     return {
         "symbol": symbol,
-        "v1_model": (v1_report.get("dataset") or {}).get("model"),
-        "v2_model": (v2_report.get("dataset") or {}).get("model"),
+        "v1_model": v1_dataset.get("model"),
+        "v2_model": v2_dataset.get("model"),
+        "v1_question_set": v1_dataset.get("question_set"),
+        "v2_question_set": v2_dataset.get("question_set"),
+        "v1_calibration_context": v1_dataset.get("calibration_context"),
+        "v2_calibration_context": v2_dataset.get("calibration_context"),
+        "v1_candles": v1_dataset.get("candles"),
+        "v2_candles": v2_dataset.get("candles"),
+        "v1_first_state": min(v1_times) if v1_times else None,
+        "v1_last_state": max(v1_times) if v1_times else None,
+        "v2_first_state": min(v2_times) if v2_times else None,
+        "v2_last_state": max(v2_times) if v2_times else None,
+        "paired_states": len(records),
+        "same_states": (
+            set(v1_states) == set(v2_states)
+            and len(v1_states) == len(v2_states)
+        ),
+        "same_labels": same_labels,
         "prevalence": prevalence,
         "tradeability_auc": {
             "v1": _interval_result(records, tradeability_v1, resamples, seed),
@@ -610,8 +671,8 @@ def build_comparison(
     seed: int = BOOTSTRAP_SEED,
 ) -> Dict[str, Any]:
     """Load both campaigns and compare every symbol present in both."""
-    v1 = _load_by_symbol(v1_paths)
-    v2 = _load_by_symbol(v2_paths)
+    v1, v1_aborted = _load_by_symbol(v1_paths)
+    v2, v2_aborted = _load_by_symbol(v2_paths)
     symbols: List[Dict[str, Any]] = []
     for symbol in sorted(set(v1) & set(v2)):
         symbols.append(
@@ -641,6 +702,10 @@ def build_comparison(
             ),
         },
         "symbols": symbols,
+        "aborted_reports": v1_aborted + v2_aborted,
+        "all_pairs_use_same_states": all(
+            symbol["same_states"] and symbol["same_labels"] for symbol in symbols
+        ),
         "overall": overall,
         "verdict": _verdict(symbols, overall),
     }
@@ -674,10 +739,33 @@ def _fmt_delta(delta: Optional[Dict[str, Any]]) -> str:
 
 def print_markdown(summary: Dict[str, Any]) -> None:
     """Print compact Markdown tables for the PR body and the campaign doc."""
+    print("\n### Protocol integrity (same dataset and labels)\n")
+    print("| Symbol | v1 set | v2 set | v1 candles | v2 candles | v1 states | v2 states | "
+          "Same state indices | Same labels |")
+    print("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- |")
+    for symbol in summary["symbols"]:
+        print(
+            f"| {symbol['symbol']} | {symbol['v1_question_set']} | "
+            f"{symbol['v2_question_set']} | {symbol['v1_candles']} | "
+            f"{symbol['v2_candles']} | {symbol['v1_first_state']}..{symbol['v1_last_state']} | "
+            f"{symbol['v2_first_state']}..{symbol['v2_last_state']} | "
+            f"{'yes' if symbol['same_states'] else 'NO'} | "
+            f"{'yes' if symbol['same_labels'] else 'NO'} |"
+        )
+    for aborted in summary.get("aborted_reports") or []:
+        print(
+            f"\nAborted report excluded: {aborted['symbol']} "
+            f"{aborted['question_set']} ({aborted['scored']}/{aborted['calls']} scored)"
+        )
+    print(
+        f"\nAll pairs use identical states and labels: "
+        f"**{'yes' if summary['all_pairs_use_same_states'] else 'NO'}**."
+    )
+
     print("\n### Per-symbol summary\n")
     print("| Symbol | States | Prevalence | v1 tradeability AUC (95% CI) | "
           "v2 tradeability AUC (95% CI) | v2-v1 (paired 95% CI) | "
-          "v1 direction AUC (95% CI) | v2 direction AUC (95% CI) |")
+          "v1 bias AUC (95% CI) | v2 bias AUC (95% CI) |")
     print("| --- | ---: | ---: | --- | --- | --- | --- | --- |")
     for symbol in summary["symbols"]:
         prevalence = symbol["prevalence"]
@@ -755,7 +843,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Compare v1 and v2 JEV campaigns")
     parser.add_argument(
         "--v1-reports", nargs="+", default=None,
-        help="v1 calibration reports (default: runtime/jev_bench/calibration_*_200.json)",
+        help="v1 calibration reports (default: runtime/jev_bench/calibration_*_200_v1.json)",
     )
     parser.add_argument(
         "--v2-reports", nargs="+", default=None,
@@ -774,7 +862,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the comparison and write the JSON summary."""
     args = _build_parser().parse_args(list(argv) if argv is not None else None)
     v1_paths = args.v1_reports or glob.glob(
-        os.path.join(_REPO_ROOT, "runtime", "jev_bench", "calibration_*_200.json")
+        os.path.join(_REPO_ROOT, "runtime", "jev_bench", "calibration_*_200_v1.json")
     )
     v2_paths = args.v2_reports or glob.glob(
         os.path.join(_REPO_ROOT, "runtime", "jev_bench", "calibration_*_200_v2.json")
