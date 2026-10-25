@@ -1090,7 +1090,7 @@ def build_report(
             "source": args.candles,
             "symbol": args.symbol,
             "timeframe": args.timeframe,
-            "market_type": getattr(args, "market_type", "spot"),
+            "market_type": getattr(args, "market_type", None) or "spot",
             "candles": args.candle_count,
             "states": len(records),
             "horizons": list(horizons),

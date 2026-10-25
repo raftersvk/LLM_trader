@@ -503,6 +503,14 @@ def test_market_type_defaults_to_spot_and_can_be_overridden():
     )
     assert default_report["dataset"]["market_type"] == "spot"
 
+    # A parsed Namespace keeps market_type=None until defaults are applied.
+    none_report = jev_calibration.build_report(
+        [_full_record(0, 0.4), _full_record(1, 0.6)],
+        _source_args(market_type=None), (1, 2, 3, 4),
+        "2026-10-15T00:00:00Z", 0.0, False, None, "test",
+    )
+    assert none_report["dataset"]["market_type"] == "spot"
+
     futures_args = jev_calibration._parse_args(
         ["--candles", "futures.csv", "--market-type", "futures"]
     )
