@@ -1265,8 +1265,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """Read the signals, compute the report and write it to ``--out``."""
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     args = _build_parser().parse_args(list(argv) if argv is not None else None)
-    if args.cost_pct < 0:
-        raise SystemExit("--cost-pct must be non-negative")
+    if not _is_finite(args.cost_pct) or args.cost_pct < 0:
+        raise SystemExit("--cost-pct must be a finite, non-negative number")
     if args.target <= 0:
         raise SystemExit("--target must be positive")
     signals_dir = resolve_signals_dir(args.signals_dir)

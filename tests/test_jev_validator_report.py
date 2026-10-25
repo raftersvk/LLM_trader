@@ -644,3 +644,23 @@ def test_conclusions_distinguish_why_no_veto_was_priced():
     )
     skipped_text = report.render_report(skipped_data, "<signals-dir>")
     assert "not a whole number of candles" in skipped_text
+
+
+@pytest.mark.parametrize("cost", ["nan", "inf", "-inf", "-0.01"])
+def test_cli_rejects_non_finite_or_negative_cost(cost):
+    """A NaN/inf cost can never turn a horizon into a validated NaN result."""
+    with pytest.raises(SystemExit):
+        report.main(["--cost-pct", cost])
+
+
+def test_nan_cost_never_produces_a_measurement():
+    """The API guard also rejects a NaN cost, not just the CLI flag."""
+    candles = {
+        datetime(2026, 1, 1, 0, tzinfo=timezone.utc): _candle("2026-01-01T00:00:00Z", 100.0),
+        datetime(2026, 1, 1, 1, tzinfo=timezone.utc): _candle("2026-01-01T01:00:00Z", 110.0),
+    }
+    result = report.counterfactual(
+        _record("2026-01-01T00:00:00Z", "BUY"), candles, 1, float("nan")
+    )
+    assert result.status == "invalid_price"
+    assert result.net_pct is None
