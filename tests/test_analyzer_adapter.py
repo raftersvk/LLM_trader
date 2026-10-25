@@ -1372,3 +1372,69 @@ async def test_json_format_can_be_disabled_for_signal_analysis():
     await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
 
     assert engine.calls[-1]["response_format"] is None
+
+
+@pytest.mark.asyncio
+async def test_truncated_parse_error_is_rejected_before_repair():
+    """finish_reason=length must keep its guard and never be repaired into a trade."""
+    raw = PROSE_WITHOUT_JSON
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=raw,
+        result=_json_parse_error_result(raw),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager(['{"action": "BUY", "confidence": "HIGH", "stop_loss": 1, "take_profit": 2, "reasoning": "x"}'])
+    engine.model_manager = repair
+    engine.model_manager.last_finish_reason = "length"
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert repair.calls == [], "a truncated answer must not be repaired"
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert "finish_reason=length" in signal.reasoning
+    assert "truncated content" in signal.reasoning
+
+
+@pytest.mark.asyncio
+async def test_empty_parse_error_keeps_the_empty_content_diagnostic():
+    """An empty completion must be reported as empty, not as a failed repair."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response="",
+        result=_json_parse_error_result(""),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert repair.calls == [], "an empty completion has nothing to repair"
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert "empty content" in signal.reasoning
+    assert "JSON parse error after repair" not in signal.reasoning
+
+
+@pytest.mark.asyncio
+async def test_content_filtered_parse_error_is_rejected_before_repair():
+    """finish_reason=content_filter keeps its guard and is never repaired."""
+    raw = PROSE_WITHOUT_JSON
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=raw,
+        result=_json_parse_error_result(raw),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    engine.model_manager.last_finish_reason = "content_filter"
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert repair.calls == []
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert "content filtered" in signal.reasoning

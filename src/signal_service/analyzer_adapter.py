@@ -323,6 +323,21 @@ class PairAnalyzer:
         if isinstance(result, dict):
             raw_response = getattr(self.engine, "last_llm_response", None) or result.get("raw_response") or ""
 
+        # Existing terminal guards run before any repair: a truncated, filtered
+        # or empty completion must keep its real diagnostic and never be turned
+        # into a valid-looking decision by the repair call.
+        invalid_reason = self._invalid_response_reason(result, raw_response)
+        if invalid_reason:
+            logger.warning("Invalid LLM response for %s: %s", self.symbol, invalid_reason)
+            model, provider = self._resolve_model_provider(result if isinstance(result, dict) else {})
+            return self._hold_fallback(
+                reasoning=invalid_reason,
+                candle_open_dt=candle_open_dt,
+                model=model,
+                provider=provider,
+                raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+            )
+
         if self._is_json_parse_error(result):
             original_raw = raw_response
             finish_reason = self._last_finish_reason(result)
@@ -345,18 +360,19 @@ class PairAnalyzer:
                     raw_response_hash=hash_raw_response(original_raw) if original_raw else None,
                 )
             result, raw_response = repaired
-
-        invalid_reason = self._invalid_response_reason(result, raw_response)
-        if invalid_reason:
-            logger.warning("Invalid LLM response for %s: %s", self.symbol, invalid_reason)
-            model, provider = self._resolve_model_provider(result if isinstance(result, dict) else {})
-            return self._hold_fallback(
-                reasoning=invalid_reason,
-                candle_open_dt=candle_open_dt,
-                model=model,
-                provider=provider,
-                raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
-            )
+            # Re-check the repaired answer: a repair that itself comes back
+            # truncated, filtered or empty must not bypass the same guards.
+            repaired_invalid = self._invalid_response_reason(result, raw_response)
+            if repaired_invalid:
+                logger.warning("Invalid LLM response for %s after repair: %s", self.symbol, repaired_invalid)
+                model, provider = self._resolve_model_provider(result)
+                return self._hold_fallback(
+                    reasoning=repaired_invalid,
+                    candle_open_dt=candle_open_dt,
+                    model=model,
+                    provider=provider,
+                    raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+                )
 
         veto_reason: Optional[str] = None
         try:
