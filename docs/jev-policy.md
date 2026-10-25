@@ -186,8 +186,12 @@ over 282 states.
 ## Calibration evidence (2026-10-24 audit)
 
 The independent audit of the committed calibration reports changes how the
-policy layer must be interpreted. The evidence, reproduced from
-`runtime/jev_bench/calibration_{btc,eth}_200.json`:
+policy layer must be interpreted. The evidence is reproduced from the
+historical 600-candle reports archived at
+`runtime/jev_bench/archive/calibration_{btc,eth}_200_600candles.json`. The
+un-suffixed `calibration_{btc,eth}_200.json` paths now hold the newer 7-symbol
+700-candle campaign, so the figures below (BTC 2/200 positives, AUC 0.854)
+come from the archive, not from the current files.
 
 - **Class imbalance:** the h1 worth-trading label has BTC 2/200 (1.0 %) and ETH
   8/200 (4.0 %) positives. A constant base-rate predictor scores Brier 0.0099
