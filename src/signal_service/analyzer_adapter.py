@@ -358,7 +358,7 @@ class PairAnalyzer:
                 "(finish_reason=%s, content_chars=%d)",
                 self.symbol, finish_reason or "unknown", len(original_raw),
             )
-            rerun = await self._rerun_without_json_mode()
+            rerun = await self._rerun_without_json_mode(candle_open_dt)
             if rerun is None:
                 logger.warning("Invalid LLM response for %s: %s", self.symbol, ECHO_RERUN_FAILED_REASON)
                 model, provider = self._resolve_model_provider(result if isinstance(result, dict) else {})
@@ -781,12 +781,30 @@ class PairAnalyzer:
             json_object_output=json_mode,
         )
 
-    async def _rerun_without_json_mode(self) -> Optional[tuple[Dict[str, Any], str]]:
-        """Re-run the full analysis once without response_format after an echo."""
+    async def _rerun_without_json_mode(
+        self, candle_open_dt: Optional[datetime],
+    ) -> Optional[tuple[Dict[str, Any], str]]:
+        """Re-run the full analysis once without response_format after an echo.
+
+        The retry must see the SAME closed-candle window as the original call:
+        ``AnalysisEngine.analyze_market`` re-fetches OHLCV, so without a fresh
+        window it would analyse the still-forming candle (no-look-ahead breach).
+        """
+        window_state: Dict[str, bool] = {"empty": False}
         try:
-            result = await self._analyze_market(json_mode=False)
+            if candle_open_dt is None:
+                result = await self._analyze_market(json_mode=False)
+            else:
+                with ClosedCandleWindow(self.engine, self.timeframe, candle_open_dt) as window_state:
+                    result = await self._analyze_market(json_mode=False)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Full-analysis retry without JSON mode failed for %s: %s", self.symbol, exc)
+            return None
+        if window_state["empty"]:
+            logger.warning(
+                "Full-analysis retry without JSON mode for %s found no closed candle",
+                self.symbol,
+            )
             return None
         if not isinstance(result, dict):
             return None
