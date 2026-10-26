@@ -145,9 +145,11 @@ deepseek_reasoning_effort = high
 deepseek_max_tokens = 65536
 # DeepSeek requests are sent with response_format=json_object, so while provider =
 # deepseek the prompt asks for ONE JSON object ({"narrative": ..., "analysis": {...}})
-# instead of narrative + fenced block. For every other provider the same JSON-only
-# prompt is used only when [signal_service] json_response_format is enabled, so the
-# prompt shape and the wire format can never disagree on the signal path.
+# instead of narrative + fenced block. The same JSON-only prompt is also used for
+# provider = all, because its fallback chain includes DeepSeek's forced JSON mode.
+# For every other provider it is used only when [signal_service]
+# json_response_format is enabled, so prompt shape and wire format agree on the
+# signal path.
 
 # === Risk Management ===
 

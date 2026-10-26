@@ -827,6 +827,28 @@ def test_response_template_asks_for_one_json_object_in_json_output_mode():
     assert example["analysis"]["signal"] == "HOLD"
 
 
+def test_response_template_is_json_only_for_the_all_provider_chain():
+    """provider=all can fall back to DeepSeek, whose config forces JSON mode.
+
+    The prompt has no per-call visibility into the fallback chain, so it must
+    use the JSON-only contract for the whole chain; otherwise a DeepSeek
+    fallback gets prose + forced response_format and echoes the format object.
+    """
+    template = make_manager(make_config(PROVIDER="all")).build_response_template()
+
+    assert_fragments(template, [
+        "Output: ONE JSON object and NOTHING outside it.",
+        'Narrative (the lines below as one string in "narrative", \\n separated):',
+    ])
+    assert_absent(template, [
+        "Output: 13 plain-text numbered lines + JSON",
+        "Narrative (plain-text only):",
+    ])
+    match = re.search(r"```json\s*(.*?)\s*```", template, re.DOTALL | re.IGNORECASE)
+    assert match is not None
+    assert set(json.loads(match.group(1))) == {"narrative", "analysis"}
+
+
 def test_signal_json_mode_prompt_is_json_only_for_litellm():
     """The litellm signal path must ask for JSON only when response_format is sent.
 
