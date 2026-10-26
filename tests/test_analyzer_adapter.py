@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.signal_service.analyzer_adapter import (
+    ECHO_RERUN_FAILED_REASON,
     PairAnalyzer,
     ReplayDataInjector,
     analyze_and_store,
@@ -1297,6 +1298,20 @@ class RepairModelManager(FakeModelManager):
         return self.replies.pop(0)
 
 
+class SequenceEngine(FakeEngine):
+    """Fake engine returning scripted results, one per analysis call."""
+
+    def __init__(self, results, config=None):
+        super().__init__(config=config)
+        self.results = list(results)
+
+    async def analyze_market(self, **kwargs):
+        self.calls.append(kwargs)
+        result = self.results.pop(0)
+        self.last_llm_response = result.get("raw_response")
+        return result
+
+
 def _json_parse_error_result(raw: str) -> dict:
     return {
         **RESULT_META,
@@ -1364,13 +1379,12 @@ RESPONSE_FORMAT_ECHO = '{"type": "json_object"}'
 
 
 @pytest.mark.asyncio
-async def test_response_format_echo_is_repaired_once_without_response_format():
-    """Live echo -> one repair WITHOUT response_format -> the real decision is used."""
-    engine = _attach_unified_parser(FakeEngine(
-        raw_response=RESPONSE_FORMAT_ECHO,
-        result=dict(RESULT_META),
-        config=FakeEngineConfig(),
-    ))
+async def test_response_format_echo_reruns_full_analysis_without_json_mode():
+    """An echo has no analysis: re-run the full prompt once with JSON mode off."""
+    engine = _attach_unified_parser(SequenceEngine([
+        {**RESULT_META, "raw_response": RESPONSE_FORMAT_ECHO},
+        {**RESULT_META, "raw_response": RAW_BUY},
+    ], config=FakeEngineConfig()))
     repair = RepairModelManager([REPAIRED_HOLD])
     engine.model_manager = repair
     analyzer = PairAnalyzer(
@@ -1379,25 +1393,25 @@ async def test_response_format_echo_is_repaired_once_without_response_format():
 
     signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
 
-    assert len(repair.calls) == 1
-    assert "Return ONLY the JSON object matching the response schema, no prose." in repair.calls[0]["prompt"]
-    assert "response_format" not in repair.calls[0], "repair must not repeat the forced format"
-    assert engine.calls[-1]["response_format"] == {"type": "json_object"}
-    assert signal.action == "HOLD"
-    assert signal.reasoning == "repaired decision"
-    assert signal.risk_approved is False
+    assert len(engine.calls) == 2
+    assert engine.calls[0]["response_format"] == {"type": "json_object"}
+    assert engine.calls[0]["json_object_output"] is True
+    assert engine.calls[1]["response_format"] is None
+    assert engine.calls[1]["json_object_output"] is False
+    assert repair.calls == [], "an echo must not be converted by the repair call"
+    assert signal.action == "BUY"
+    assert signal.reasoning == "breakout"
     signal.validate()
 
 
 @pytest.mark.asyncio
-async def test_response_format_echo_twice_falls_back_to_hold_without_looping():
-    """A provider that echoes again after one repair stops at HOLD."""
-    engine = _attach_unified_parser(FakeEngine(
-        raw_response=RESPONSE_FORMAT_ECHO,
-        result=dict(RESULT_META),
-        config=FakeEngineConfig(),
-    ))
-    repair = RepairModelManager([RESPONSE_FORMAT_ECHO])
+async def test_response_format_echo_again_after_full_rerun_falls_back_to_hold():
+    """A second echo stops at HOLD with the dedicated reason, never looping."""
+    engine = _attach_unified_parser(SequenceEngine([
+        {**RESULT_META, "raw_response": RESPONSE_FORMAT_ECHO},
+        {**RESULT_META, "raw_response": RESPONSE_FORMAT_ECHO},
+    ], config=FakeEngineConfig()))
+    repair = RepairModelManager([REPAIRED_HOLD])
     engine.model_manager = repair
     analyzer = PairAnalyzer(
         engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=True,
@@ -1405,11 +1419,36 @@ async def test_response_format_echo_twice_falls_back_to_hold_without_looping():
 
     signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
 
-    assert len(repair.calls) == 1, "repair must run exactly once, never loop"
+    assert len(engine.calls) == 2, "full rerun must happen exactly once, never loop"
+    assert repair.calls == []
     assert signal.action == "HOLD"
     assert signal.risk_approved is False
-    assert signal.reasoning == "invalid LLM output: JSON parse error after repair"
+    assert signal.reasoning == ECHO_RERUN_FAILED_REASON
     signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_format_echo_check_is_inactive_when_json_mode_is_disabled():
+    """A prose-mode call must not be re-run or repaired just for an echo-shaped body."""
+    engine = FakeEngine(
+        raw_response=RESPONSE_FORMAT_ECHO,
+        result={**RESULT_META, "raw_response": RESPONSE_FORMAT_ECHO},
+        config=FakeEngineConfig(),
+    )
+    engine = _attach_unified_parser(engine)
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=False,
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(engine.calls) == 1
+    assert engine.calls[0]["response_format"] is None
+    assert repair.calls == []
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
 
 
 @pytest.mark.asyncio

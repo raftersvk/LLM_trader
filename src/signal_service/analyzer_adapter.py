@@ -70,6 +70,7 @@ JSON_REPAIR_SYSTEM = (
 #: narrative normally sit at the end, so keep the tail when truncating.
 MAX_REPAIR_SOURCE_CHARS = 24000
 REPAIR_FAILED_REASON = "invalid LLM output: JSON parse error after repair"
+ECHO_RERUN_FAILED_REASON = "invalid LLM output: response_format echo after one retry without JSON mode"
 #: Keys that make a repaired object a decision rather than a parser/provider error payload.
 _DECISION_KEYS = frozenset({"action", "recommendation", "signal", "decision"})
 _DECISION_CONTAINERS = ("analysis", "trading_decision", "decision")
@@ -344,11 +345,57 @@ class PairAnalyzer:
                 raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
             )
 
-        if self._is_json_parse_error(result) or self._is_response_format_echo(raw_response):
+        # A format echo ({"type": "json_object"}) carries no analysis: converting
+        # it would force the model to invent a decision. Re-run the FULL analysis
+        # once with JSON mode off so the original prompt produces the analysis
+        # that was never emitted. Only applies while JSON mode is actually on.
+        format_echo = self._json_format_enabled() and self._is_response_format_echo(raw_response)
+        if format_echo:
             original_raw = raw_response
             finish_reason = self._last_finish_reason(result)
             logger.warning(
-                "JSON parse/format echo for %s: requesting one repair (finish_reason=%s, content_chars=%d)",
+                "response_format echo for %s: re-running full analysis once without JSON mode "
+                "(finish_reason=%s, content_chars=%d)",
+                self.symbol, finish_reason or "unknown", len(original_raw),
+            )
+            rerun = await self._rerun_without_json_mode()
+            if rerun is None:
+                logger.warning("Invalid LLM response for %s: %s", self.symbol, ECHO_RERUN_FAILED_REASON)
+                model, provider = self._resolve_model_provider(result if isinstance(result, dict) else {})
+                return self._hold_fallback(
+                    reasoning=ECHO_RERUN_FAILED_REASON,
+                    candle_open_dt=candle_open_dt,
+                    model=model,
+                    provider=provider,
+                    raw_response_hash=hash_raw_response(original_raw) if original_raw else None,
+                )
+            result, raw_response = rerun
+            rerun_invalid = self._invalid_response_reason(result, raw_response)
+            if rerun_invalid:
+                logger.warning("Invalid LLM response for %s after retry: %s", self.symbol, rerun_invalid)
+                model, provider = self._resolve_model_provider(result)
+                return self._hold_fallback(
+                    reasoning=rerun_invalid,
+                    candle_open_dt=candle_open_dt,
+                    model=model,
+                    provider=provider,
+                    raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+                )
+            if self._is_json_parse_error(result) or self._is_response_format_echo(raw_response):
+                logger.warning("Invalid LLM response for %s: %s", self.symbol, ECHO_RERUN_FAILED_REASON)
+                model, provider = self._resolve_model_provider(result)
+                return self._hold_fallback(
+                    reasoning=ECHO_RERUN_FAILED_REASON,
+                    candle_open_dt=candle_open_dt,
+                    model=model,
+                    provider=provider,
+                    raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+                )
+        elif self._is_json_parse_error(result):
+            original_raw = raw_response
+            finish_reason = self._last_finish_reason(result)
+            logger.warning(
+                "JSON parse error for %s: requesting one repair (finish_reason=%s, content_chars=%d)",
                 self.symbol, finish_reason or "unknown", len(original_raw),
             )
             repaired = await self._repair_json_response(result, original_raw)
@@ -714,8 +761,15 @@ class PairAnalyzer:
             return f"invalid LLM response: empty content{suffix}"
         return None
 
-    async def _analyze_market(self) -> Dict[str, Any]:
-        """Call the engine statelessly (one analysis, no continuity state)."""
+    async def _analyze_market(self, json_mode: Optional[bool] = None) -> Dict[str, Any]:
+        """Call the engine statelessly (one analysis, no continuity state).
+
+        ``json_mode`` defaults to the signal opt-in. The echo-recovery path
+        passes ``False`` so the same full prompt is re-run as prose + JSON,
+        which gives the model the market context the echo never answered.
+        """
+        if json_mode is None:
+            json_mode = self._json_format_enabled()
         return await self.engine.analyze_market(
             previous_response=None,
             previous_indicators=None,
@@ -723,9 +777,25 @@ class PairAnalyzer:
             performance_context="",
             brain_service=None,
             dynamic_thresholds=None,
-            response_format=self._json_response_format(),
-            json_object_output=self._json_format_enabled(),
+            response_format={"type": "json_object"} if json_mode else None,
+            json_object_output=json_mode,
         )
+
+    async def _rerun_without_json_mode(self) -> Optional[tuple[Dict[str, Any], str]]:
+        """Re-run the full analysis once without response_format after an echo."""
+        try:
+            result = await self._analyze_market(json_mode=False)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Full-analysis retry without JSON mode failed for %s: %s", self.symbol, exc)
+            return None
+        if not isinstance(result, dict):
+            return None
+        raw_response = (
+            result.get("raw_response")
+            or getattr(self.engine, "last_llm_response", None)
+            or ""
+        )
+        return result, raw_response
 
 
     # ----------------------------------------------------------------- extraction
