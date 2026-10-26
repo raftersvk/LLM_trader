@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.signal_service.analyzer_adapter import (
+    ECHO_RERUN_FAILED_REASON,
     PairAnalyzer,
     ReplayDataInjector,
     analyze_and_store,
@@ -1297,6 +1298,57 @@ class RepairModelManager(FakeModelManager):
         return self.replies.pop(0)
 
 
+class SequenceEngine(FakeEngine):
+    """Fake engine returning scripted results, one per analysis call."""
+
+    def __init__(self, results, config=None):
+        super().__init__(config=config)
+        self.results = list(results)
+
+    async def analyze_market(self, **kwargs):
+        self.calls.append(kwargs)
+        result = self.results.pop(0)
+        self.last_llm_response = result.get("raw_response")
+        return result
+
+
+class RecordingCollector:
+    """Fake collector that serves scripted OHLCV batches on each fetch."""
+
+    def __init__(self, engine, batches):
+        self.engine = engine
+        self.batches = list(batches)
+        self.calls = 0
+
+    async def collect_data(self, *_args, **_kwargs):
+        candles, timestamps = self.batches[min(self.calls, len(self.batches) - 1)]
+        self.calls += 1
+        self.engine.context.ohlcv_candles = [list(row) for row in candles]
+        self.engine.context.timestamps = list(timestamps)
+        return {"success": True}
+
+
+class CollectingSequenceEngine(SequenceEngine):
+    """Sequence engine that fetches data and records the active collector wrapper."""
+
+    def __init__(self, results, config=None):
+        super().__init__(results, config=config)
+        self.collector_wrappers = []
+        self.visible_candle_counts = []
+
+    async def analyze_market(self, **kwargs):
+        self.calls.append(kwargs)
+        collector = getattr(self, "data_collector", None)
+        if collector is not None:
+            self.collector_wrappers.append(getattr(collector.collect_data, "__name__", ""))
+            await collector.collect_data()
+            candles = self.context.ohlcv_candles
+            self.visible_candle_counts.append(0 if candles is None else len(candles))
+        result = self.results.pop(0)
+        self.last_llm_response = result.get("raw_response")
+        return result
+
+
 def _json_parse_error_result(raw: str) -> dict:
     return {
         **RESULT_META,
@@ -1321,14 +1373,17 @@ async def test_json_parse_error_is_repaired_once_and_the_decision_is_used():
     ))
     repair = RepairModelManager([REPAIRED_HOLD])
     engine.model_manager = repair
-    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=True,
+    )
 
     signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
 
     assert len(repair.calls) == 1
     assert "Return ONLY the JSON object matching the response schema, no prose." in repair.calls[0]["prompt"]
-    assert repair.calls[0]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in repair.calls[0]
     assert engine.calls[-1]["response_format"] == {"type": "json_object"}
+    assert engine.calls[-1]["json_object_output"] is True
     assert signal.action == "HOLD"
     assert signal.reasoning == "repaired decision"
     assert signal.risk_approved is False
@@ -1355,6 +1410,173 @@ async def test_json_parse_error_twice_falls_back_to_exact_hold_reason():
     assert signal.reasoning == "invalid LLM output: JSON parse error after repair"
     assert signal.raw_response_hash == hash_raw_response(PROSE_WITHOUT_JSON)
     signal.validate()
+
+
+RESPONSE_FORMAT_ECHO = '{"type": "json_object"}'
+
+
+@pytest.mark.asyncio
+async def test_response_format_echo_reruns_full_analysis_without_json_mode():
+    """An echo has no analysis: re-run the full prompt once with JSON mode off."""
+    engine = _attach_unified_parser(SequenceEngine([
+        {**RESULT_META, "raw_response": RESPONSE_FORMAT_ECHO},
+        {**RESULT_META, "raw_response": RAW_BUY},
+    ], config=FakeEngineConfig()))
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=True,
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(engine.calls) == 2
+    assert engine.calls[0]["response_format"] == {"type": "json_object"}
+    assert engine.calls[0]["json_object_output"] is True
+    assert engine.calls[1]["response_format"] is None
+    assert engine.calls[1]["json_object_output"] is False
+    assert repair.calls == [], "an echo must not be converted by the repair call"
+    assert signal.action == "BUY"
+    assert signal.reasoning == "breakout"
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_response_format_echo_again_after_full_rerun_falls_back_to_hold():
+    """A second echo stops at HOLD with the dedicated reason, never looping."""
+    engine = _attach_unified_parser(SequenceEngine([
+        {**RESULT_META, "raw_response": RESPONSE_FORMAT_ECHO},
+        {**RESULT_META, "raw_response": RESPONSE_FORMAT_ECHO},
+    ], config=FakeEngineConfig()))
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=True,
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(engine.calls) == 2, "full rerun must happen exactly once, never loop"
+    assert repair.calls == []
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.reasoning == ECHO_RERUN_FAILED_REASON
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_format_echo_check_is_inactive_when_json_mode_is_disabled():
+    """A prose-mode call must not be re-run or repaired just for an echo-shaped body."""
+    engine = FakeEngine(
+        raw_response=RESPONSE_FORMAT_ECHO,
+        result={**RESULT_META, "raw_response": RESPONSE_FORMAT_ECHO},
+        config=FakeEngineConfig(),
+    )
+    engine = _attach_unified_parser(engine)
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=False,
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(engine.calls) == 1
+    assert engine.calls[0]["response_format"] is None
+    assert repair.calls == []
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+
+
+@pytest.mark.asyncio
+async def test_echo_retry_reapplies_the_closed_candle_window():
+    """The full-analysis retry must not see the still-forming candle."""
+    candle_open = "2026-10-25T09:00:00Z"
+    candles = [
+        [0, 1.0, 2.0, 0.5, 100.0, 10.0],
+        [1, 1.0, 2.0, 0.5, 101.0, 10.0],
+        [2, 1.0, 2.0, 0.5, 102.0, 10.0],  # opens 10:00, still forming at 10:00
+    ]
+    timestamps = [
+        datetime(2026, 10, 25, 8, tzinfo=timezone.utc),
+        datetime(2026, 10, 25, 9, tzinfo=timezone.utc),
+        datetime(2026, 10, 25, 10, tzinfo=timezone.utc),
+    ]
+    engine = _attach_unified_parser(CollectingSequenceEngine([
+        {**RESULT_META, "raw_response": RESPONSE_FORMAT_ECHO},
+        {**RESULT_META, "raw_response": RAW_BUY},
+    ], config=FakeEngineConfig()))
+    engine.data_collector = RecordingCollector(engine, [(candles, timestamps)])
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=True,
+    )
+
+    signal = await analyzer.analyze(candle_open_time=candle_open)
+
+    assert len(engine.calls) == 2
+    assert engine.collector_wrappers == ["_collect_and_truncate", "_collect_and_truncate"]
+    assert engine.visible_candle_counts == [2, 2], "retry must drop the forming 10:00 candle"
+    assert engine.calls[1]["response_format"] is None
+    assert repair.calls == []
+    assert signal.action == "BUY"
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_echo_retry_with_empty_closed_window_falls_back_to_hold():
+    """An empty retry window is not analysed; it produces the echo HOLD reason."""
+    candle_open = "2026-10-25T09:00:00Z"
+    closed = [
+        [0, 1.0, 2.0, 0.5, 100.0, 10.0],
+        [1, 1.0, 2.0, 0.5, 101.0, 10.0],
+    ]
+    forming_only = [[2, 1.0, 2.0, 0.5, 102.0, 10.0]]
+    timestamps_closed = [
+        datetime(2026, 10, 25, 8, tzinfo=timezone.utc),
+        datetime(2026, 10, 25, 9, tzinfo=timezone.utc),
+    ]
+    timestamps_forming = [datetime(2026, 10, 25, 10, tzinfo=timezone.utc)]
+    engine = _attach_unified_parser(CollectingSequenceEngine([
+        {**RESULT_META, "raw_response": RESPONSE_FORMAT_ECHO},
+        {**RESULT_META, "raw_response": RAW_BUY},
+    ], config=FakeEngineConfig()))
+    engine.data_collector = RecordingCollector(engine, [
+        (closed, timestamps_closed),
+        (forming_only, timestamps_forming),
+    ])
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=True,
+    )
+
+    signal = await analyzer.analyze(candle_open_time=candle_open)
+
+    assert len(engine.calls) == 2
+    assert engine.visible_candle_counts == [2, 0], "empty retry window must be detected"
+    assert repair.calls == []
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.reasoning == ECHO_RERUN_FAILED_REASON
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_json_format_is_off_by_default():
+    """Default false keeps the prose prompt and sends no response_format."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=RAW_BUY,
+        result=dict(RESULT_META),
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert engine.calls[-1]["response_format"] is None
+    assert engine.calls[-1]["json_object_output"] is False
 
 
 @pytest.mark.asyncio
@@ -1485,6 +1707,7 @@ async def test_repair_honours_the_json_format_opt_out():
     signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
 
     assert len(repair.calls) == 1
-    assert repair.calls[0]["response_format"] is None
+    assert "response_format" not in repair.calls[0]
     assert engine.calls[-1]["response_format"] is None
+    assert engine.calls[-1]["json_object_output"] is False
     assert signal.reasoning == "repaired decision"

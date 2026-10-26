@@ -145,8 +145,11 @@ deepseek_reasoning_effort = high
 deepseek_max_tokens = 65536
 # DeepSeek requests are sent with response_format=json_object, so while provider =
 # deepseek the prompt asks for ONE JSON object ({"narrative": ..., "analysis": {...}})
-# instead of narrative + fenced block. The wire format and the prompt are switched by
-# the `provider = deepseek` selection alone - there is no separate switch to keep in sync.
+# instead of narrative + fenced block. The same JSON-only prompt is also used for
+# provider = all, because its fallback chain includes DeepSeek's forced JSON mode.
+# For every other provider it is used only when [signal_service]
+# json_response_format is enabled, so prompt shape and wire format agree on the
+# signal path.
 
 # === Risk Management ===
 
@@ -400,6 +403,9 @@ timeout_seconds = 8
 # === Signal service ===
 [signal_service]
 # Ask the signal-analysis LLM for a single JSON object (response_format=json_object).
+# Off by default as a safety switch. Enabling it ALSO switches the signal prompt to
+# JSON-only (ONE object, no prose, with a json example), because asking for prose +
+# JSON while response_format is active makes some providers echo {"type":"json_object"}.
 # Only the signal path opts in; dashboard, RAG and news calls are unchanged.
 # Providers that reject the parameter are retried once without it.
-json_response_format = true
+json_response_format = false

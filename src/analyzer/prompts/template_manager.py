@@ -854,11 +854,18 @@ create additional signals. End with a brief risk disclaimer before the final thr
 
     def build_response_template(self, has_chart_analysis: bool = False,
                                 model_verbosity: str | None = None,
-                                dynamic_thresholds: dict[str, Any] | None = None) -> str:
+                                dynamic_thresholds: dict[str, Any] | None = None,
+                                json_object_output: bool = False) -> str:
         """Build the response format template: output structure, JSON schema, field rules.
 
         Decision logic (R/R gates, position sizing, SL/TP rules, macro conflict) lives in
         build_decision_rules() instead, which is placed earlier in the system prompt.
+
+        ``json_object_output`` is set only by the signal-analysis path when it also
+        sends ``response_format={"type": "json_object"}``. In that mode the prompt must
+        ask for ONE JSON object with no prose, exactly like the provider is forced to
+        emit; asking for prose + a JSON block makes JSON-mode providers echo the
+        requested format object instead of answering.
         Returns:
             str: Formatted response template (output-format-only)
         """
@@ -935,7 +942,14 @@ create additional signals. End with a brief risk disclaimer before the final thr
             )
             _reasoning_guidance = "(1) thesis and key drivers, (2) invalidation trigger, (3) what to watch next."
 
-        is_json_object_output = self.config.PROVIDER.strip().lower() == "deepseek"
+        # DeepSeek always uses JSON mode. The "all" fallback chain includes
+        # DeepSeek (provider_orchestrator._all_text_chain), whose model config
+        # hard-codes response_format json_object, so it must use the JSON-only
+        # prompt even when the signal opt-in is off. Other providers (notably
+        # litellm / OpenCode Go) reach JSON mode only through the signal-path
+        # opt-in, which is exactly when response_format is sent on the wire.
+        provider = self.config.PROVIDER.strip().lower()
+        is_json_object_output = json_object_output or provider in ("deepseek", "all")
 
         _analysis_object = f"""    "analysis": {{
         "signal": "HOLD",
