@@ -567,6 +567,7 @@ class PromptBuilder:
         dynamic_thresholds: dict[str, Any] | None = None,
         model_verbosity: str | None = None,
         ev_context: str | None = None,
+        json_object_output: bool = False,
     ) -> str:
         """Build system prompt using template manager.
         Returns:
@@ -612,7 +613,8 @@ class PromptBuilder:
         response_template = self.template_manager.build_response_template(
             has_chart_analysis,
             model_verbosity=eff_verbosity,
-            dynamic_thresholds=dynamic_thresholds
+            dynamic_thresholds=dynamic_thresholds,
+            json_object_output=json_object_output,
         )
 
         return f"{base_prompt}\n\n{decision_rules}\n\n{analysis_steps}\n\n{response_template}"

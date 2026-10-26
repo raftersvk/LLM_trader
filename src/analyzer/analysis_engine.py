@@ -225,6 +225,7 @@ class AnalysisEngine:
         dynamic_thresholds: dict[str, Any] | None = None,
         ev_context: str | None = None,
         response_format: dict[str, Any] | None = None,
+        json_object_output: bool = False,
     ) -> dict[str, Any]:
         """Run the full market analysis workflow and return the result dict.
 
@@ -232,7 +233,9 @@ class AnalysisEngine:
         performance_context go into the system prompt; last_analysis_time is a
         formatted timestamp; current_ticker avoids a redundant API call.
         ``response_format`` is the opt-in structured-output request used by the
-        signal service; the live bot leaves it unset.
+        signal service; the live bot leaves it unset. ``json_object_output`` keeps
+        the prompt JSON-only for the same signal call, so the provider is never
+        asked for prose + JSON while JSON mode is active.
         """
         try:
             if not await self._collect_market_data():
@@ -307,6 +310,7 @@ class AnalysisEngine:
                 precomputed_chart=(chart_image, has_chart_analysis),
                 ev_context=ev_context,
                 response_format=response_format,
+                json_object_output=json_object_output,
             )
 
             assert self.prompt_builder is not None
@@ -527,6 +531,7 @@ class AnalysisEngine:
         precomputed_chart: tuple[io.BytesIO | None, bool] | None = None,
         ev_context: str | None = None,
         response_format: dict[str, Any] | None = None,
+        json_object_output: bool = False,
     ) -> dict[str, Any]:
         """Generate AI analysis using prompt builder and result processor."""
 
@@ -557,6 +562,7 @@ class AnalysisEngine:
             has_chart_analysis,
             dynamic_thresholds,
             ev_context=ev_context,
+            json_object_output=json_object_output,
         )
         assert self.prompt_builder is not None
         prompt = self.prompt_builder.build_prompt(

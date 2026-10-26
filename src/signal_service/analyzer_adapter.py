@@ -11,6 +11,7 @@ The raw LLM response is hashed and never stored or logged.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence
@@ -72,6 +73,8 @@ REPAIR_FAILED_REASON = "invalid LLM output: JSON parse error after repair"
 #: Keys that make a repaired object a decision rather than a parser/provider error payload.
 _DECISION_KEYS = frozenset({"action", "recommendation", "signal", "decision"})
 _DECISION_CONTAINERS = ("analysis", "trading_decision", "decision")
+#: Keys a provider echoes back from the requested response_format instead of answering.
+_FORMAT_ECHO_KEYS = frozenset({"type", "response_format", "format"})
 
 
 def _as_utc(moment: datetime) -> datetime:
@@ -341,11 +344,11 @@ class PairAnalyzer:
                 raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
             )
 
-        if self._is_json_parse_error(result):
+        if self._is_json_parse_error(result) or self._is_response_format_echo(raw_response):
             original_raw = raw_response
             finish_reason = self._last_finish_reason(result)
             logger.warning(
-                "JSON parse error for %s: requesting one repair (finish_reason=%s, content_chars=%d)",
+                "JSON parse/format echo for %s: requesting one repair (finish_reason=%s, content_chars=%d)",
                 self.symbol, finish_reason or "unknown", len(original_raw),
             )
             repaired = await self._repair_json_response(result, original_raw)
@@ -538,14 +541,14 @@ class PairAnalyzer:
             return bool(self.json_response_format)
         config = getattr(self.engine, "config", None)
         if config is None:
-            return True
+            return False
         value = getattr(config, "SIGNAL_JSON_RESPONSE_FORMAT", None)
         if value is None:
             getter = getattr(config, "get_config", None)
             if callable(getter):
-                value = getter("signal_service", "json_response_format", True)
+                value = getter("signal_service", "json_response_format", False)
         if value is None:
-            return True
+            return False
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in ("1", "true", "yes", "on")
@@ -553,6 +556,34 @@ class PairAnalyzer:
     def _json_response_format(self) -> Optional[Dict[str, str]]:
         """Return the response_format payload for the signal call, if enabled."""
         return {"type": "json_object"} if self._json_format_enabled() else None
+
+    def _is_response_format_echo(self, raw_response: str) -> bool:
+        """True when the reply only repeats the requested ``response_format`` object.
+
+        Live JSON-mode providers can answer with the literal ``{"type":
+        "json_object"}`` (seen on OpenCode Go with provider=litellm). It parses as
+        valid JSON, so the parser reports no error; without this check the empty
+        decision would fall through to an unexplained HOLD. Treat it as a repair
+        trigger, never as an answer.
+        """
+        text = (raw_response or "").strip()
+        if not text:
+            return False
+        parsed: Any = None
+        parser = self._unified_parser()
+        parse_json_object = getattr(parser, "parse_json_object", None)
+        if callable(parse_json_object):
+            parsed = parse_json_object(text)
+        if parsed is None:
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                return False
+        return (
+            isinstance(parsed, dict)
+            and bool(parsed)
+            and set(parsed) <= _FORMAT_ECHO_KEYS
+        )
 
     @staticmethod
     def _is_json_parse_error(result: Any) -> bool:
@@ -617,12 +648,12 @@ class PairAnalyzer:
             source = source[-MAX_REPAIR_SOURCE_CHARS:]
         prompt = f"{JSON_REPAIR_INSTRUCTION}\n\nPrevious analysis response:\n{source}"
         try:
+            # Deliberately no response_format here: when the first call echoed
+            # the requested JSON object, re-sending the same forced format would
+            # reproduce the echo. The prompt itself asks for the JSON object.
             repaired_text = await send_prompt(
                 prompt=prompt,
                 system_message=JSON_REPAIR_SYSTEM,
-                # Honour the same signal-path opt-out as the initial call: a
-                # provider that rejects response_format must not get it here.
-                response_format=self._json_response_format(),
             )
         except TypeError:
             # Test doubles / older model managers may not accept response_format.
@@ -693,6 +724,7 @@ class PairAnalyzer:
             brain_service=None,
             dynamic_thresholds=None,
             response_format=self._json_response_format(),
+            json_object_output=self._json_format_enabled(),
         )
 
 

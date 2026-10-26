@@ -223,13 +223,18 @@ def render(
     timeframe: str = "1h",
     has_chart_analysis: bool = False,
     dynamic_thresholds: dict[str, Any] | None = None,
+    json_object_output: bool = False,
 ) -> str:
     """Compose the full prompt PromptBuilder emits: base, rules, steps, format."""
     return "\n\n".join([
         manager.build_system_prompt(symbol, timeframe, dynamic_thresholds=dynamic_thresholds),
         manager.build_decision_rules(has_chart_analysis, dynamic_thresholds=dynamic_thresholds),
         manager.build_analysis_steps(symbol, has_chart_analysis=has_chart_analysis),
-        manager.build_response_template(has_chart_analysis, dynamic_thresholds=dynamic_thresholds),
+        manager.build_response_template(
+            has_chart_analysis,
+            dynamic_thresholds=dynamic_thresholds,
+            json_object_output=json_object_output,
+        ),
     ])
 
 
@@ -820,6 +825,40 @@ def test_response_template_asks_for_one_json_object_in_json_output_mode():
     assert set(example) == {"narrative", "analysis"}
     assert set(example["analysis"]) == SNAPSHOT_KEYS
     assert example["analysis"]["signal"] == "HOLD"
+
+
+def test_signal_json_mode_prompt_is_json_only_for_litellm():
+    """The litellm signal path must ask for JSON only when response_format is sent.
+
+    OpenCode Go (provider=litellm) honours response_format=json_object; the old
+    prose + fenced-JSON prompt made it answer with the literal
+    {"type": "json_object"} echo. The flag is scoped to the signal path.
+    """
+    manager = make_manager(make_config(PROVIDER="litellm"))
+    prompt = render(manager, json_object_output=True)
+
+    assert "json" in prompt.lower()
+    assert_fragments(prompt, [
+        "Output: ONE JSON object and NOTHING outside it.",
+        "No prose before or after it",
+        'Narrative (the lines below as one string in "narrative", \\n separated):',
+        "## Response Format",
+        "```json",
+    ])
+    assert_absent(prompt, [
+        "Output: 13 plain-text numbered lines + JSON",
+        "Narrative (plain-text only):",
+    ])
+    example = json.loads(
+        re.search(r"```json\s*(.*?)\s*```", prompt, re.DOTALL | re.IGNORECASE).group(1)
+    )
+    assert set(example) == {"narrative", "analysis"}
+    assert set(example["analysis"]) == SNAPSHOT_KEYS
+
+    prose_prompt = render(manager)
+    assert "Output: 13 plain-text numbered lines + JSON." in prose_prompt
+    assert "Narrative (plain-text only):" in prose_prompt
+    assert "Output: ONE JSON object and NOTHING outside it." not in prose_prompt
 
 
 def test_response_template_documents_the_trend_block_vocabulary():

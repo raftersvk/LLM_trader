@@ -1090,11 +1090,12 @@ class Config:
         """Whether signal analysis requests opt into JSON-object structured output.
 
         Only the signal service reads this flag; dashboard, RAG and news calls
-        keep their historical request parameters. Defaults to enabled so a
-        hardened signal pipeline needs no extra configuration, and can be
-        disabled with ``[signal_service] json_response_format = false``.
+        keep their historical request parameters. Defaults to disabled: enabling
+        it also switches the signal prompt to JSON-only, which is required by
+        providers that honour ``response_format``. Set
+        ``[signal_service] json_response_format = true`` to opt in.
         """
-        value = self.get_config('signal_service', 'json_response_format', True)
+        value = self.get_config('signal_service', 'json_response_format', False)
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in ('1', 'true', 'yes', 'on')

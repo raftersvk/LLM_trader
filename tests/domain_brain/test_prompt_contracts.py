@@ -489,6 +489,22 @@ def test_previous_indicators_section_shows_volume_flow_as_deltas_not_percent(con
     assert "OBV: 1000.00 → 1500.00 (↑ +50.0%)" not in section
 
 
+def test_builder_forwards_json_object_output_to_the_response_template(config):
+    """The signal-only JSON mode reaches the template that decides the prompt shape."""
+    builder = make_builder(config)
+    context = AnalysisContext(symbol=SYMBOL, current_price=82000.0)
+
+    builder.build_system_prompt(SYMBOL, context, json_object_output=True)
+    assert builder.template_manager.build_response_template.call_args.kwargs[
+        "json_object_output"
+    ] is True
+
+    builder.build_system_prompt(SYMBOL, context)
+    assert builder.template_manager.build_response_template.call_args.kwargs[
+        "json_object_output"
+    ] is False
+
+
 def test_prompt_metadata_is_exposed_from_template_manager(config):
     """PromptBuilder forwards the template manager's attribution dict unchanged."""
     builder = make_builder(config)

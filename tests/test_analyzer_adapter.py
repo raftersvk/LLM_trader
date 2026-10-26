@@ -1321,14 +1321,17 @@ async def test_json_parse_error_is_repaired_once_and_the_decision_is_used():
     ))
     repair = RepairModelManager([REPAIRED_HOLD])
     engine.model_manager = repair
-    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=True,
+    )
 
     signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
 
     assert len(repair.calls) == 1
     assert "Return ONLY the JSON object matching the response schema, no prose." in repair.calls[0]["prompt"]
-    assert repair.calls[0]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in repair.calls[0]
     assert engine.calls[-1]["response_format"] == {"type": "json_object"}
+    assert engine.calls[-1]["json_object_output"] is True
     assert signal.action == "HOLD"
     assert signal.reasoning == "repaired decision"
     assert signal.risk_approved is False
@@ -1355,6 +1358,74 @@ async def test_json_parse_error_twice_falls_back_to_exact_hold_reason():
     assert signal.reasoning == "invalid LLM output: JSON parse error after repair"
     assert signal.raw_response_hash == hash_raw_response(PROSE_WITHOUT_JSON)
     signal.validate()
+
+
+RESPONSE_FORMAT_ECHO = '{"type": "json_object"}'
+
+
+@pytest.mark.asyncio
+async def test_response_format_echo_is_repaired_once_without_response_format():
+    """Live echo -> one repair WITHOUT response_format -> the real decision is used."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=RESPONSE_FORMAT_ECHO,
+        result=dict(RESULT_META),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([REPAIRED_HOLD])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=True,
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(repair.calls) == 1
+    assert "Return ONLY the JSON object matching the response schema, no prose." in repair.calls[0]["prompt"]
+    assert "response_format" not in repair.calls[0], "repair must not repeat the forced format"
+    assert engine.calls[-1]["response_format"] == {"type": "json_object"}
+    assert signal.action == "HOLD"
+    assert signal.reasoning == "repaired decision"
+    assert signal.risk_approved is False
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_response_format_echo_twice_falls_back_to_hold_without_looping():
+    """A provider that echoes again after one repair stops at HOLD."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=RESPONSE_FORMAT_ECHO,
+        result=dict(RESULT_META),
+        config=FakeEngineConfig(),
+    ))
+    repair = RepairModelManager([RESPONSE_FORMAT_ECHO])
+    engine.model_manager = repair
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h", json_response_format=True,
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert len(repair.calls) == 1, "repair must run exactly once, never loop"
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.reasoning == "invalid LLM output: JSON parse error after repair"
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_json_format_is_off_by_default():
+    """Default false keeps the prose prompt and sends no response_format."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=RAW_BUY,
+        result=dict(RESULT_META),
+        config=FakeEngineConfig(),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
+
+    assert engine.calls[-1]["response_format"] is None
+    assert engine.calls[-1]["json_object_output"] is False
 
 
 @pytest.mark.asyncio
@@ -1485,6 +1556,7 @@ async def test_repair_honours_the_json_format_opt_out():
     signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
 
     assert len(repair.calls) == 1
-    assert repair.calls[0]["response_format"] is None
+    assert "response_format" not in repair.calls[0]
     assert engine.calls[-1]["response_format"] is None
+    assert engine.calls[-1]["json_object_output"] is False
     assert signal.reasoning == "repaired decision"
