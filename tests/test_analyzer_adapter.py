@@ -672,6 +672,132 @@ async def test_non_empty_reasoning_keeps_buy_action():
     assert signal.reasoning == "breakout"
 
 
+#: Flat alternate schema observed in production (2026-10-28 05:06 UTC): the
+#: model answered ``decision``/``stop_loss``/``take_profit``/``position_size``
+#: with the equity fraction in a separate key, and no canonical reasoning.
+ALT_SCHEMA_BUY = (
+    '{"symbol": "ETH", "decision": "BUY", "side": "LONG", "order_type": "MARKET", '
+    '"entry_price": 2360.63, "stop_loss": 2327.00, "take_profit": 2420.00, '
+    '"reward": 59.37, "risk": 33.63, "risk_reward_ratio": 1.77, '
+    '"position_size": 0.216, "position_size_equity_fraction": 0.051, '
+    '"execution_note": "Market BUY ~0.216 ETH at 2360.63 (0.051 of equity)."}'
+)
+
+
+@pytest.mark.asyncio
+async def test_alternate_buy_schema_is_recovered_not_downgraded():
+    """decision/execution_note alternate schema must keep the actionable BUY."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=ALT_SCHEMA_BUY,
+        result=dict(RESULT_META),
+        current_price=2360.0,
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-28T03:00:00Z")
+
+    assert signal.action == "BUY"
+    assert signal.sl == 2327.0
+    assert signal.tp == 2420.0
+    # The base-currency quantity (0.216) must not be read as 21.6% of equity.
+    assert signal.position_size_pct == 0.051
+    assert signal.confidence == 0.65
+    assert signal.risk_approved is True
+    assert "Market BUY" in signal.reasoning
+    signal.validate()
+
+
+ALT_SCHEMA_HOLD = (
+    '{"symbol": "ETH/USDT", "timeframe": "1h", "decision": "HOLD", '
+    '"position_status": "FLAT", "risk_reward": "N/A", "confidence": null, '
+    '"execution_note": "No position and no order; stay flat until a close."}'
+)
+
+
+@pytest.mark.asyncio
+async def test_alternate_hold_schema_uses_execution_note_as_reasoning():
+    """A genuine alternate-schema HOLD keeps its execution note as reasoning."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=ALT_SCHEMA_HOLD,
+        result=dict(RESULT_META),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-28T00:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.reasoning == "No position and no order; stay flat until a close."
+    assert signal.confidence == 0.65
+    assert signal.risk_approved is False
+    assert signal.raw_response_hash == hash_raw_response(ALT_SCHEMA_HOLD)
+    signal.validate()
+
+
+ALT_SCHEMA_BUY_NESTED_SIZING = (
+    '{"symbol": "ETH/USDT", "timeframe": "1h", "decision": "BUY", "side": "LONG", '
+    '"confidence_score": 62, "entry_price": 2355.36, "stop_loss": 2324.0, '
+    '"take_profit": 2415.0, "risk_reward_ratio": 1.9018, '
+    '"position_sizing": {"final_capital_pct": 4.96}, '
+    '"summary": "Buy the confirmed breakout.", '
+    '"execution_note": "Open a long at market with SL 2324 and TP 2415."}'
+)
+
+
+@pytest.mark.asyncio
+async def test_alternate_buy_reads_confidence_score_and_nested_sizing():
+    """confidence_score and position_sizing.final_capital_pct are honoured."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=ALT_SCHEMA_BUY_NESTED_SIZING,
+        result=dict(RESULT_META),
+        current_price=2355.0,
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-28T01:00:00Z")
+
+    assert signal.action == "BUY"
+    assert signal.confidence == 0.60
+    assert signal.sl == 2324.0
+    assert signal.tp == 2415.0
+    assert signal.position_size_pct == 0.0496
+    assert signal.risk_approved is True
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_alternate_schema_with_truly_empty_note_is_still_rejected():
+    """Alias mapping must not turn a decision-only answer into a valid signal."""
+    raw = '{"decision": "BUY", "stop_loss": 2327.0, "take_profit": 2420.0, "execution_note": "   "}'
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=raw,
+        result=dict(RESULT_META),
+        current_price=2360.0,
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-28T04:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.confidence == 0.0
+    assert signal.risk_approved is False
+    assert "empty reasoning" in signal.reasoning
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_canonical_action_wins_over_alternate_decision():
+    """Alias mapping never overrides a canonical action already present."""
+    raw = '{"action": "HOLD", "decision": "BUY", "reasoning": "stay flat"}'
+    engine = _attach_unified_parser(FakeEngine(raw_response=raw, result=dict(RESULT_META)))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-28T04:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.reasoning == "stay flat"
+
+
+
 @pytest.mark.asyncio
 async def test_invalid_response_reports_real_model_not_unspecified():
     """A parsed response that reports 'unspecified' must use the configured model."""

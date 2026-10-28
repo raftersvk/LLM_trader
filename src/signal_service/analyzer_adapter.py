@@ -76,6 +76,72 @@ _DECISION_KEYS = frozenset({"action", "recommendation", "signal", "decision"})
 _DECISION_CONTAINERS = ("analysis", "trading_decision", "decision")
 #: Keys a provider echoes back from the requested response_format instead of answering.
 _FORMAT_ECHO_KEYS = frozenset({"type", "response_format", "format"})
+#: Alternate flat schemas the model sometimes emits instead of the canonical
+#: ``{"analysis": {"signal", "confidence", "reasoning"}}`` contract. The decision
+#: and its execution note are still a real answer, so map the known aliases
+#: instead of discarding the candle as "empty reasoning".
+_CANONICAL_ACTION_KEYS = ("signal", "action")
+_CANONICAL_REASONING_KEYS = ("reasoning", "rationale")
+_ALT_REASONING_KEYS = ("execution_note", "summary")
+
+
+def _normalize_extraction_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Fill canonical extraction keys from known alternate LLM schemas.
+
+    ``PositionExtractor`` only reads ``signal``/``action``, ``confidence`` and
+    ``reasoning``/``rationale``. Some replies instead use ``decision``,
+    ``confidence_score``, ``execution_note`` or an equity-fraction size key, so
+    the decision was silently downgraded to HOLD with an empty reasoning. This
+    maps those aliases onto the canonical keys. Existing canonical fields always
+    win; aliases only fill a gap, so a genuinely empty answer stays empty.
+    """
+    payload = dict(data)
+
+    if not any(payload.get(key) for key in _CANONICAL_ACTION_KEYS):
+        decision = payload.get("decision")
+        if isinstance(decision, str) and decision.strip():
+            payload["action"] = decision
+
+    if payload.get("confidence") in (None, ""):
+        score = payload.get("confidence_score")
+        if score is not None:
+            payload["confidence"] = score
+        else:
+            # A JSON null would stringify to "NONE" and raise in
+            # confidence_to_float; let the extractor's MEDIUM default apply.
+            payload.pop("confidence", None)
+
+    existing_reasoning = next(
+        (
+            payload.get(key)
+            for key in _CANONICAL_REASONING_KEYS
+            if isinstance(payload.get(key), str) and payload.get(key).strip()
+        ),
+        "",
+    )
+    if not str(existing_reasoning).strip():
+        for key in _ALT_REASONING_KEYS:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                payload["reasoning"] = value
+                break
+
+    if payload.get("stop_loss") is None and payload.get("sl") is not None:
+        payload["stop_loss"] = payload["sl"]
+    if payload.get("take_profit") is None and payload.get("tp") is not None:
+        payload["take_profit"] = payload["tp"]
+
+    # A base-currency quantity (e.g. 0.216 ETH) must never be read as an equity
+    # fraction; the explicit fraction key wins when both are present.
+    fraction = payload.get("position_size_equity_fraction")
+    if fraction is not None:
+        payload["position_size"] = fraction
+    elif payload.get("position_size") is None:
+        nested = payload.get("position_sizing")
+        if isinstance(nested, dict) and nested.get("final_capital_pct") is not None:
+            payload["position_size"] = nested["final_capital_pct"]
+
+    return payload
 
 
 def _as_utc(moment: datetime) -> datetime:
@@ -828,6 +894,27 @@ class PairAnalyzer:
         result_processor = getattr(self.engine, "result_processor", None)
         return getattr(result_processor, "unified_parser", None)
 
+    def _alternate_payload(self, raw_response: str) -> Optional[Dict[str, Any]]:
+        """Return the parsed answer normalized from a known alternate schema.
+
+        ``None`` when no parser is available or the text holds no JSON object.
+        Only used as a recovery path after canonical extraction produced no
+        reasoning, so normal answers keep the existing extraction untouched.
+        """
+        parser = self._unified_parser()
+        parse_json_object = getattr(parser, "parse_json_object", None)
+        if not callable(parse_json_object):
+            return None
+        parsed = parse_json_object(raw_response)
+        if not isinstance(parsed, dict):
+            return None
+        for container in ("analysis", "trading_decision", "decision"):
+            nested = parsed.get(container)
+            if isinstance(nested, dict):
+                parsed = nested
+                break
+        return _normalize_extraction_payload(parsed)
+
     def _extract_draft(self, result: Dict[str, Any], raw_response: str) -> SignalDraft:
         """Extract the decision from the raw LLM response via PositionExtractor."""
         from src.trading.position_extractor import PositionExtractor  # local import: optional dep
@@ -849,6 +936,23 @@ class PairAnalyzer:
             # its 5% rounding; fall back to the label when none was provided.
             if numeric_confidence is not None:
                 confidence = numeric_confidence
+            if not str(reasoning).strip():
+                # The model sometimes answers a known alternate schema
+                # (decision/execution_note/...) that the canonical extractor
+                # ignores. Map the aliases and retry before declaring the answer
+                # unusable; a truly empty answer still yields "".
+                alternate = self._alternate_payload(raw_response)
+                if alternate is not None:
+                    alt = extractor.extract_trading_info_with_confidence(alternate)
+                    alt_signal, alt_confidence, alt_sl, alt_tp, alt_size, alt_reasoning = alt[:6]
+                    alt_numeric = alt[6] if len(alt) > 6 else None
+                    if str(alt_reasoning).strip():
+                        signal = alt_signal
+                        confidence = alt_numeric if alt_numeric is not None else alt_confidence
+                        stop_loss = alt_sl
+                        take_profit = alt_tp
+                        position_size = alt_size
+                        reasoning = alt_reasoning
         else:
             signal = str(result.get("recommendation", "HOLD")).upper()
             confidence = result.get("confidence", "LOW")
