@@ -59,12 +59,52 @@ PROMPT_VERSION = "llm-trader-signal-v1"
 _UNKNOWN_LABELS = frozenset({"", "unknown", "unspecified", "none", "null"})
 _NEWS_ORIGINAL_ATTR = "_signal_service_original_retrieve_context"
 
+#: Signal-only output contract appended as the LAST block of the system prompt
+#: via ``system_prompt_suffix``. The shared trading template is also used by the
+#: live bot (its JSON branch triggers for the DeepSeek provider) and still
+#: allows CLOSE/UPDATE/narrative, so the strict v1 signal schema is imposed as a
+#: trailing system instruction instead of changing global template behavior.
+#: The suffix is unset for the live bot, whose prompt is unchanged.
+SIGNAL_OUTPUT_CONTRACT = (
+    "SIGNAL OUTPUT CONTRACT (authoritative; overrides any conflicting style guidance):\n"
+    "- Respond with exactly ONE JSON object and nothing else: no prose, no markdown, "
+    "no code fences and no comments before or after it.\n"
+    '- Required shape: {"analysis": {"signal": "BUY|SELL|HOLD", '
+    '"confidence": <integer 0-100>, "entry_price": <number|null>, '
+    '"stop_loss": <number|null>, "take_profit": <number|null>, '
+    '"position_size": <0.0-1.0>, "reasoning": "<why>", "symbol": "<pair>"}}.\n'
+    "- signal MUST be exactly one of BUY, SELL or HOLD. Never emit CLOSE, UPDATE or "
+    "any other verb.\n"
+    "- confidence MUST be an integer from 0 to 100, or one of the labels HIGH, MEDIUM, "
+    "LOW. Never emit MODERATE, \"moderate\", \"neutral\" or any other word.\n"
+    "- For BUY: stop_loss < entry_price < take_profit. For SELL: "
+    "take_profit < entry_price < stop_loss. HOLD uses null entry_price/stop_loss/take_profit.\n"
+    "- NEVER answer with an object keyed by \"educational_analysis_only\", "
+    "\"analysis_only\" or any analysis-only envelope, and never replace the decision "
+    "object with a narrative report or a \"final_synthesis\". The decision object above "
+    "is mandatory on every cycle.\n"
+)
+
 #: One-shot repair instruction. Kept short so a repair reuses the original
 #: answer instead of paying for a second full market-analysis prompt.
-JSON_REPAIR_INSTRUCTION = "Return ONLY the JSON object matching the response schema, no prose."
+JSON_REPAIR_INSTRUCTION = (
+    "Return ONLY one JSON object of the form "
+    '{"analysis": {"signal": "BUY|SELL|HOLD", "confidence": <integer 0-100>, '
+    '"entry_price": <number|null>, "stop_loss": <number|null>, '
+    '"take_profit": <number|null>, "position_size": <0.0-1.0>, '
+    '"reasoning": "<why>", "symbol": "<pair>"}} and no prose. '
+    "confidence must be an integer 0-100 or one of HIGH/MEDIUM/LOW, never MODERATE. "
+    "For BUY: stop_loss < entry_price < take_profit. For SELL: "
+    "take_profit < entry_price < stop_loss. symbol is required. Never return an "
+    "educational_analysis_only or analysis-only object."
+)
 JSON_REPAIR_SYSTEM = (
-    "You convert a trading analysis answer into the required JSON object. "
-    "Do not add commentary."
+    "You convert a trading analysis answer into the required signal JSON object. "
+    "Do not add commentary. The object must contain analysis.signal (BUY/SELL/HOLD), "
+    "analysis.confidence (integer 0-100 or HIGH/MEDIUM/LOW, never MODERATE), "
+    "analysis.reasoning, analysis.symbol, and entry_price/stop_loss/take_profit/"
+    "position_size. For BUY: stop_loss < entry_price < take_profit; for SELL: "
+    "take_profit < entry_price < stop_loss. Never answer analysis-only."
 )
 #: Cap on the previous answer embedded in the repair prompt. The decision and
 #: narrative normally sit at the end, so keep the tail when truncating.
@@ -82,7 +122,13 @@ _FORMAT_ECHO_KEYS = frozenset({"type", "response_format", "format"})
 #: instead of discarding the candle as "empty reasoning".
 _CANONICAL_ACTION_KEYS = ("signal", "action")
 _CANONICAL_REASONING_KEYS = ("reasoning", "rationale")
-_ALT_REASONING_KEYS = ("execution_note", "summary")
+#: Sibling keys that carry the narrative when no canonical reasoning exists.
+#: ``reason`` lives inside the ``decision`` object seen in production on the
+#: 2026-10-29 candle (candle open 16:00Z, logged 18:07 local); ``final_synthesis``
+#: is the long-form fallback.
+_ALT_REASONING_KEYS = ("reason", "execution_note", "summary", "final_synthesis")
+#: Keys read from a nested ``decision`` object instead of the flat payload.
+_DECISION_REASONING_KEYS = ("reason", "rationale", "reasoning", "summary")
 
 
 def _normalize_extraction_payload(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -101,6 +147,12 @@ def _normalize_extraction_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         decision = payload.get("decision")
         if isinstance(decision, str) and decision.strip():
             payload["action"] = decision
+        elif isinstance(decision, dict):
+            # Some providers nest the decision instead of flattening it:
+            # {"decision": {"action": "HOLD", "reason": "..."}}.
+            nested_action = decision.get("signal") or decision.get("action")
+            if isinstance(nested_action, str) and nested_action.strip():
+                payload["action"] = nested_action
 
     if payload.get("confidence") in (None, ""):
         score = payload.get("confidence_score")
@@ -120,8 +172,14 @@ def _normalize_extraction_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         "",
     )
     if not str(existing_reasoning).strip():
-        for key in _ALT_REASONING_KEYS:
-            value = payload.get(key)
+        candidates = []
+        decision = payload.get("decision")
+        if isinstance(decision, dict):
+            candidates.extend(
+                decision.get(key) for key in _DECISION_REASONING_KEYS
+            )
+        candidates.extend(payload.get(key) for key in _ALT_REASONING_KEYS)
+        for value in candidates:
             if isinstance(value, str) and value.strip():
                 payload["reasoning"] = value
                 break
@@ -501,12 +559,20 @@ class PairAnalyzer:
             # yields an empty/whitespace reasoning is unusable. Accepting it
             # would persist a maximum-confidence HOLD backed by no analysis.
             if not draft.reasoning.strip():
+                # Distinguish an analysis-only reply (full write-up, no usable
+                # decision) from a genuinely empty answer. Both stay HOLD and
+                # are never mapped to BUY/SELL.
+                motif = (
+                    "analysis-only response"
+                    if self._is_analysis_only_response(raw_response)
+                    else "empty reasoning"
+                )
                 logger.warning(
-                    "Invalid LLM response for %s: empty reasoning (finish_reason=%s, content_chars=%d)",
-                    self.symbol, self._last_finish_reason(result) or "unknown", len(raw_response),
+                    "Invalid LLM response for %s: %s (finish_reason=%s, content_chars=%d)",
+                    self.symbol, motif, self._last_finish_reason(result) or "unknown", len(raw_response),
                 )
                 return self._hold_fallback(
-                    reasoning="invalid LLM output: empty reasoning",
+                    reasoning=f"invalid LLM output: {motif}",
                     candle_open_dt=candle_open_dt,
                     model=draft.model,
                     provider=draft.provider,
@@ -843,6 +909,7 @@ class PairAnalyzer:
             performance_context="",
             brain_service=None,
             dynamic_thresholds=None,
+            system_prompt_suffix=SIGNAL_OUTPUT_CONTRACT,
             response_format={"type": "json_object"} if json_mode else None,
             json_object_output=json_mode,
         )
@@ -911,9 +978,41 @@ class PairAnalyzer:
         for container in ("analysis", "trading_decision", "decision"):
             nested = parsed.get(container)
             if isinstance(nested, dict):
-                parsed = nested
+                # Merge rather than replace: the narrative keys
+                # (execution_note/final_synthesis) often sit next to the nested
+                # decision and must survive the unwrap.
+                parsed = {**parsed, **nested}
                 break
         return _normalize_extraction_payload(parsed)
+
+    def _is_analysis_only_response(self, raw_response: str) -> bool:
+        """Return True when the reply is explicitly flagged analysis-only.
+
+        Such a reply carries a full technical write-up but is not an executable
+        signal; it must never become an order and must reach a distinct
+        diagnostic instead of the generic "empty reasoning" motif. The flag may
+        sit at the top level or inside a known decision container.
+        """
+        parser = self._unified_parser()
+        parse_json_object = getattr(parser, "parse_json_object", None)
+        if not callable(parse_json_object):
+            return False
+        parsed = parse_json_object(raw_response)
+        if not isinstance(parsed, dict):
+            return False
+        candidates = [parsed]
+        for key in _DECISION_CONTAINERS:
+            nested = parsed.get(key)
+            if isinstance(nested, dict):
+                candidates.append(nested)
+        for candidate in candidates:
+            for key in ("educational_analysis_only", "analysis_only"):
+                value = candidate.get(key)
+                if value is True:
+                    return True
+                if isinstance(value, str) and value.strip().lower() == "true":
+                    return True
+        return False
 
     def _extract_draft(self, result: Dict[str, Any], raw_response: str) -> SignalDraft:
         """Extract the decision from the raw LLM response via PositionExtractor."""
@@ -960,6 +1059,24 @@ class PairAnalyzer:
             take_profit = result.get("take_profit")
             position_size = result.get("position_size")
             reasoning = str(result.get("reasoning", ""))
+
+        if raw_response and self._is_analysis_only_response(raw_response):
+            # Fail closed: an analysis-only envelope must never become an order,
+            # even when it embeds a BUY/SELL decision with coherent SL/TP. Drop
+            # the executable fields and force HOLD; keep a marked narrative for
+            # audit. confidence is zeroed so a forced HOLD never looks approved.
+            logger.warning(
+                "Analysis-only response for %s: forcing HOLD (fail-closed, was %s)",
+                self.symbol,
+                signal,
+            )
+            signal = "HOLD"
+            confidence = 0.0
+            stop_loss = None
+            take_profit = None
+            position_size = 0.0
+            if str(reasoning).strip():
+                reasoning = f"analysis-only response: {reasoning}"
 
         if signal not in ALLOWED_ACTIONS:
             # CLOSE/UPDATE and unknown labels fall back to HOLD in v1.

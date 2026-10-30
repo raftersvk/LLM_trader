@@ -13,6 +13,9 @@ import pytest
 
 from src.signal_service.analyzer_adapter import (
     ECHO_RERUN_FAILED_REASON,
+    JSON_REPAIR_INSTRUCTION,
+    JSON_REPAIR_SYSTEM,
+    SIGNAL_OUTPUT_CONTRACT,
     PairAnalyzer,
     ReplayDataInjector,
     analyze_and_store,
@@ -797,6 +800,217 @@ async def test_canonical_action_wins_over_alternate_decision():
     assert signal.reasoning == "stay flat"
 
 
+#: Nested-decision schema observed in production (2026-10-29 18:07 UTC): a
+#: full ``educational_analysis_only`` write-up whose ``decision`` is an OBJECT
+#: and whose ``execution_note`` sits next to it at the top level. The previous
+#: normalizer only unwrapped ``decision`` and dropped the sibling narrative,
+#: yielding "empty reasoning" and losing the candle.
+ALT_SCHEMA_NESTED_DECISION_HOLD = (
+    '{"educational_analysis_only": true, '
+    '"instrument": {"symbol": "ETH/USDT", "reference_price": 2353.20}, '
+    '"technical_analysis": {"regime": "transitional range/compression"}, '
+    '"risk_reward": {"status": "N/A for the standing HOLD"}, '
+    '"decision": {"action": "HOLD", "position": "flat", "pending_order": false, '
+    '"reason": "Neither a sub-1.5 R/R long nor a flow-fighting short offers positive expectancy."}, '
+    '"execution_note": "Stand aside and place no order; reassess on the next closed 1h candle.", '
+    '"final_synthesis": "ETH is compressing inside a 2293.44-2391.55 range."}'
+)
+
+
+@pytest.mark.asyncio
+async def test_nested_decision_object_keeps_sibling_narrative_not_empty_reasoning():
+    """A nested ``decision`` object must be recovered, not reported as empty."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=ALT_SCHEMA_NESTED_DECISION_HOLD,
+        result=dict(RESULT_META),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-29T16:00:00Z")
+
+    assert signal.action == "HOLD"
+    # decision.reason wins over execution_note / final_synthesis; the analysis-only
+    # envelope still prefixes the narrative and keeps the action fail-closed.
+    assert signal.reasoning.startswith("analysis-only response: Neither a sub-1.5 R/R long")
+    assert signal.confidence == 0.0
+    assert signal.risk_approved is False
+    assert signal.raw_response_hash == hash_raw_response(ALT_SCHEMA_NESTED_DECISION_HOLD)
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_nested_decision_action_is_honoured_for_a_real_decision():
+    """A BUY nested inside ``decision`` is still extracted (not only HOLD)."""
+    raw = (
+        '{"instrument": {"symbol": "ETH/USDT"}, '
+        '"decision": {"action": "BUY", "reason": "Breakout confirmed."}, '
+        '"stop_loss": 2324.0, "take_profit": 2415.0}'
+    )
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=raw, result=dict(RESULT_META), current_price=2355.0
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-29T17:00:00Z")
+
+    assert signal.action == "BUY"
+    assert signal.reasoning == "Breakout confirmed."
+    assert signal.sl == 2324.0
+    assert signal.tp == 2415.0
+
+
+ANALYSIS_ONLY_NO_DECISION = (
+    '{"educational_analysis_only": true, '
+    '"instrument": {"symbol": "ETH/USDT", "reference_price": 2353.20}, '
+    '"technical_analysis": {"regime": "transitional", "rsi_14": 56.93}}'
+)
+
+
+@pytest.mark.asyncio
+async def test_analysis_only_without_decision_gets_distinct_motif_not_buy_sell():
+    """An analysis-only reply with no decision yields a clear motif, never BUY/SELL."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=ANALYSIS_ONLY_NO_DECISION,
+        result=dict(RESULT_META),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-29T18:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.confidence == 0.0
+    assert signal.risk_approved is False
+    assert "analysis-only response" in signal.reasoning
+    assert "empty reasoning" not in signal.reasoning
+    signal.validate()
+
+
+ANALYSIS_ONLY_WITH_BUY_DECISION = (
+    '{"educational_analysis_only": true, '
+    '"instrument": {"symbol": "BTC/USDT"}, '
+    '"decision": {"action": "BUY", "reason": "Breakout confirmed."}, '
+    '"execution_note": "Buy at market now.", '
+    '"stop_loss": 67000.0, "take_profit": 70000.0}'
+)
+
+
+@pytest.mark.asyncio
+async def test_analysis_only_with_coherent_buy_decision_is_still_forced_hold():
+    """Fail closed: analysis-only never becomes an order even with a valid BUY."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=ANALYSIS_ONLY_WITH_BUY_DECISION,
+        result=dict(RESULT_META),
+        current_price=68000.0,
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-29T19:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    assert signal.confidence == 0.0
+    assert "analysis-only response" in signal.reasoning
+    signal.validate()
+
+
+ANALYSIS_ONLY_NARRATIVE_SIBLINGS = (
+    '{"analysis_only": true, '
+    '"instrument": {"symbol": "ETH/USDT"}, '
+    '"execution_note": "Stand aside and place no order.", '
+    '"final_synthesis": "ETH is compressing inside a 2293-2391 range."}'
+)
+
+
+@pytest.mark.asyncio
+async def test_analysis_only_with_narrative_siblings_still_forced_hold():
+    """The analysis-only flag primes over sibling narrative keys (no decision)."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=ANALYSIS_ONLY_NARRATIVE_SIBLINGS,
+        result=dict(RESULT_META),
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-29T20:00:00Z")
+
+    assert signal.action == "HOLD"
+    assert signal.confidence == 0.0
+    assert signal.risk_approved is False
+    assert signal.reasoning.startswith("analysis-only response:")
+    assert "Stand aside" in signal.reasoning
+    signal.validate()
+
+
+ANALYSIS_ONLY_WITH_SIGNAL_KEY = (
+    '{"educational_analysis_only": true, "signal": "BUY", "confidence": 80, '
+    '"entry_price": 68000.0, "stop_loss": 67000.0, "take_profit": 70000.0, '
+    '"reasoning": "Top-level signal key, not nested."}'
+)
+
+
+@pytest.mark.asyncio
+async def test_analysis_only_with_top_level_signal_key_is_never_buy_or_sell():
+    """A 'signal' key inside an analysis-only envelope must not become BUY/SELL."""
+    engine = _attach_unified_parser(FakeEngine(
+        raw_response=ANALYSIS_ONLY_WITH_SIGNAL_KEY,
+        result=dict(RESULT_META),
+        current_price=68000.0,
+    ))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze(candle_open_time="2026-10-29T21:00:00Z")
+
+    assert signal.action not in ("BUY", "SELL")
+    assert signal.action == "HOLD"
+    assert signal.risk_approved is False
+    signal.validate()
+
+
+def test_signal_output_contract_pins_exact_schema_and_allowed_values():
+    """The signal prompt must forbid the observed modal drifts (analysis-only, MODERATE)."""
+    assert "educational_analysis_only" in SIGNAL_OUTPUT_CONTRACT
+    assert "analysis-only" in SIGNAL_OUTPUT_CONTRACT
+    # Confidence values are pinned; MODERATE is explicitly not allowed.
+    assert "MODERATE" in SIGNAL_OUTPUT_CONTRACT
+    assert "Never emit MODERATE" in SIGNAL_OUTPUT_CONTRACT
+    assert "HIGH, MEDIUM, LOW" in SIGNAL_OUTPUT_CONTRACT
+    # Exactly one JSON object, the v1 actions, and the analysis wrapper.
+    assert "exactly ONE JSON object" in SIGNAL_OUTPUT_CONTRACT
+    assert '"analysis"' in SIGNAL_OUTPUT_CONTRACT
+    assert "BUY, SELL or HOLD" in SIGNAL_OUTPUT_CONTRACT
+    # SL/TP ordering is stated for both sides.
+    assert "stop_loss < entry_price < take_profit" in SIGNAL_OUTPUT_CONTRACT
+    assert "take_profit < entry_price < stop_loss" in SIGNAL_OUTPUT_CONTRACT
+
+
+def test_json_repair_instructions_enforce_the_same_contract():
+    """The repair fallback must re-impose the schema and forbid the drifts."""
+    for text in (JSON_REPAIR_INSTRUCTION, JSON_REPAIR_SYSTEM):
+        assert "BUY" in text and "SELL" in text and "HOLD" in text
+        assert "analysis" in text
+        assert "confidence" in text
+        assert "symbol" in text
+    assert "never MODERATE" in JSON_REPAIR_INSTRUCTION
+    assert "educational_analysis_only" in JSON_REPAIR_INSTRUCTION
+    # SL/TP ordering is restated in the repair prompt too.
+    assert "stop_loss < entry_price < take_profit" in JSON_REPAIR_INSTRUCTION
+    assert "take_profit < entry_price < stop_loss" in JSON_REPAIR_INSTRUCTION
+
+
+@pytest.mark.asyncio
+async def test_signal_output_contract_is_a_system_suffix_not_user_context():
+    """The strict contract must be a system suffix, never user/RAG context."""
+    engine = _attach_unified_parser(FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META)))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    await analyzer.analyze()
+
+    call = engine.calls[-1]
+    assert call["system_prompt_suffix"] == SIGNAL_OUTPUT_CONTRACT
+    assert call.get("additional_context") is None
+
+
+
+
 
 @pytest.mark.asyncio
 async def test_invalid_response_reports_real_model_not_unspecified():
@@ -1506,7 +1720,11 @@ async def test_json_parse_error_is_repaired_once_and_the_decision_is_used():
     signal = await analyzer.analyze(candle_open_time="2026-10-25T09:00:00Z")
 
     assert len(repair.calls) == 1
-    assert "Return ONLY the JSON object matching the response schema, no prose." in repair.calls[0]["prompt"]
+    repair_prompt = repair.calls[0]["prompt"]
+    assert "Return ONLY one JSON object" in repair_prompt
+    assert "never MODERATE" in repair_prompt
+    assert "educational_analysis_only" in repair_prompt
+    assert '"analysis": {"signal"' in repair_prompt
     assert "response_format" not in repair.calls[0]
     assert engine.calls[-1]["response_format"] == {"type": "json_object"}
     assert engine.calls[-1]["json_object_output"] is True

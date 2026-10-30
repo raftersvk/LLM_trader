@@ -568,6 +568,7 @@ class PromptBuilder:
         model_verbosity: str | None = None,
         ev_context: str | None = None,
         json_object_output: bool = False,
+        system_prompt_suffix: str | None = None,
     ) -> str:
         """Build system prompt using template manager.
         Returns:
@@ -617,7 +618,14 @@ class PromptBuilder:
             json_object_output=json_object_output,
         )
 
-        return f"{base_prompt}\n\n{decision_rules}\n\n{analysis_steps}\n\n{response_template}"
+        # Opt-in, signal-service-only system suffix. Appended last so a strict
+        # output contract cannot be diluted by the shared template body. Unset
+        # for the live bot, which keeps its existing system prompt unchanged.
+        suffix = ""
+        if system_prompt_suffix and system_prompt_suffix.strip():
+            suffix = f"\n\n{system_prompt_suffix.strip()}"
+
+        return f"{base_prompt}\n\n{decision_rules}\n\n{analysis_steps}\n\n{response_template}{suffix}"
 
     def add_custom_instruction(self, instruction: str | Sequence[str]) -> None:
         """Add custom instruction to the prompt.

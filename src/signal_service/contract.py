@@ -34,10 +34,13 @@ ALLOWED_ACTIONS = frozenset({"BUY", "SELL", "HOLD"})
 
 ALLOWED_SOURCES = frozenset({"llm_trader", "fenixai", "manual", "jev"})
 
-# HIGH/MEDIUM/LOW -> float in [0, 1]
+# HIGH/MEDIUM/LOW -> float in [0, 1]. MODERATE is accepted as a synonym of
+# MEDIUM because providers occasionally emit it; it must never invalidate an
+# otherwise usable signal.
 CONFIDENCE_MAP: Dict[str, float] = {
     "HIGH": 0.90,
     "MEDIUM": 0.65,
+    "MODERATE": 0.65,
     "LOW": 0.35,
 }
 
@@ -75,7 +78,7 @@ def timeframe_seconds(timeframe: str) -> int:
 
 
 def confidence_to_float(confidence: Any) -> float:
-    """Map HIGH/MEDIUM/LOW (or a 0-100 numeric) to a float in [0, 1].
+    """Map HIGH/MEDIUM/MODERATE/LOW (or a 0-100 numeric) to a float in [0, 1].
 
     A numeric score is preserved instead of being collapsed to a label: it is
     clamped to 0-100, then rounded to the nearest 5 percentage points with
@@ -83,12 +86,15 @@ def confidence_to_float(confidence: Any) -> float:
     already-normalized fraction; 1 and 1.0 are valid 0-100 scores (a raw score
     of 1 is minimum confidence, not 100%). For example, 51 and 52 map to 0.50,
     53 to 0.55, 57 to 0.55 and 58 to 0.60. Labels remain the fallback and keep
-    their historical mapping (HIGH=0.90, MEDIUM=0.65, LOW=0.35). Non-finite
-    scores (NaN, Infinity) are rejected with :class:`SignalValidationError`
-    rather than clamped into a valid range.
+    their historical mapping (HIGH=0.90, MEDIUM=0.65, MODERATE=0.65, LOW=0.35).
+    MODERATE is treated as an exact synonym of MEDIUM. Label matching is
+    case-insensitive and surrounding whitespace is ignored. Non-finite scores
+    (NaN, Infinity) are rejected with :class:`SignalValidationError` rather
+    than clamped into a valid range.
 
     Args:
-        confidence: "HIGH", "MEDIUM", "LOW" or a numeric 0-100 value.
+        confidence: "HIGH", "MEDIUM", "MODERATE", "LOW" or a numeric 0-100
+            value.
 
     Returns:
         Confidence as a float between 0 and 1.

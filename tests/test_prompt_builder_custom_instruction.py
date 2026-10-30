@@ -11,6 +11,7 @@ from src.analyzer.analysis_context import AnalysisContext
 from src.analyzer.analysis_engine import _normalize_market_context
 from src.analyzer.prompts.prompt_builder import PromptBuilder
 from src.analyzer.prompts.untrusted_context import EXTERNAL_CONTEXT_HEADER
+from src.signal_service.analyzer_adapter import SIGNAL_OUTPUT_CONTRACT
 
 
 def _build_prompt_builder() -> PromptBuilder:
@@ -117,3 +118,50 @@ def test_normalize_market_context_drops_non_text_values():
     assert _normalize_market_context((None, {})) == ""
     assert _normalize_market_context(123) == ""
     assert _normalize_market_context({"article": "https://example.com"}) == ""
+
+
+def _build_system_prompt_builder() -> PromptBuilder:
+    """PromptBuilder whose system-prompt sections are deterministic strings."""
+    builder = _build_prompt_builder()
+    builder.config = MagicMock(MODEL_VERBOSITY="medium")
+    builder.template_manager.build_system_prompt.return_value = "BASE SYSTEM"
+    builder.template_manager.build_analysis_steps.return_value = "STEPS"
+    builder.template_manager.build_decision_rules.return_value = "RULES"
+    builder.template_manager.build_response_template.return_value = "RESPONSE TEMPLATE"
+    builder._has_retested_support_resistance = lambda: False
+    builder._calculate_period_candles = lambda: {}
+    return builder
+
+
+def test_signal_system_suffix_is_appended_after_the_response_template():
+    """The strict contract must be the LAST block of the assembled system prompt."""
+    builder = _build_system_prompt_builder()
+
+    system_prompt = builder.build_system_prompt(
+        "BTC/USDT", _context(), system_prompt_suffix=SIGNAL_OUTPUT_CONTRACT
+    )
+
+    assert system_prompt.rstrip().endswith(SIGNAL_OUTPUT_CONTRACT.strip())
+    # It must come after the shared response template, not before it.
+    assert system_prompt.index("RESPONSE TEMPLATE") < system_prompt.index(
+        SIGNAL_OUTPUT_CONTRACT.strip()
+    )
+
+
+def test_signal_system_suffix_is_never_added_to_the_user_prompt():
+    """The contract belongs to the system role, never to user/RAG context."""
+    builder = _build_system_prompt_builder()
+
+    user_prompt = builder.build_prompt(_context())
+
+    assert SIGNAL_OUTPUT_CONTRACT not in user_prompt
+
+
+def test_system_prompt_is_unchanged_when_no_suffix_is_given():
+    """The live bot passes no suffix, so its system prompt stays byte-identical."""
+    builder = _build_system_prompt_builder()
+
+    system_prompt = builder.build_system_prompt("BTC/USDT", _context())
+
+    assert SIGNAL_OUTPUT_CONTRACT not in system_prompt
+    assert system_prompt.endswith("RESPONSE TEMPLATE")

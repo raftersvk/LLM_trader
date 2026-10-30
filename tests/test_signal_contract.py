@@ -67,6 +67,30 @@ def test_confidence_mapping():
         confidence_to_float("NONSENSE")
 
 
+def test_moderate_is_a_medium_synonym():
+    """MODERATE is accepted and maps exactly like MEDIUM (production 2026-10-29)."""
+    assert CONFIDENCE_MAP["MODERATE"] == CONFIDENCE_MAP["MEDIUM"] == 0.65
+    assert confidence_to_float("MODERATE") == 0.65
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param("MODERATE", 0.65, id="moderate-exact"),
+        pytest.param("moderate", 0.65, id="moderate-lower"),
+        pytest.param("Moderate", 0.65, id="moderate-title"),
+        pytest.param("  MODERATE \n", 0.65, id="moderate-whitespace"),
+        pytest.param("high", 0.90, id="high-lower-non-regression"),
+        pytest.param(" medium ", 0.65, id="medium-whitespace-non-regression"),
+        pytest.param("Low\t", 0.35, id="low-whitespace-non-regression"),
+    ],
+)
+def test_label_confidence_is_case_and_whitespace_insensitive(raw, expected):
+    """Labels are normalized before lookup; numeric scores are untouched."""
+    assert confidence_to_float(raw) == expected
+
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
