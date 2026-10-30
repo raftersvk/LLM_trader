@@ -34,6 +34,7 @@ class PositionSnapshot:
     unrealized_pnl_pct: Optional[float] = None
     current_price: Optional[float] = None
     enter_tag: Optional[str] = None
+    market: Optional[str] = None
 
     def validate(self) -> None:
         """Validate the snapshot invariants."""
@@ -59,7 +60,7 @@ class PositionSnapshot:
         }
         for key in (
             "open_date", "stop_loss", "take_profit", "unrealized_pnl_pct",
-            "current_price", "enter_tag",
+            "current_price", "enter_tag", "market",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -85,6 +86,7 @@ class PositionSnapshot:
             unrealized_pnl_pct=_as_optional_float(data.get("unrealized_pnl_pct")),
             current_price=_as_optional_float(data.get("current_price")),
             enter_tag=data.get("enter_tag"),
+            market=data.get("market"),
         )
 
 
