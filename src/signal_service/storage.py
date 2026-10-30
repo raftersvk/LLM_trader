@@ -177,6 +177,70 @@ def signal_file_path(signals_dir: str, symbol: str, timeframe: str) -> str:
     return os.path.join(signals_dir, token)
 
 
+def default_updates_dir(signals_dir: str) -> str:
+    """Return the sibling ``updates`` directory for a signals directory.
+
+    ``runtime/signals`` -> ``runtime/updates``. Position updates live on their
+    own channel so the entry file keeps its one-signal-per-candle semantics.
+    """
+    cleaned = os.path.normpath(signals_dir)
+    return os.path.join(os.path.dirname(cleaned), "updates")
+
+
+def update_file_path(updates_dir: str, symbol: str, timeframe: str) -> str:
+    """Build the position-update file path for a (symbol, timeframe) couple."""
+    return signal_file_path(updates_dir, symbol, timeframe)
+
+
+def default_positions_file(signals_dir: str) -> str:
+    """Return the sibling ``positions.json`` file for a signals directory."""
+    cleaned = os.path.normpath(signals_dir)
+    return os.path.join(os.path.dirname(cleaned), "positions.json")
+
+
+class UpdateStorage(SignalStorage):
+    """Append-only JSONL storage for position updates, deduped by decision_id.
+
+    Entry signals are deduped per (symbol, timeframe, candle), but several
+    updates can legitimately target the same candle/position. The dedup key is
+    therefore the update's unique ``decision_id``.
+    """
+
+    def _dedup_key_for(self, signal: Signal) -> DedupKey:  # type: ignore[override]
+        return (signal.symbol, signal.timeframe, signal.decision_id)
+
+    def _load_dedup_keys(self) -> None:
+        """Scan existing updates and collect dedup keys by decision_id."""
+        keys: Set[DedupKey] = set()
+        if os.path.exists(self.path):
+            with open(self.path, "r", encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        data = json.loads(stripped)
+                        key = (data["symbol"], data["timeframe"], data["decision_id"])
+                        keys.add(key)
+                    except (json.JSONDecodeError, KeyError, TypeError):
+                        logger.warning(
+                            "Skipping invalid JSONL line %d in %s", line_number, self.path
+                        )
+        self._dedup_keys = keys
+        self._dedup_loaded = True
+
+    def last_revision(self, position_id: str) -> int:
+        """Return the highest stored revision for a position (0 when none)."""
+        highest = 0
+        for signal in self.load_all():
+            if getattr(signal, "position_id", None) != position_id:
+                continue
+            revision = getattr(signal, "revision", None)
+            if isinstance(revision, int) and revision > highest:
+                highest = revision
+        return highest
+
+
 def heartbeat_path(
     signals_dir: str,
     symbol: Optional[str] = None,

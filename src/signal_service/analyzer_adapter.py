@@ -13,11 +13,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from src.signal_service.position_policy import (
+    PositionView,
+    direction_for_side,
+    evaluate_update,
+)
 from src.signal_service.contract import (
     ALLOWED_ACTIONS,
     Signal,
@@ -56,6 +62,43 @@ def _normalize_position_pct(raw_size) -> float:
 
 DEFAULT_POSITION_SIZE_PCT = 0.05
 PROMPT_VERSION = "llm-trader-signal-v1"
+
+
+@dataclass
+class UpdateContext:
+    """The open position an analysis should produce an UPDATE for."""
+
+    position_id: str
+    position_side: str  # "long" | "short"
+    entry_price: float
+    stop_loss: float
+    take_profit: Optional[float]
+    revision: int
+    based_on_entry: str
+    current_price: Optional[float] = None
+    entry_sl: Optional[float] = None
+    entry_tp: Optional[float] = None
+
+    def position_view(self) -> PositionView:
+        """Build the duck-typed view consumed by the tightening policy."""
+        return PositionView(
+            entry_price=self.entry_price,
+            stop_loss=self.stop_loss,
+            take_profit=self.take_profit,
+            direction=direction_for_side(self.position_side),
+        )
+
+    def effective_entry_sl(self) -> Optional[float]:
+        """Original entry-signal SL, the widening base (falls back to current)."""
+        if self.entry_sl is not None:
+            return self.entry_sl
+        return self.stop_loss
+
+    def effective_entry_tp(self) -> Optional[float]:
+        """Original entry-signal TP, used when the current TP is unknown."""
+        if self.take_profit is not None:
+            return self.take_profit
+        return self.entry_tp
 _UNKNOWN_LABELS = frozenset({"", "unknown", "unspecified", "none", "null"})
 _NEWS_ORIGINAL_ATTR = "_signal_service_original_retrieve_context"
 
@@ -389,8 +432,19 @@ class PairAnalyzer:
         rag_engine.retrieve_context = _empty_context  # type: ignore[assignment]
 
     # ---------------------------------------------------------------- analysis
-    async def analyze(self, candle_open_time: Optional[str] = None) -> Signal:
-        """Run a stateless analysis and return a validated Signal.
+    async def analyze(
+        self,
+        candle_open_time: Optional[str] = None,
+        position_context: str = "",
+        update_context: Optional[UpdateContext] = None,
+    ) -> Signal:
+        """Run an analysis and return a validated Signal.
+
+        The default call is stateless (``position_context=""``) and produces an
+        entry signal, exactly as before. Passing ``update_context`` switches to
+        the position-aware path: the analysis receives ``position_context`` and
+        may return an UPDATE (v1.1) instead of an entry. A refused/unusable
+        update is returned as HOLD so callers simply ignore it.
 
         Args:
             candle_open_time: Optional open time of the closed candle to
@@ -416,7 +470,9 @@ class PairAnalyzer:
         self._set_engine_analysis_as_of(as_of)
         pre_result: Optional[GateResult] = None
         state: Optional[Dict[str, Any]] = None
-        if self.jev_gate is not None and self.jev_gate.uses_pre():
+        # Position updates are exempt from the entry gate: JEV, TTL and
+        # risk_approved never block managing or exiting an open position.
+        if update_context is None and self.jev_gate is not None and self.jev_gate.uses_pre():
             # Live-mode context may still hold the candles truncated during the
             # previous cycle: refresh and truncate before gating so the
             # pre-gate decides on the candle that just closed.
@@ -436,10 +492,10 @@ class PairAnalyzer:
         window_state: Dict[str, bool] = {"empty": False}
         try:
             if candle_open_dt is None:
-                result = await self._analyze_market()
+                result = await self._analyze_market(position_context=position_context)
             else:
                 with ClosedCandleWindow(self.engine, self.timeframe, candle_open_dt) as window_state:
-                    result = await self._analyze_market()
+                    result = await self._analyze_market(position_context=position_context)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Analysis failed for %s: %s", self.symbol, exc)
             return self._hold_fallback(reasoning=f"analysis error: {exc}", candle_open_dt=candle_open_dt)
@@ -482,7 +538,7 @@ class PairAnalyzer:
                 "(finish_reason=%s, content_chars=%d)",
                 self.symbol, finish_reason or "unknown", len(original_raw),
             )
-            rerun = await self._rerun_without_json_mode(candle_open_dt)
+            rerun = await self._rerun_without_json_mode(candle_open_dt, position_context)
             if rerun is None:
                 logger.warning("Invalid LLM response for %s: %s", self.symbol, ECHO_RERUN_FAILED_REASON)
                 model, provider = self._resolve_model_provider(result if isinstance(result, dict) else {})
@@ -598,6 +654,10 @@ class PairAnalyzer:
             if jev_result is not None and jev_result.signal is not None:
                 draft.jev = jev_result.signal.to_payload()
 
+            if update_context is not None:
+                return self._build_update_signal(
+                    draft, raw_response, candle_open_time, update_context,
+                )
             return self._build_signal(draft, raw_response, candle_open_time, veto_reason=veto_reason)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # Extraction and contract validation failures must still produce a
@@ -893,19 +953,25 @@ class PairAnalyzer:
             return f"invalid LLM response: empty content{suffix}"
         return None
 
-    async def _analyze_market(self, json_mode: Optional[bool] = None) -> Dict[str, Any]:
+    async def _analyze_market(
+        self, json_mode: Optional[bool] = None, position_context: str = ""
+    ) -> Dict[str, Any]:
         """Call the engine statelessly (one analysis, no continuity state).
 
         ``json_mode`` defaults to the signal opt-in. The echo-recovery path
         passes ``False`` so the same full prompt is re-run as prose + JSON,
         which gives the model the market context the echo never answered.
+
+        ``position_context`` is empty in the default (stateless) mode. The
+        position-aware mode passes a compact block so the model can propose a
+        position UPDATE; ``previous_response``/``brain_service`` stay None.
         """
         if json_mode is None:
             json_mode = self._json_format_enabled()
         return await self.engine.analyze_market(
             previous_response=None,
             previous_indicators=None,
-            position_context="",
+            position_context=position_context,
             performance_context="",
             brain_service=None,
             dynamic_thresholds=None,
@@ -915,7 +981,7 @@ class PairAnalyzer:
         )
 
     async def _rerun_without_json_mode(
-        self, candle_open_dt: Optional[datetime],
+        self, candle_open_dt: Optional[datetime], position_context: str = "",
     ) -> Optional[tuple[Dict[str, Any], str]]:
         """Re-run the full analysis once without response_format after an echo.
 
@@ -926,10 +992,12 @@ class PairAnalyzer:
         window_state: Dict[str, bool] = {"empty": False}
         try:
             if candle_open_dt is None:
-                result = await self._analyze_market(json_mode=False)
+                result = await self._analyze_market(json_mode=False, position_context=position_context)
             else:
                 with ClosedCandleWindow(self.engine, self.timeframe, candle_open_dt) as window_state:
-                    result = await self._analyze_market(json_mode=False)
+                    result = await self._analyze_market(
+                        json_mode=False, position_context=position_context
+                    )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Full-analysis retry without JSON mode failed for %s: %s", self.symbol, exc)
             return None
@@ -1079,7 +1147,9 @@ class PairAnalyzer:
                 reasoning = f"analysis-only response: {reasoning}"
 
         if signal not in ALLOWED_ACTIONS:
-            # CLOSE/UPDATE and unknown labels fall back to HOLD in v1.
+            # Unknown labels fall back to HOLD. UPDATE/CLOSE are preserved here
+            # for the position-aware path; the entry builder downgrades them to
+            # HOLD so a position action can never open a new trade.
             signal = "HOLD"
 
         return SignalDraft(
@@ -1160,6 +1230,113 @@ class PairAnalyzer:
         return True, "ok"
 
     # ------------------------------------------------------------- signal build
+    def _build_update_signal(
+        self,
+        draft: SignalDraft,
+        raw_response: str,
+        candle_open_time: Optional[str],
+        ctx: UpdateContext,
+    ) -> Signal:
+        """Build a v1.1 UPDATE/CLOSE record for an open position.
+
+        Entry gates (TTL, JEV, min RR) never apply here: this is a position
+        management action. Only UPDATE/CLOSE are honoured; a BUY/SELL/HOLD
+        answer becomes a HOLD (ignored) so an entry schema can never be
+        reinterpreted as a position update. A non-compliant proposal returns a
+        HOLD signal with the refusal reason in the reasoning.
+        """
+        candle_open_dt = (
+            parse_iso(candle_open_time)
+            if candle_open_time is not None
+            else self.current_candle_bounds()
+        )
+        open_at, close_at, expires_at = self._candle_times(candle_open_dt)
+        created_at = iso_z(datetime.now(timezone.utc))
+        decision_id = f"{ctx.based_on_entry}-u{ctx.revision}"
+
+        def _base(action: str, **kwargs: Any) -> Signal:
+            payload = dict(
+                schema_version="1.1",
+                decision_id=decision_id,
+                source="llm_trader",
+                symbol=self.symbol,
+                timeframe=self.timeframe,
+                candle_open_time=open_at,
+                candle_close_time=close_at,
+                created_at=created_at,
+                expires_at=expires_at,
+                action=action,
+                confidence=0.0,
+                risk_approved=False,
+                sl=None,
+                tp=None,
+                position_size_pct=0.0,
+                reasoning=draft.reasoning[:8000],
+                model=draft.model,
+                provider=draft.provider,
+                prompt_version=draft.prompt_version,
+                raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+                position_id=ctx.position_id,
+                position_side=ctx.position_side,
+                revision=ctx.revision,
+                based_on_entry=ctx.based_on_entry,
+                source_price=ctx.current_price,
+            )
+            payload.update(kwargs)
+            return Signal(**payload)
+
+        if draft.action not in ("UPDATE", "CLOSE"):
+            return self._hold_fallback(
+                reasoning=(
+                    f"position mode requires UPDATE or CLOSE, got {draft.action}"
+                ),
+                candle_open_dt=candle_open_dt,
+                model=draft.model,
+                provider=draft.provider,
+                raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+            )
+        if draft.action == "CLOSE":
+            signal = _base("CLOSE", close_reason="llm_close")
+            signal.validate()
+            return signal
+
+        current_price = ctx.current_price or self._entry_price() or ctx.entry_price
+        # v1.1 deliberately does not synthesise a dynamic TP: no ATR reaches the
+        # position path. When the TP is unknown, only a safe SL tightening can
+        # be emitted (SL-only), never an invented take-profit.
+        decision = evaluate_update(
+            ctx.position_view(),
+            draft.sl,
+            draft.tp,
+            current_price,
+            max(timeframe_seconds(self.timeframe) // 60, 1),
+            original_sl=ctx.effective_entry_sl(),
+        )
+        if not decision.allowed:
+            logger.info(
+                "Position update refused for %s %s: %s",
+                self.symbol, ctx.position_id, decision.reason,
+            )
+            return self._hold_fallback(
+                reasoning=f"update refused: {decision.reason}",
+                candle_open_dt=candle_open_dt,
+                model=draft.model,
+                provider=draft.provider,
+                raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+            )
+
+        final_sl = decision.stop_loss if decision.stop_loss is not None else ctx.stop_loss
+        final_tp = decision.take_profit if decision.take_profit is not None else ctx.take_profit
+        signal = _base(
+            "UPDATE",
+            sl=final_sl,
+            tp=final_tp,
+            risk_approved=True,
+            reasoning=f"{draft.reasoning} [{decision.reason}]"[:8000],
+        )
+        signal.validate()
+        return signal
+
     def _build_signal(
         self,
         draft: SignalDraft,
@@ -1172,6 +1349,16 @@ class PairAnalyzer:
             if candle_open_time is not None
             else self.current_candle_bounds()
         )
+        if draft.action in ("UPDATE", "CLOSE"):
+            # A position action must never open a trade. In stateless/entry mode
+            # it is downgraded to HOLD.
+            return self._hold_fallback(
+                reasoning=f"position action {draft.action} is not an entry",
+                candle_open_dt=candle_open_dt,
+                model=draft.model,
+                provider=draft.provider,
+                raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+            )
         open_at, close_at, expires_at = self._candle_times(candle_open_dt)
         confidence_float = confidence_to_float(draft.confidence_raw)
         entry_price = self._entry_price()

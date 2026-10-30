@@ -206,7 +206,9 @@ def test_is_expired_false_after_one_timeframe():
 def test_schema_version_is_locked():
     signal = Signal(**make_signal_kwargs())
     assert signal.schema_version == SIGNAL_SCHEMA_VERSION == "1.0"
-    assert ALLOWED_ACTIONS == {"BUY", "SELL", "HOLD"}
+    # v1.1 adds UPDATE/CLOSE position records on a separate channel; entry
+    # signals stay 1.0 and keep only BUY/SELL/HOLD.
+    assert ALLOWED_ACTIONS == {"BUY", "SELL", "HOLD", "UPDATE", "CLOSE"}
 
 
 def test_raw_response_hash_pattern_validated():

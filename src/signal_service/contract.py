@@ -16,6 +16,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Literal, Optional
 
 SIGNAL_SCHEMA_VERSION = "1.0"
+#: Schema versions a reader must accept. 1.1 adds UPDATE/CLOSE position records
+#: on a separate channel; 1.0 entry records are unchanged.
+SIGNAL_SCHEMA_VERSIONS = frozenset({"1.0", "1.1"})
+
+#: Position-related actions (v1.1). They never enter a new position.
+POSITION_ACTIONS = frozenset({"UPDATE", "CLOSE"})
+POSITION_SIDES = frozenset({"long", "short"})
 
 SUPPORTED_TIMEFRAMES = {
     "1m": 60,
@@ -27,10 +34,11 @@ SUPPORTED_TIMEFRAMES = {
     "1d": 86400,
 }
 
-#: The only signal actions in contract v1.
-Action = Literal["BUY", "SELL", "HOLD"]
+#: Signal actions. v1.0 uses BUY/SELL/HOLD; v1.1 adds UPDATE/CLOSE position
+#: records, which are written to a separate updates channel.
+Action = Literal["BUY", "SELL", "HOLD", "UPDATE", "CLOSE"]
 
-ALLOWED_ACTIONS = frozenset({"BUY", "SELL", "HOLD"})
+ALLOWED_ACTIONS = frozenset({"BUY", "SELL", "HOLD", "UPDATE", "CLOSE"})
 
 ALLOWED_SOURCES = frozenset({"llm_trader", "fenixai", "manual", "jev"})
 
@@ -194,6 +202,13 @@ class Signal:
     latency_ms: Optional[int] = None
     raw_response_hash: Optional[str] = None
     jev: Optional[Dict[str, Any]] = field(default=None)
+    # v1.1 position-update fields (omitted on v1.0 entry records).
+    position_id: Optional[str] = None
+    position_side: Optional[str] = None
+    revision: Optional[int] = None
+    based_on_entry: Optional[str] = None
+    close_reason: Optional[str] = None
+    source_price: Optional[float] = None
 
     def validate(self) -> None:
         """Validate the signal against the contract invariants.
@@ -201,9 +216,10 @@ class Signal:
         Raises:
             SignalValidationError: when any invariant is violated.
         """
-        if self.schema_version != SIGNAL_SCHEMA_VERSION:
+        if self.schema_version not in SIGNAL_SCHEMA_VERSIONS:
             raise SignalValidationError(
-                f"schema_version must be {SIGNAL_SCHEMA_VERSION!r}, got {self.schema_version!r}"
+                f"schema_version must be one of {sorted(SIGNAL_SCHEMA_VERSIONS)!r}, "
+                f"got {self.schema_version!r}"
             )
         if not self.decision_id:
             raise SignalValidationError("decision_id must not be empty")
@@ -228,8 +244,17 @@ class Signal:
             raise SignalValidationError("expires_at must equal candle_close_time + timeframe")
 
         for name, value in (("sl", self.sl), ("tp", self.tp)):
-            if value is not None and (not isinstance(value, (int, float)) or value <= 0):
-                raise SignalValidationError(f"{name} must be a positive number or null")
+            if value is None:
+                continue
+            # json.loads accepts NaN/Infinity: an infinite level must never be
+            # persisted (an infinite TP would disable the consumer's exit).
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise SignalValidationError(f"{name} must be a positive finite number or null")
 
         if self.action in ("BUY", "SELL"):
             if self.sl is None or self.tp is None:
@@ -237,11 +262,45 @@ class Signal:
         # HOLD may carry null sl/tp (or valid numbers); it never triggers an
         # entry in Freqtrade. BUY/SELL require non-null sl/tp (see above).
 
+        if self.action in POSITION_ACTIONS:
+            self._validate_position_action()
+
         if self.jev is not None:
             if not isinstance(self.jev, dict) or set(self.jev) - {
                 "model", "tradeability", "bias", "regime"
             }:
                 raise SignalValidationError("jev payload has unexpected keys")
+
+    def _validate_position_action(self) -> None:
+        """Validate the v1.1 UPDATE/CLOSE invariants."""
+        if self.schema_version != "1.1":
+            raise SignalValidationError(
+                f"{self.action} requires schema_version '1.1', got {self.schema_version!r}"
+            )
+        if not isinstance(self.position_id, str) or not self.position_id:
+            # The contract shape is a string; position_sync stringifies the
+            # integer Freqtrade trade_id before the producer writes a record.
+            raise SignalValidationError(f"{self.action} requires a non-empty string position_id")
+        if self.position_side not in POSITION_SIDES:
+            raise SignalValidationError(
+                f"{self.action} requires position_side in {sorted(POSITION_SIDES)!r}"
+            )
+        if not self.based_on_entry:
+            raise SignalValidationError(f"{self.action} requires based_on_entry")
+        if not isinstance(self.revision, int) or isinstance(self.revision, bool) or self.revision < 1:
+            raise SignalValidationError(f"{self.action} requires revision >= 1")
+        if self.source_price is not None and (
+            not isinstance(self.source_price, (int, float)) or self.source_price <= 0
+        ):
+            raise SignalValidationError("source_price must be a positive number or null")
+        if self.action == "UPDATE":
+            if self.sl is None and self.tp is None:
+                raise SignalValidationError("UPDATE requires a new sl and/or tp")
+        if self.action == "CLOSE":
+            if self.close_reason is None or not str(self.close_reason).strip():
+                raise SignalValidationError("CLOSE requires close_reason")
+            if self.sl is not None or self.tp is not None:
+                raise SignalValidationError("CLOSE must not carry sl/tp")
 
     def is_expired(self, now: Optional[datetime] = None) -> bool:
         """Return True when the signal is past its expiry time.
@@ -282,6 +341,12 @@ class Signal:
             ("latency_ms", self.latency_ms),
             ("raw_response_hash", self.raw_response_hash),
             ("jev", self.jev),
+            ("position_id", self.position_id),
+            ("position_side", self.position_side),
+            ("revision", self.revision),
+            ("based_on_entry", self.based_on_entry),
+            ("close_reason", self.close_reason),
+            ("source_price", self.source_price),
         )
         for key, value in optional:
             if value is not None:
@@ -304,7 +369,11 @@ class Signal:
         if required - set(data):
             missing = ", ".join(sorted(required - set(data)))
             raise SignalValidationError(f"missing required fields: {missing}")
-        allowed = required | {"prompt_version", "latency_ms", "raw_response_hash", "jev"}
+        allowed = required | {
+            "prompt_version", "latency_ms", "raw_response_hash", "jev",
+            "position_id", "position_side", "revision", "based_on_entry",
+            "close_reason", "source_price",
+        }
         extra = set(data) - allowed
         if extra:
             raise SignalValidationError(f"unexpected fields: {', '.join(sorted(extra))}")
@@ -331,6 +400,12 @@ class Signal:
             latency_ms=data.get("latency_ms"),
             raw_response_hash=data.get("raw_response_hash"),
             jev=data.get("jev"),
+            position_id=data.get("position_id"),
+            position_side=data.get("position_side"),
+            revision=data.get("revision"),
+            based_on_entry=data.get("based_on_entry"),
+            close_reason=data.get("close_reason"),
+            source_price=data.get("source_price"),
         )
         signal.validate()
         return signal

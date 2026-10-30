@@ -1172,7 +1172,7 @@ async def test_contract_invalid_output_falls_back_to_unapproved_hold():
     assert signal.action == "HOLD"
     assert signal.risk_approved is False
     assert "invalid LLM output" in signal.reasoning
-    assert "sl must be a positive number or null" in signal.reasoning
+    assert "sl must be a positive finite number or null" in signal.reasoning
     # Real model/provider, never 'unspecified'.
     assert signal.model == "deepseek-v4.1-flash"
     assert signal.provider == "litellm"
