@@ -487,3 +487,75 @@ def test_position_sync_stringifies_integer_trade_id():
     snapshot = snapshot_from_trades([{"trade_id": 42, "pair": "BTC/USDT",
                                       "open_rate": 67500.0}])
     assert snapshot.positions[0].position_id == "42"
+
+
+# ------------------------------------------------------------------ multi-API sync
+def test_position_sync_multi_api_merges_and_normalizes_symbols(tmp_path):
+    import httpx
+    from src.signal_service.position_sync import (
+        FreqtradeReadOnlyClient,
+        sync_once_multi,
+    )
+
+    def spot_handler(request):
+        if request.url.path == "/api/v1/token/login":
+            return httpx.Response(200, json={"access_token": "t"})
+        return httpx.Response(200, json=[{
+            "trade_id": 7, "pair": "BTC/USDT", "is_short": False,
+            "open_rate": 67500.0, "amount": 0.1, "enter_tag": "spot-e1",
+        }])
+
+    def futures_handler(request):
+        if request.url.path == "/api/v1/token/login":
+            return httpx.Response(200, json={"access_token": "t"})
+        return httpx.Response(200, json=[{
+            "trade_id": 8, "pair": "BTC/USDT:USDT", "is_short": True,
+            "open_rate": 78000.0, "amount": 0.1, "enter_tag": "fut-e1",
+        }])
+
+    async def run():
+        out = tmp_path / "positions.json"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(spot_handler)) as raw1, \
+                httpx.AsyncClient(transport=httpx.MockTransport(futures_handler)) as raw2:
+            spot = FreqtradeReadOnlyClient("http://spot", "u", "p", client=raw1, market="spot")
+            futures = FreqtradeReadOnlyClient("http://fut", "u", "p", client=raw2, market="futures")
+            return await sync_once_multi([spot, futures], str(out))
+
+    assert asyncio.run(run()) == 2
+    payload = json.loads((tmp_path / "positions.json").read_text())
+    symbols = {p["symbol"] for p in payload["positions"]}
+    markets = {p["market"] for p in payload["positions"]}
+    sides = {p["side"] for p in payload["positions"]}
+    assert symbols == {"BTC/USDT"}
+    assert markets == {"spot", "futures"}
+    assert sides == {"long", "short"}
+    assert not list(tmp_path.glob(".positions-*.tmp"))
+
+
+def test_position_sync_reads_clients_from_config(tmp_path):
+    from src.signal_service.position_sync import build_client_from_config
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "trading_mode": "futures",
+        "api_server": {"listen_port": 8081, "username": "u", "password": "p"},
+    }))
+    client = build_client_from_config(str(cfg))
+    assert client.base_url == "http://127.0.0.1:8081"
+    assert client.market == "futures"
+
+
+def test_producer_reads_positions_from_both_markets(tmp_path):
+    from src.signal_service.positions import write_positions_atomic, load_positions
+
+    snapshot = PositionsSnapshot(updated_at=utc_now_iso(), positions=[
+        PositionSnapshot(position_id="7", symbol="BTC/USDT", side="long",
+                         entry_price=67500.0, market="spot"),
+        PositionSnapshot(position_id="8", symbol="BTC/USDT", side="short",
+                         entry_price=78000.0, market="futures"),
+    ])
+    path = tmp_path / "positions.json"
+    write_positions_atomic(str(path), snapshot)
+    loaded = load_positions(str(path))
+    matched = loaded.for_symbol("BTC/USDT")
+    assert {p.market for p in matched} == {"spot", "futures"}
