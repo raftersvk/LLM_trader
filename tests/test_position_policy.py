@@ -1,11 +1,8 @@
 """Tests for the producer's position SL/TP policy (core reuse)."""
 
-import pytest
-
 from src.signal_service.position_policy import (
     MAX_WIDENING_RATIO,
     PositionView,
-    dynamic_take_profit,
     evaluate_update,
     is_tp_improvement,
 )
@@ -70,14 +67,6 @@ def test_short_tightening_and_tp_moves():
     assert decision.stop_loss == 68500.0
     assert decision.take_profit == 63000.0
     assert is_tp_improvement("SHORT", 64000.0, 63000.0) is True
-
-
-def test_dynamic_take_profit_long_and_short():
-    long_tp = dynamic_take_profit("LONG", 100.0, atr=2.0, atr_percentage=2.0)
-    short_tp = dynamic_take_profit("SHORT", 100.0, atr=2.0, atr_percentage=2.0)
-    assert long_tp > 100.0
-    assert short_tp < 100.0
-    assert 100.0 - short_tp == pytest.approx(long_tp - 100.0)
 
 
 def test_long_stop_at_or_beyond_current_price_refused():

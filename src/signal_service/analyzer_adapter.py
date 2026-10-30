@@ -22,7 +22,6 @@ import numpy as np
 from src.signal_service.position_policy import (
     PositionView,
     direction_for_side,
-    dynamic_take_profit,
     evaluate_update,
 )
 from src.signal_service.contract import (
@@ -79,7 +78,6 @@ class UpdateContext:
     current_price: Optional[float] = None
     entry_sl: Optional[float] = None
     entry_tp: Optional[float] = None
-    atr: Optional[float] = None
 
     def position_view(self) -> PositionView:
         """Build the duck-typed view consumed by the tightening policy."""
@@ -1303,16 +1301,13 @@ class PairAnalyzer:
             return signal
 
         current_price = ctx.current_price or self._entry_price() or ctx.entry_price
-        proposed_tp = draft.tp
-        if proposed_tp is None and ctx.take_profit is None and ctx.atr and ctx.atr > 0:
-            # No known TP and ATR available: branch the core dynamic TP in.
-            proposed_tp = dynamic_take_profit(
-                direction_for_side(ctx.position_side), ctx.entry_price, ctx.atr,
-            )
+        # v1.1 deliberately does not synthesise a dynamic TP: no ATR reaches the
+        # position path. When the TP is unknown, only a safe SL tightening can
+        # be emitted (SL-only), never an invented take-profit.
         decision = evaluate_update(
             ctx.position_view(),
             draft.sl,
-            proposed_tp,
+            draft.tp,
             current_price,
             max(timeframe_seconds(self.timeframe) // 60, 1),
             original_sl=ctx.effective_entry_sl(),

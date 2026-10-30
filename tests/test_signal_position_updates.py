@@ -449,3 +449,21 @@ def test_position_sync_http_and_atomic_write(tmp_path):
     payload = json.loads((tmp_path / "positions.json").read_text())
     assert payload["positions"][0]["position_id"] == "42"
     assert not list(tmp_path.glob(".positions-*.tmp"))
+
+
+def test_update_mode_emits_sl_only_and_never_invents_a_tp():
+    # TP unknown on the position and none proposed by the model: the retained
+    # v1.1 behaviour is a safe SL-only UPDATE, never a synthesised dynamic TP.
+    raw = json.dumps({"signal": "UPDATE", "confidence": "HIGH", "stop_loss": 68000.0,
+                      "reasoning": "tighten only"})
+    no_tp_ctx = UpdateContext(
+        position_id="42", position_side="long", entry_price=67500.0,
+        stop_loss=66500.0, take_profit=None, revision=1,
+        based_on_entry="entry-1", current_price=69000.0, entry_sl=66500.0,
+    )
+    signal = asyncio.run(
+        _analyzer(raw).analyze(candle_open_time="2026-10-30T10:00:00Z", update_context=no_tp_ctx)
+    )
+    assert signal.action == "UPDATE"
+    assert signal.sl == 68000.0
+    assert signal.tp is None

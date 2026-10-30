@@ -21,7 +21,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from src.trading.regime_risk_profile import RegimeRiskProfileSelector
 from src.trading.stop_loss_tightening_policy import StopLossTighteningPolicy
 
 #: Same widening cap as the core's PositionManagementMixin (150% of the
@@ -235,27 +234,3 @@ def evaluate_update(
     )
 
 
-def dynamic_take_profit(
-    direction: str,
-    entry_price: float,
-    atr: float,
-    atr_percentage: Optional[float] = None,
-    choppiness: Optional[float] = None,
-    selector: Optional[RegimeRiskProfileSelector] = None,
-) -> float:
-    """Dynamic TP from the core regime selector (ATR * profile multiplier).
-
-    Used only when the model does not propose a take-profit but ATR is
-    available. When ATR is unknown the producer still allows SL-only updates.
-    """
-    if atr <= 0 or entry_price <= 0:
-        raise ValueError("entry_price and atr must be positive")
-    selector = selector or RegimeRiskProfileSelector()
-    profile = selector.select_profile(
-        choppiness=choppiness,
-        atr_percentage=atr_percentage if atr_percentage is not None else (atr / entry_price) * 100,
-    )
-    distance = atr * selector.get_tp_multiplier(profile)
-    if direction == "LONG":
-        return entry_price + distance
-    return entry_price - distance
