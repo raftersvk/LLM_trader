@@ -475,3 +475,15 @@ def test_contract_rejects_non_finite_or_bool_update_levels():
             Signal(**update_kwargs(sl=bad)).validate()
         with pytest.raises(SignalValidationError):
             Signal(**update_kwargs(tp=bad)).validate()
+
+
+def test_contract_rejects_integer_position_id():
+    # The producer must stringify Freqtrade's integer trade_id before writing.
+    with pytest.raises(SignalValidationError):
+        Signal(**update_kwargs(position_id=42)).validate()
+
+
+def test_position_sync_stringifies_integer_trade_id():
+    snapshot = snapshot_from_trades([{"trade_id": 42, "pair": "BTC/USDT",
+                                      "open_rate": 67500.0}])
+    assert snapshot.positions[0].position_id == "42"

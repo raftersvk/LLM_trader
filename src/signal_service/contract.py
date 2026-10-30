@@ -277,8 +277,10 @@ class Signal:
             raise SignalValidationError(
                 f"{self.action} requires schema_version '1.1', got {self.schema_version!r}"
             )
-        if not self.position_id:
-            raise SignalValidationError(f"{self.action} requires position_id")
+        if not isinstance(self.position_id, str) or not self.position_id:
+            # The contract shape is a string; position_sync stringifies the
+            # integer Freqtrade trade_id before the producer writes a record.
+            raise SignalValidationError(f"{self.action} requires a non-empty string position_id")
         if self.position_side not in POSITION_SIDES:
             raise SignalValidationError(
                 f"{self.action} requires position_side in {sorted(POSITION_SIDES)!r}"
