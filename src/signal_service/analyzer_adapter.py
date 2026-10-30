@@ -22,6 +22,7 @@ import numpy as np
 from src.signal_service.position_policy import (
     PositionView,
     direction_for_side,
+    dynamic_take_profit,
     evaluate_update,
 )
 from src.signal_service.contract import (
@@ -72,10 +73,13 @@ class UpdateContext:
     position_side: str  # "long" | "short"
     entry_price: float
     stop_loss: float
-    take_profit: float
+    take_profit: Optional[float]
     revision: int
     based_on_entry: str
     current_price: Optional[float] = None
+    entry_sl: Optional[float] = None
+    entry_tp: Optional[float] = None
+    atr: Optional[float] = None
 
     def position_view(self) -> PositionView:
         """Build the duck-typed view consumed by the tightening policy."""
@@ -85,6 +89,18 @@ class UpdateContext:
             take_profit=self.take_profit,
             direction=direction_for_side(self.position_side),
         )
+
+    def effective_entry_sl(self) -> Optional[float]:
+        """Original entry-signal SL, the widening base (falls back to current)."""
+        if self.entry_sl is not None:
+            return self.entry_sl
+        return self.stop_loss
+
+    def effective_entry_tp(self) -> Optional[float]:
+        """Original entry-signal TP, used when the current TP is unknown."""
+        if self.take_profit is not None:
+            return self.take_profit
+        return self.entry_tp
 _UNKNOWN_LABELS = frozenset({"", "unknown", "unspecified", "none", "null"})
 _NEWS_ORIGINAL_ATTR = "_signal_service_original_retrieve_context"
 
@@ -643,7 +659,6 @@ class PairAnalyzer:
             if update_context is not None:
                 return self._build_update_signal(
                     draft, raw_response, candle_open_time, update_context,
-                    veto_reason=veto_reason,
                 )
             return self._build_signal(draft, raw_response, candle_open_time, veto_reason=veto_reason)
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -1223,13 +1238,14 @@ class PairAnalyzer:
         raw_response: str,
         candle_open_time: Optional[str],
         ctx: UpdateContext,
-        veto_reason: Optional[str] = None,
     ) -> Signal:
         """Build a v1.1 UPDATE/CLOSE record for an open position.
 
         Entry gates (TTL, JEV, min RR) never apply here: this is a position
-        management action. A non-compliant proposal returns a HOLD signal that
-        the caller ignores, with the refusal reason in the reasoning.
+        management action. Only UPDATE/CLOSE are honoured; a BUY/SELL/HOLD
+        answer becomes a HOLD (ignored) so an entry schema can never be
+        reinterpreted as a position update. A non-compliant proposal returns a
+        HOLD signal with the refusal reason in the reasoning.
         """
         candle_open_dt = (
             parse_iso(candle_open_time)
@@ -1271,18 +1287,35 @@ class PairAnalyzer:
             payload.update(kwargs)
             return Signal(**payload)
 
+        if draft.action not in ("UPDATE", "CLOSE"):
+            return self._hold_fallback(
+                reasoning=(
+                    f"position mode requires UPDATE or CLOSE, got {draft.action}"
+                ),
+                candle_open_dt=candle_open_dt,
+                model=draft.model,
+                provider=draft.provider,
+                raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
+            )
         if draft.action == "CLOSE":
             signal = _base("CLOSE", close_reason="llm_close")
             signal.validate()
             return signal
 
         current_price = ctx.current_price or self._entry_price() or ctx.entry_price
+        proposed_tp = draft.tp
+        if proposed_tp is None and ctx.take_profit is None and ctx.atr and ctx.atr > 0:
+            # No known TP and ATR available: branch the core dynamic TP in.
+            proposed_tp = dynamic_take_profit(
+                direction_for_side(ctx.position_side), ctx.entry_price, ctx.atr,
+            )
         decision = evaluate_update(
             ctx.position_view(),
             draft.sl,
-            draft.tp,
+            proposed_tp,
             current_price,
             max(timeframe_seconds(self.timeframe) // 60, 1),
+            original_sl=ctx.effective_entry_sl(),
         )
         if not decision.allowed:
             logger.info(

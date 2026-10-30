@@ -78,3 +78,55 @@ def test_dynamic_take_profit_long_and_short():
     assert long_tp > 100.0
     assert short_tp < 100.0
     assert 100.0 - short_tp == pytest.approx(long_tp - 100.0)
+
+
+def test_long_stop_at_or_beyond_current_price_refused():
+    # entry 67500, current 69000: a stop at 69500 is above the market.
+    decision = evaluate_update(long_position(), 69500.0, None, 69000.0, tf_minutes=60)
+    assert decision.allowed is False
+    assert "at or above the current price" in decision.reason
+
+
+def test_short_stop_at_or_below_current_price_refused():
+    # SHORT entry 68000, current 66000: a stop at 65500 is below the market.
+    decision = evaluate_update(short_position(), 65500.0, None, 66000.0, tf_minutes=60)
+    assert decision.allowed is False
+    assert "at or below the current price" in decision.reason
+
+
+def test_long_tp_at_or_below_current_price_refused():
+    decision = evaluate_update(long_position(), None, 68800.0, 69000.0, tf_minutes=60)
+    assert decision.allowed is False
+    assert "take-profit" in decision.reason
+
+
+def test_incoherent_final_levels_refused():
+    # A tightening SL above the existing TP must be refused, not emitted.
+    decision = evaluate_update(long_position(tp=69000.0), 69500.0, None, 68000.0, tf_minutes=60)
+    assert decision.allowed is False
+    assert "incoherent" in decision.reason or "above the current price" in decision.reason
+
+
+def test_widening_base_is_the_original_entry_sl():
+    # Current SL already tightened to 67000; base must stay 66500.
+    position = PositionView(entry_price=67500.0, stop_loss=67000.0, take_profit=72000.0, direction="LONG")
+    # 150% of |67500-66500| = 1500 -> 66000 exactly is allowed.
+    assert evaluate_update(position, 66000.0, None, 70000.0, 60, original_sl=66500.0).allowed is True
+    # Using the current SL as the base would compute only 750*1.5=1125 and reject; prove the original wins.
+    assert evaluate_update(position, 65900.0, None, 70000.0, 60, original_sl=66500.0).allowed is False
+
+
+def test_sl_only_update_when_tp_unknown():
+    # No TP: the progress gate cannot run, but a safe tightening is still allowed.
+    position = PositionView(entry_price=67500.0, stop_loss=66500.0, take_profit=None, direction="LONG")
+    decision = evaluate_update(position, 68000.0, None, 69000.0, tf_minutes=60)
+    assert decision.allowed is True
+    assert decision.stop_loss == 68000.0
+    assert "no known take-profit" in decision.reason
+
+
+def test_sl_update_refused_without_current_price():
+    position = PositionView(entry_price=67500.0, stop_loss=66500.0, take_profit=72000.0, direction="LONG")
+    decision = evaluate_update(position, 68000.0, None, None, tf_minutes=60)
+    assert decision.allowed is False
+    assert "no current price" in decision.reason

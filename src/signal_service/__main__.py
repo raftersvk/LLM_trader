@@ -114,6 +114,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--updates-output", default=None,
         help="Directory for v1.1 update JSONL files (default: <output parent>/updates)",
     )
+    run.add_argument(
+        "--max-snapshot-age-seconds", type=float, default=300.0,
+        help="Treat positions.json older than N seconds as stale and fail open to entries",
+    )
 
     replay = sub.add_parser("replay", help="Historical replay (no future data)")
     replay.add_argument("--pairs", default="BTC/USDT")
@@ -252,6 +256,7 @@ async def _run_command(args: argparse.Namespace) -> None:
         position_aware=args.position_aware,
         positions_file=args.positions_file,
         updates_dir=args.updates_output,
+        max_snapshot_age_seconds=args.max_snapshot_age_seconds,
     )
     await service.run()
 

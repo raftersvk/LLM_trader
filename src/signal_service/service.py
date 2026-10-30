@@ -13,16 +13,16 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from src.signal_service.analyzer_adapter import (
     PairAnalyzer,
     UpdateContext,
     analyze_and_store,
 )
-from src.signal_service.contract import iso_z, timeframe_seconds, utc_now_iso
+from src.signal_service.contract import iso_z, parse_iso, timeframe_seconds, utc_now_iso
 from src.signal_service.jev_gate import JevGate
-from src.signal_service.positions import PositionSnapshot, load_positions
+from src.signal_service.positions import PositionSnapshot, PositionsSnapshot, load_positions
 from src.signal_service.storage import (
     SignalStorage,
     UpdateStorage,
@@ -57,6 +57,7 @@ class SignalService:
         position_aware: bool = False,
         positions_file: Optional[str] = None,
         updates_dir: Optional[str] = None,
+        max_snapshot_age_seconds: float = 300.0,
     ) -> None:
         """Initialize the scheduler.
 
@@ -83,6 +84,10 @@ class SignalService:
                 Defaults to ``<signals parent>/positions.json``.
             updates_dir: Directory for the v1.1 update JSONL files. Defaults to
                 the ``updates`` sibling of ``signals_dir``.
+            max_snapshot_age_seconds: A positions.json older than this is
+                treated as stale. The service then fails OPEN to entry signals
+                (the stateless path) instead of freezing a pair forever, and
+                records ``metrics["stale_snapshots"]``.
         """
         self.pairs = pairs
         self.timeframe = timeframe
@@ -99,6 +104,9 @@ class SignalService:
             os.path.dirname(os.path.normpath(signals_dir)), "positions.json"
         )
         self.updates_dir = updates_dir or default_updates_dir(signals_dir)
+        self.max_snapshot_age_seconds = max(float(max_snapshot_age_seconds), 1.0)
+        self.metrics: Dict[str, int] = {"stale_snapshots": 0, "stale_positions": 0}
+        self._missing_snapshot_logged = False
         self._stop_requested = False
         self.heartbeats: Dict[str, str] = {}
         self.storages: Dict[str, SignalStorage] = {}
@@ -163,7 +171,7 @@ class SignalService:
         candle_open_dt = candle_open if candle_open is not None else self._current_candle_open()
         candle_open_iso = iso_z(candle_open_dt)
         results: Dict[str, str] = {}
-        snapshot = load_positions(self.positions_file) if self.position_aware else None
+        snapshot = self._load_fresh_snapshot() if self.position_aware else None
         for symbol in self.pairs:
             analyzer, storage = self._pair_state(symbol)
             try:
@@ -202,6 +210,56 @@ class SignalService:
         logger.info("Cycle done for candle %s: %s", candle_open, results)
         return results
 
+    def _load_fresh_snapshot(self) -> PositionsSnapshot:
+        """Load positions.json, failing open to entries when it is stale.
+
+        A stale snapshot means position_sync likely died: keeping the pair
+        "position open" forever would freeze all its entry signals. The service
+        therefore treats it as empty, logs a warning and increments metrics so
+        supervision can alert. Updates are then not emitted either.
+        """
+        if not os.path.exists(self.positions_file):
+            if not self._missing_snapshot_logged:
+                logger.warning(
+                    "position_aware is enabled but %s does not exist; running stateless",
+                    self.positions_file,
+                )
+                self._missing_snapshot_logged = True
+            return PositionsSnapshot()
+        snapshot = load_positions(self.positions_file)
+        age = self._snapshot_age_seconds(snapshot)
+        if age is None:
+            if snapshot.positions:
+                self.metrics["stale_snapshots"] += 1
+                self.metrics["stale_positions"] += len(snapshot.positions)
+                logger.warning(
+                    "positions.json has no parseable updated_at; failing open to entry signals",
+                )
+                return PositionsSnapshot()
+            return snapshot
+        if age > self.max_snapshot_age_seconds:
+            if snapshot.positions:
+                self.metrics["stale_snapshots"] += 1
+                self.metrics["stale_positions"] += len(snapshot.positions)
+                logger.warning(
+                    "positions.json is stale (%.0fs > %.0fs); failing open to entry "
+                    "signals for %d position(s)",
+                    age, self.max_snapshot_age_seconds, len(snapshot.positions),
+                )
+            return PositionsSnapshot()
+        logger.debug("positions.json age %.0fs", age)
+        return snapshot
+
+    def _snapshot_age_seconds(self, snapshot: PositionsSnapshot) -> Optional[float]:
+        """Age of the snapshot in seconds, or None when it has no timestamp."""
+        if not snapshot.updated_at:
+            return None
+        try:
+            updated_at = parse_iso(snapshot.updated_at)
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, (datetime.now(timezone.utc) - updated_at).total_seconds())
+
     async def _run_position_updates(
         self,
         analyzer: PairAnalyzer,
@@ -215,16 +273,28 @@ class SignalService:
         opened from a candle that should manage an existing trade.
         """
         updates = self.update_storages[symbol]
+        latest_by_position: Dict[str, Any] = {}
+        for update in updates.load_all():
+            position_id = getattr(update, "position_id", None)
+            if not position_id:
+                continue
+            previous = latest_by_position.get(position_id)
+            if previous is None or (update.revision or 0) > (previous.revision or 0):
+                latest_by_position[position_id] = update
         produced = 0
         for position in positions:
-            stop_loss, take_profit = self._current_levels(symbol, position, updates)
-            if stop_loss is None or take_profit is None:
+            entry_sl, entry_tp = self._entry_levels(symbol, position)
+            stop_loss, take_profit = self._current_levels(
+                position, entry_sl, entry_tp, latest_by_position.get(position.position_id)
+            )
+            if stop_loss is None:
                 logger.warning(
-                    "Position %s %s has no known SL/TP; update skipped",
+                    "Position %s %s has no known stop-loss; update skipped",
                     symbol, position.position_id,
                 )
                 continue
-            revision = updates.last_revision(position.position_id) + 1
+            latest = latest_by_position.get(position.position_id)
+            revision = (latest.revision or 0) + 1 if latest is not None else 1
             ctx = UpdateContext(
                 position_id=position.position_id,
                 position_side=position.side,
@@ -234,6 +304,8 @@ class SignalService:
                 revision=revision,
                 based_on_entry=position.enter_tag or f"position-{position.position_id}",
                 current_price=position.current_price,
+                entry_sl=entry_sl,
+                entry_tp=entry_tp,
             )
             try:
                 signal = await asyncio.wait_for(
@@ -261,38 +333,43 @@ class SignalService:
                 )
         return f"updates:{produced}"
 
+    def _entry_levels(
+        self, symbol: str, position: PositionSnapshot
+    ) -> tuple[Optional[float], Optional[float]]:
+        """Original entry-signal SL/TP (the widening base), if resolvable."""
+        if not position.enter_tag:
+            return None, None
+        for entry in self.storages[symbol].load_all():
+            if entry.decision_id == position.enter_tag:
+                return entry.sl, entry.tp
+        return None, None
+
+    @staticmethod
     def _current_levels(
-        self, symbol: str, position: PositionSnapshot, updates: UpdateStorage
+        position: PositionSnapshot,
+        entry_sl: Optional[float],
+        entry_tp: Optional[float],
+        latest_update: Any,
     ) -> tuple[Optional[float], Optional[float]]:
         """Current SL/TP: snapshot, then entry signal, then the latest update."""
-        stop_loss, take_profit = position.stop_loss, position.take_profit
-        if position.enter_tag:
-            for entry in self.storages[symbol].load_all():
-                if entry.decision_id == position.enter_tag:
-                    stop_loss = stop_loss if stop_loss is not None else entry.sl
-                    take_profit = take_profit if take_profit is not None else entry.tp
-                    break
-        latest = None
-        for update in updates.load_all():
-            if getattr(update, "position_id", None) != position.position_id:
-                continue
-            if latest is None or (update.revision or 0) > (latest.revision or 0):
-                latest = update
-        if latest is not None:
-            stop_loss = latest.sl if latest.sl is not None else stop_loss
-            take_profit = latest.tp if latest.tp is not None else take_profit
+        stop_loss = position.stop_loss if position.stop_loss is not None else entry_sl
+        take_profit = position.take_profit if position.take_profit is not None else entry_tp
+        if latest_update is not None:
+            stop_loss = latest_update.sl if latest_update.sl is not None else stop_loss
+            take_profit = latest_update.tp if latest_update.tp is not None else take_profit
         return stop_loss, take_profit
 
     @staticmethod
     def _position_context_text(
-        position: PositionSnapshot, stop_loss: float, take_profit: float
+        position: PositionSnapshot, stop_loss: float, take_profit: Optional[float]
     ) -> str:
         """Compact position block injected into the position-aware prompt."""
+        take_profit_text = f"{take_profit:g}" if take_profit is not None else "unknown"
         return (
             "### Open position to manage\n"
             f"symbol={position.symbol} side={position.side} "
             f"entry={position.entry_price:g} amount={position.amount:g} "
-            f"stop_loss={stop_loss:g} take_profit={take_profit:g} "
+            f"stop_loss={stop_loss:g} take_profit={take_profit_text} "
             f"opened={position.open_date or 'unknown'}\n"
             "If you would adjust this position, answer UPDATE with a new stop_loss "
             "and/or take_profit. If you would close it, answer CLOSE. Do not answer "

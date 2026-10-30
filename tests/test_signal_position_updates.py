@@ -14,6 +14,7 @@ from src.signal_service.positions import (
     PositionSnapshot,
     PositionsSnapshot,
     load_positions,
+    utc_now_iso,
     write_positions_atomic,
 )
 from src.signal_service.position_sync import snapshot_from_trades
@@ -237,18 +238,10 @@ def test_adapter_refuses_premature_tightening():
     assert "update refused" in signal.reasoning
 
 
-def test_adapter_update_mode_bypasses_jev_pre_gate():
-    # No JEV gate is attached here, but the code path must not require one.
-    raw = json.dumps({"signal": "UPDATE", "confidence": "HIGH", "stop_loss": 68000.0, "reasoning": "x"})
-    engine = _FakeEngine(raw)
-    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
-    asyncio.run(analyzer.analyze(candle_open_time="2026-10-30T10:00:00Z", update_context=_ctx()))
-    assert engine.calls[0]["position_context"] == "" or engine.calls[0]["position_context"]
-
-
 # ------------------------------------------------------------------ service
 class _FakeAnalyzer:
     symbol = SYMBOL
+    timeframe = "1h"
 
     def __init__(self, signal):
         self.signal = signal
@@ -277,7 +270,7 @@ def test_service_emits_update_and_skips_entry_when_position_open(tmp_path):
     analyzer = _FakeAnalyzer(update)
     service = _service(tmp_path, analyzer)
     snapshot = PositionsSnapshot(
-        updated_at="2026-10-30T11:00:00Z",
+        updated_at=utc_now_iso(),
         positions=[PositionSnapshot(
             position_id="42", symbol=SYMBOL, side="long", entry_price=67500.0,
             stop_loss=66500.0, take_profit=72000.0, current_price=69000.0,
@@ -307,3 +300,152 @@ def test_service_without_positions_is_stateless(tmp_path):
     assert result[SYMBOL] == "entry-1"
     assert (tmp_path / "signals" / "BTC_USDT_1h.jsonl").exists()
     assert not (tmp_path / "updates" / "BTC_USDT_1h.jsonl").exists()
+
+
+# ------------------------------------------------------------------ more adapter
+def test_update_mode_rejects_entry_action():
+    raw = json.dumps({"signal": "BUY", "confidence": "HIGH", "stop_loss": 68000.0,
+                      "take_profit": 72000.0, "reasoning": "entry schema"})
+    signal = asyncio.run(
+        _analyzer(raw).analyze(candle_open_time="2026-10-30T10:00:00Z", update_context=_ctx())
+    )
+    assert signal.action == "HOLD"
+    assert "requires UPDATE or CLOSE" in signal.reasoning
+
+
+def test_update_mode_emits_close():
+    raw = json.dumps({"signal": "CLOSE", "confidence": "HIGH", "reasoning": "take profit"})
+    signal = asyncio.run(
+        _analyzer(raw).analyze(candle_open_time="2026-10-30T10:00:00Z", update_context=_ctx())
+    )
+    assert signal.action == "CLOSE"
+    assert signal.close_reason == "llm_close"
+    assert signal.sl is None and signal.tp is None
+
+
+def test_update_mode_refuses_stop_beyond_price():
+    raw = json.dumps({"signal": "UPDATE", "confidence": "HIGH", "stop_loss": 69500.0,
+                      "reasoning": "above market"})
+    signal = asyncio.run(
+        _analyzer(raw).analyze(candle_open_time="2026-10-30T10:00:00Z", update_context=_ctx())
+    )
+    assert signal.action == "HOLD"
+    assert "update refused" in signal.reasoning
+
+
+def test_update_mode_bypasses_jev_pre_gate():
+    class BombJev:
+        def uses_pre(self):
+            raise AssertionError("JEV pre-gate must not run for position updates")
+
+        def uses_post(self):
+            return False
+
+    raw = json.dumps({"signal": "UPDATE", "confidence": "HIGH", "stop_loss": 68000.0,
+                      "reasoning": "tighten"})
+    analyzer = _analyzer(raw)
+    analyzer.jev_gate = BombJev()
+    signal = asyncio.run(
+        analyzer.analyze(candle_open_time="2026-10-30T10:00:00Z", update_context=_ctx())
+    )
+    assert signal.action == "UPDATE"
+
+
+# ------------------------------------------------------------------ more service
+def test_position_aware_false_ignores_snapshot(tmp_path):
+    entry = Signal(**entry_kwargs())
+    analyzer = _FakeAnalyzer(entry)
+    service = SignalService(
+        pairs=[SYMBOL], timeframe="1h", analyzer_factory=lambda _s: analyzer,
+        signals_dir=str(tmp_path / "signals"), position_aware=False,
+        positions_file=str(tmp_path / "positions.json"),
+        updates_dir=str(tmp_path / "updates"),
+    )
+    snapshot = PositionsSnapshot(
+        updated_at=utc_now_iso(),
+        positions=[PositionSnapshot(position_id="42", symbol=SYMBOL, side="long",
+                                    entry_price=67500.0, current_price=69000.0)],
+    )
+    write_positions_atomic(service.positions_file, snapshot)
+    result = asyncio.run(service.run_cycle(datetime(2026, 10, 30, 10, 0, tzinfo=timezone.utc)))
+    assert result[SYMBOL] == "entry-1"
+    assert not (tmp_path / "updates" / "BTC_USDT_1h.jsonl").exists()
+
+
+def test_stale_snapshot_fails_open_to_entry(tmp_path):
+    entry = Signal(**entry_kwargs())
+    analyzer = _FakeAnalyzer(entry)
+    service = _service(tmp_path, analyzer)
+    service.max_snapshot_age_seconds = 60
+    snapshot = PositionsSnapshot(
+        updated_at="2020-01-01T00:00:00Z",
+        positions=[PositionSnapshot(position_id="42", symbol=SYMBOL, side="long",
+                                    entry_price=67500.0, stop_loss=66500.0,
+                                    take_profit=72000.0, current_price=69000.0)],
+    )
+    write_positions_atomic(service.positions_file, snapshot)
+    result = asyncio.run(service.run_cycle(datetime(2026, 10, 30, 10, 0, tzinfo=timezone.utc)))
+    assert result[SYMBOL] == "entry-1"
+    assert service.metrics["stale_snapshots"] == 1
+
+
+def test_tp_unknown_still_emits_sl_only_update(tmp_path):
+    update = Signal(**update_kwargs(sl=68000.0, tp=None))
+    analyzer = _FakeAnalyzer(update)
+    service = _service(tmp_path, analyzer)
+    snapshot = PositionsSnapshot(
+        updated_at=utc_now_iso(),
+        positions=[PositionSnapshot(position_id="42", symbol=SYMBOL, side="long",
+                                    entry_price=67500.0, stop_loss=66500.0,
+                                    take_profit=None, current_price=69000.0,
+                                    enter_tag="entry-1")],
+    )
+    write_positions_atomic(service.positions_file, snapshot)
+    result = asyncio.run(service.run_cycle(datetime(2026, 10, 30, 10, 0, tzinfo=timezone.utc)))
+    assert result[SYMBOL] == "updates:1"
+    call_ctx = analyzer.calls[0]["update_context"]
+    assert call_ctx.take_profit is None
+    assert call_ctx.effective_entry_sl() == 66500.0
+
+
+def test_revision_starts_at_one_without_existing_updates(tmp_path):
+    update = Signal(**update_kwargs())
+    analyzer = _FakeAnalyzer(update)
+    service = _service(tmp_path, analyzer)
+    snapshot = PositionsSnapshot(
+        updated_at=utc_now_iso(),
+        positions=[PositionSnapshot(position_id="42", symbol=SYMBOL, side="long",
+                                    entry_price=67500.0, stop_loss=66500.0,
+                                    take_profit=72000.0, current_price=69000.0)],
+    )
+    write_positions_atomic(service.positions_file, snapshot)
+    asyncio.run(service.run_cycle(datetime(2026, 10, 30, 10, 0, tzinfo=timezone.utc)))
+    assert analyzer.calls[0]["update_context"].revision == 1
+
+
+# ------------------------------------------------------------------ position_sync
+def test_position_sync_http_and_atomic_write(tmp_path):
+    import httpx
+    from src.signal_service.position_sync import FreqtradeReadOnlyClient, sync_once
+
+    def handler(request):
+        if request.url.path == "/api/v1/token/login":
+            return httpx.Response(200, json={"access_token": "tok"})
+        if request.url.path == "/api/v1/status":
+            assert request.headers["authorization"] == "Bearer tok"
+            return httpx.Response(200, json=[{
+                "trade_id": 42, "pair": "BTC/USDT", "is_short": False,
+                "open_rate": 67500.0, "amount": 0.1, "enter_tag": "e1",
+            }])
+        return httpx.Response(404)
+
+    async def run():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as raw:
+            client = FreqtradeReadOnlyClient("http://api", "u", "p", client=raw)
+            return await sync_once(client, str(tmp_path / "positions.json"))
+
+    assert asyncio.run(run()) == 1
+    payload = json.loads((tmp_path / "positions.json").read_text())
+    assert payload["positions"][0]["position_id"] == "42"
+    assert not list(tmp_path.glob(".positions-*.tmp"))
