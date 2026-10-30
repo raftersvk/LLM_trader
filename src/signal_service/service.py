@@ -15,14 +15,22 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional
 
-from src.signal_service.analyzer_adapter import PairAnalyzer, analyze_and_store
+from src.signal_service.analyzer_adapter import (
+    PairAnalyzer,
+    UpdateContext,
+    analyze_and_store,
+)
 from src.signal_service.contract import iso_z, timeframe_seconds, utc_now_iso
 from src.signal_service.jev_gate import JevGate
+from src.signal_service.positions import PositionSnapshot, load_positions
 from src.signal_service.storage import (
     SignalStorage,
+    UpdateStorage,
     default_signals_dir,
+    default_updates_dir,
     heartbeat_path,
     signal_file_path,
+    update_file_path,
     write_heartbeat,
 )
 
@@ -46,6 +54,9 @@ class SignalService:
         jev_gate: Optional[JevGate] = None,
         debug_cycle_seconds: Optional[float] = None,
         dedupe: bool = True,
+        position_aware: bool = False,
+        positions_file: Optional[str] = None,
+        updates_dir: Optional[str] = None,
     ) -> None:
         """Initialize the scheduler.
 
@@ -64,6 +75,14 @@ class SignalService:
                 next candle close (lets you replay the 1h analysis every minute).
             dedupe: When False, repeated analyses of the same candle are written
                 too. Only for debug output directories.
+            position_aware: When True and a position snapshot lists open trades,
+                the pair's analysis produces position UPDATE records instead of
+                entry signals. Off by default: without positions the behaviour
+                is exactly the stateless one.
+            positions_file: Path to the snapshot written by position_sync.
+                Defaults to ``<signals parent>/positions.json``.
+            updates_dir: Directory for the v1.1 update JSONL files. Defaults to
+                the ``updates`` sibling of ``signals_dir``.
         """
         self.pairs = pairs
         self.timeframe = timeframe
@@ -75,15 +94,25 @@ class SignalService:
         self.jev_gate = jev_gate
         self.debug_cycle_seconds = debug_cycle_seconds
         self.dedupe = dedupe
+        self.position_aware = position_aware
+        self.positions_file = positions_file or os.path.join(
+            os.path.dirname(os.path.normpath(signals_dir)), "positions.json"
+        )
+        self.updates_dir = updates_dir or default_updates_dir(signals_dir)
         self._stop_requested = False
         self.heartbeats: Dict[str, str] = {}
         self.storages: Dict[str, SignalStorage] = {}
+        self.update_storages: Dict[str, UpdateStorage] = {}
         self.analyzers: Dict[str, PairAnalyzer] = {}
 
     # ------------------------------------------------------------------ setup
     def _pair_state(self, symbol: str) -> tuple[PairAnalyzer, SignalStorage]:
         if symbol not in self.storages:
             self.storages[symbol] = SignalStorage(signal_file_path(self.signals_dir, symbol, self.timeframe))
+        if self.position_aware and symbol not in self.update_storages:
+            self.update_storages[symbol] = UpdateStorage(
+                update_file_path(self.updates_dir, symbol, self.timeframe)
+            )
         if symbol not in self.analyzers:
             analyzer = self.analyzer_factory(symbol)
             if self.jev_gate is not None and getattr(analyzer, "jev_gate", None) is None:
@@ -134,9 +163,18 @@ class SignalService:
         candle_open_dt = candle_open if candle_open is not None else self._current_candle_open()
         candle_open_iso = iso_z(candle_open_dt)
         results: Dict[str, str] = {}
+        snapshot = load_positions(self.positions_file) if self.position_aware else None
         for symbol in self.pairs:
             analyzer, storage = self._pair_state(symbol)
             try:
+                open_positions = snapshot.for_symbol(symbol) if snapshot is not None else []
+                if open_positions:
+                    results[symbol] = await self._run_position_updates(
+                        analyzer, symbol, open_positions, candle_open_iso
+                    )
+                    self.heartbeats[symbol] = utc_now_iso()
+                    write_heartbeat(self.signals_dir, symbol, self.timeframe, candle_open_iso)
+                    continue
                 signal = await analyze_and_store(
                     analyzer,
                     storage,
@@ -163,6 +201,103 @@ class SignalService:
             logger.warning("Heartbeat summary write failed: %s", summary_exc)
         logger.info("Cycle done for candle %s: %s", candle_open, results)
         return results
+
+    async def _run_position_updates(
+        self,
+        analyzer: PairAnalyzer,
+        symbol: str,
+        positions: List[PositionSnapshot],
+        candle_open_iso: str,
+    ) -> str:
+        """Produce v1.1 UPDATE records for the symbol's open positions.
+
+        Entry analysis is skipped while a position is open: no new entry may be
+        opened from a candle that should manage an existing trade.
+        """
+        updates = self.update_storages[symbol]
+        produced = 0
+        for position in positions:
+            stop_loss, take_profit = self._current_levels(symbol, position, updates)
+            if stop_loss is None or take_profit is None:
+                logger.warning(
+                    "Position %s %s has no known SL/TP; update skipped",
+                    symbol, position.position_id,
+                )
+                continue
+            revision = updates.last_revision(position.position_id) + 1
+            ctx = UpdateContext(
+                position_id=position.position_id,
+                position_side=position.side,
+                entry_price=position.entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                revision=revision,
+                based_on_entry=position.enter_tag or f"position-{position.position_id}",
+                current_price=position.current_price,
+            )
+            try:
+                signal = await asyncio.wait_for(
+                    analyzer.analyze(
+                        candle_open_time=candle_open_iso,
+                        position_context=self._position_context_text(position, stop_loss, take_profit),
+                        update_context=ctx,
+                    ),
+                    timeout=self.timeout_seconds,
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("Position update analysis failed for %s %s: %s", symbol, position.position_id, exc)
+                continue
+            if signal.action not in ("UPDATE", "CLOSE"):
+                logger.info(
+                    "No position update for %s %s: %s",
+                    symbol, position.position_id, signal.reasoning[:120],
+                )
+                continue
+            if updates.append(signal, dedupe=self.dedupe):
+                produced += 1
+                logger.info(
+                    "Position %s %s: %s revision %s",
+                    symbol, position.position_id, signal.action, signal.revision,
+                )
+        return f"updates:{produced}"
+
+    def _current_levels(
+        self, symbol: str, position: PositionSnapshot, updates: UpdateStorage
+    ) -> tuple[Optional[float], Optional[float]]:
+        """Current SL/TP: snapshot, then entry signal, then the latest update."""
+        stop_loss, take_profit = position.stop_loss, position.take_profit
+        if position.enter_tag:
+            for entry in self.storages[symbol].load_all():
+                if entry.decision_id == position.enter_tag:
+                    stop_loss = stop_loss if stop_loss is not None else entry.sl
+                    take_profit = take_profit if take_profit is not None else entry.tp
+                    break
+        latest = None
+        for update in updates.load_all():
+            if getattr(update, "position_id", None) != position.position_id:
+                continue
+            if latest is None or (update.revision or 0) > (latest.revision or 0):
+                latest = update
+        if latest is not None:
+            stop_loss = latest.sl if latest.sl is not None else stop_loss
+            take_profit = latest.tp if latest.tp is not None else take_profit
+        return stop_loss, take_profit
+
+    @staticmethod
+    def _position_context_text(
+        position: PositionSnapshot, stop_loss: float, take_profit: float
+    ) -> str:
+        """Compact position block injected into the position-aware prompt."""
+        return (
+            "### Open position to manage\n"
+            f"symbol={position.symbol} side={position.side} "
+            f"entry={position.entry_price:g} amount={position.amount:g} "
+            f"stop_loss={stop_loss:g} take_profit={take_profit:g} "
+            f"opened={position.open_date or 'unknown'}\n"
+            "If you would adjust this position, answer UPDATE with a new stop_loss "
+            "and/or take_profit. If you would close it, answer CLOSE. Do not answer "
+            "BUY or SELL for an already open position."
+        )
 
     def last_closed_candle_open(self, now: Optional[datetime] = None) -> datetime:
         """Return the open time of the most recent *closed* candle.

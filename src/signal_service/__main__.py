@@ -100,6 +100,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Debug: also write repeated analyses of the same candle "
              "(use with a debug --output directory, never runtime/signals)",
     )
+    run.add_argument(
+        "--position-aware", action="store_true",
+        help="Emit v1.1 UPDATE records for open positions listed in positions.json "
+             "(off by default: stateless entry signals only)",
+    )
+    run.add_argument(
+        "--positions-file", default=None,
+        help="Path to positions.json written by position_sync "
+             "(default: <output parent>/positions.json)",
+    )
+    run.add_argument(
+        "--updates-output", default=None,
+        help="Directory for v1.1 update JSONL files (default: <output parent>/updates)",
+    )
 
     replay = sub.add_parser("replay", help="Historical replay (no future data)")
     replay.add_argument("--pairs", default="BTC/USDT")
@@ -235,6 +249,9 @@ async def _run_command(args: argparse.Namespace) -> None:
         jev_gate=jev_gate,
         debug_cycle_seconds=args.debug_cycle_seconds or None,
         dedupe=not args.no_dedup,
+        position_aware=args.position_aware,
+        positions_file=args.positions_file,
+        updates_dir=args.updates_output,
     )
     await service.run()
 
