@@ -226,6 +226,7 @@ class AnalysisEngine:
         ev_context: str | None = None,
         response_format: dict[str, Any] | None = None,
         json_object_output: bool = False,
+        system_prompt_suffix: str | None = None,
     ) -> dict[str, Any]:
         """Run the full market analysis workflow and return the result dict.
 
@@ -311,6 +312,7 @@ class AnalysisEngine:
                 ev_context=ev_context,
                 response_format=response_format,
                 json_object_output=json_object_output,
+                system_prompt_suffix=system_prompt_suffix,
             )
 
             assert self.prompt_builder is not None
@@ -532,6 +534,7 @@ class AnalysisEngine:
         ev_context: str | None = None,
         response_format: dict[str, Any] | None = None,
         json_object_output: bool = False,
+        system_prompt_suffix: str | None = None,
     ) -> dict[str, Any]:
         """Generate AI analysis using prompt builder and result processor."""
 
@@ -563,6 +566,7 @@ class AnalysisEngine:
             dynamic_thresholds,
             ev_context=ev_context,
             json_object_output=json_object_output,
+            system_prompt_suffix=system_prompt_suffix,
         )
         assert self.prompt_builder is not None
         prompt = self.prompt_builder.build_prompt(
