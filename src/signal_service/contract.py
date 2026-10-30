@@ -244,8 +244,17 @@ class Signal:
             raise SignalValidationError("expires_at must equal candle_close_time + timeframe")
 
         for name, value in (("sl", self.sl), ("tp", self.tp)):
-            if value is not None and (not isinstance(value, (int, float)) or value <= 0):
-                raise SignalValidationError(f"{name} must be a positive number or null")
+            if value is None:
+                continue
+            # json.loads accepts NaN/Infinity: an infinite level must never be
+            # persisted (an infinite TP would disable the consumer's exit).
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise SignalValidationError(f"{name} must be a positive finite number or null")
 
         if self.action in ("BUY", "SELL"):
             if self.sl is None or self.tp is None:

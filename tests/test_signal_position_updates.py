@@ -467,3 +467,11 @@ def test_update_mode_emits_sl_only_and_never_invents_a_tp():
     assert signal.action == "UPDATE"
     assert signal.sl == 68000.0
     assert signal.tp is None
+
+
+def test_contract_rejects_non_finite_or_bool_update_levels():
+    for bad in (float("inf"), float("nan"), True):
+        with pytest.raises(SignalValidationError):
+            Signal(**update_kwargs(sl=bad)).validate()
+        with pytest.raises(SignalValidationError):
+            Signal(**update_kwargs(tp=bad)).validate()

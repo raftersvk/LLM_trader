@@ -9,8 +9,7 @@ This module is the bridge between one open position and one proposed UPDATE:
 * widening is allowed only within ``MAX_WIDENING_RATIO`` (150%) of the
   *original* entry-to-SL distance, matching ``PositionManagementMixin`` and the
   Freqtrade consumer;
-* take-profit moves are accepted only in the profit direction (monotonic);
-* the dynamic TP multiplier comes from the core's regime selector.
+* take-profit moves are accepted only in the profit direction (monotonic).
 
 It deliberately does not import ``TradingStrategy`` or ``PersistenceManager``:
 the producer only needs the pure policy, never the core's execution state.
@@ -18,6 +17,7 @@ the producer only needs the pure policy, never the core's execution state.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -99,6 +99,13 @@ def widening_allowed(
     return proposed_distance <= original_distance * MAX_WIDENING_RATIO
 
 
+def _valid_price(value: Any) -> bool:
+    """True for a finite positive number, rejecting bools and NaN/Infinity."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value) and value > 0
+
+
 def _price_guard(
     direction: str, sl: Optional[float], tp: Optional[float], current_price: Optional[float]
 ) -> Optional[str]:
@@ -162,10 +169,10 @@ def evaluate_update(
     sl_change = proposed_sl is not None and proposed_sl != position.stop_loss
     tp_change = proposed_tp is not None and proposed_tp != position.take_profit
 
-    if sl_change and (proposed_sl <= 0):
-        return UpdateDecision(False, None, None, "stop_loss must be positive")
-    if tp_change and (proposed_tp <= 0):
-        return UpdateDecision(False, None, None, "take_profit must be positive")
+    if sl_change and not _valid_price(proposed_sl):
+        return UpdateDecision(False, None, None, "stop_loss must be a positive finite number")
+    if tp_change and not _valid_price(proposed_tp):
+        return UpdateDecision(False, None, None, "take_profit must be a positive finite number")
 
     # Hard price guard: never move a stop/TP to the wrong side of the market.
     guard = _price_guard(

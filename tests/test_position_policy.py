@@ -119,3 +119,13 @@ def test_sl_update_refused_without_current_price():
     decision = evaluate_update(position, 68000.0, None, None, tf_minutes=60)
     assert decision.allowed is False
     assert "no current price" in decision.reason
+
+
+def test_non_finite_or_bool_proposals_are_refused():
+    for bad in (float("inf"), float("nan"), float("-inf"), True):
+        decision = evaluate_update(long_position(), bad, None, 69000.0, tf_minutes=60)
+        assert decision.allowed is False
+        assert "finite" in decision.reason
+        decision = evaluate_update(long_position(), None, bad, 69000.0, tf_minutes=60)
+        assert decision.allowed is False
+        assert "finite" in decision.reason
