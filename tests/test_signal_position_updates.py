@@ -529,6 +529,7 @@ def test_position_sync_multi_api_merges_and_normalizes_symbols(tmp_path):
     assert symbols == {"BTC/USDT"}
     assert markets == {"spot", "futures"}
     assert sides == {"long", "short"}
+    assert {p["position_id"] for p in payload["positions"]} == {"spot:7", "futures:8"}
     assert not list(tmp_path.glob(".positions-*.tmp"))
 
 
@@ -559,3 +560,82 @@ def test_producer_reads_positions_from_both_markets(tmp_path):
     loaded = load_positions(str(path))
     matched = loaded.for_symbol("BTC/USDT")
     assert {p.market for p in matched} == {"spot", "futures"}
+
+
+def test_same_trade_id_on_spot_and_futures_is_two_positions():
+    # Spot and futures use separate trade-id sequences: a shared id must not
+    # collapse the two positions under one key.
+    spot = snapshot_from_trades([{"trade_id": 42, "pair": "BTC/USDT", "open_rate": 67500.0}],
+                                market="spot")
+    fut = snapshot_from_trades([{"trade_id": 42, "pair": "BTC/USDT:USDT", "is_short": True,
+                                 "open_rate": 78000.0}], market="futures")
+    assert [p.position_id for p in spot.positions] == ["spot:42"]
+    assert [p.position_id for p in fut.positions] == ["futures:42"]
+    assert spot.positions[0].symbol == fut.positions[0].symbol == "BTC/USDT"
+
+
+def test_legacy_bare_position_id_without_market():
+    legacy = snapshot_from_trades([{"trade_id": 42, "pair": "BTC/USDT", "open_rate": 67500.0}])
+    assert [p.position_id for p in legacy.positions] == ["42"]
+    assert legacy.positions[0].market is None
+
+
+def test_contract_accepts_market_scoped_position_id():
+    Signal(**update_kwargs(position_id="futures:42")).validate()
+
+
+def test_empty_trade_id_is_skipped():
+    snap = snapshot_from_trades([
+        {"trade_id": "", "pair": "BTC/USDT", "open_rate": 67500.0},
+        {"trade_id": None, "pair": "ETH/USDT", "open_rate": 2300.0},
+        {"trade_id": 42, "pair": "BTC/USDT", "open_rate": 67500.0},
+    ], market="spot")
+    assert [p.position_id for p in snap.positions] == ["spot:42"]
+
+
+def test_invalid_market_label_rejected():
+    with pytest.raises(ValueError):
+        snapshot_from_trades([{"trade_id": 1, "pair": "BTC/USDT", "open_rate": 1.0}],
+                             market="margin")
+
+
+def test_duplicate_config_market_labels_rejected(tmp_path):
+    from src.signal_service.position_sync import build_clients_from_configs
+
+    paths = []
+    for i in range(2):
+        p = tmp_path / f"cfg{i}.json"
+        p.write_text(json.dumps({"trading_mode": "spot", "api_server": {
+            "listen_port": 8080 + i, "username": "u", "password": "p"}}))
+        paths.append(str(p))
+    with pytest.raises(RuntimeError):
+        build_clients_from_configs(paths)
+
+
+def test_unknown_config_market_label_rejected(tmp_path):
+    from src.signal_service.position_sync import build_client_from_config
+
+    p = tmp_path / "cfg.json"
+    p.write_text(json.dumps({"trading_mode": "", "api_server": {
+        "listen_port": 8080, "username": "u", "password": "p"}}))
+    with pytest.raises(RuntimeError):
+        build_client_from_config(str(p))
+
+
+def test_env_client_requires_explicit_market(monkeypatch):
+    from src.signal_service.position_sync import build_client_from_env
+
+    monkeypatch.setenv("FREQTRADE_API_URL", "http://127.0.0.1:8080")
+    monkeypatch.setenv("FREQTRADE_API_USER", "u")
+    monkeypatch.setenv("FREQTRADE_API_PASSWORD", "p")
+
+    monkeypatch.delenv("FREQTRADE_API_MARKET", raising=False)
+    with pytest.raises(RuntimeError):
+        build_client_from_env()
+
+    monkeypatch.setenv("FREQTRADE_API_MARKET", "futures")
+    assert build_client_from_env().market == "futures"
+
+    monkeypatch.setenv("FREQTRADE_API_MARKET", "margin")
+    with pytest.raises(RuntimeError):
+        build_client_from_env()
