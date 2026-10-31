@@ -10,9 +10,12 @@ import json
 import re
 from collections.abc import Sequence
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+from src.analyzer.analysis_context import AnalysisContext
+from src.analyzer.prompts.prompt_builder import PromptBuilder
 from src.analyzer.prompts.template_manager import TemplateManager
 from src.utils.timeframe_validator import TimeframeValidator
 from src.utils.token_counter import TokenCounter
@@ -1397,3 +1400,36 @@ def test_decision_rules_do_not_reference_a_missing_active_risk_profile():
     assert "ACTIVE RISK PROFILE cap" in live_rules
     assert "AGGRESSIVE 1.5x / NEUTRAL 2x / CONSERVATIVE 2.5x" in live_rules
     assert "active profile cap" in live_rules
+
+
+def _prompt_builder() -> PromptBuilder:
+    """PromptBuilder wired with the real template and inert formatters."""
+    return PromptBuilder(
+        timeframe="1h",
+        config=make_config(),
+        format_utils=MagicMock(),
+        template_manager=make_manager(),
+        overview_formatter=MagicMock(),
+        long_term_formatter=MagicMock(),
+        technical_formatter=MagicMock(),
+        market_formatter=MagicMock(),
+        timeframe_validator=TimeframeValidator(),
+    )
+
+
+def test_live_prompt_keeps_the_risk_profile_block_guidance():
+    """The live brain profile must still drive sizing and ATR multiples."""
+    builder = _prompt_builder()
+    live_context = "## ACTIVE RISK PROFILE: NEUTRAL (8% max, 2x ATR)"
+
+    live_prompt = builder.build_system_prompt(
+        SYMBOL, AnalysisContext(symbol=SYMBOL), brain_context=live_context
+    )
+    signal_prompt = builder.build_system_prompt(
+        SYMBOL, AnalysisContext(symbol=SYMBOL)
+    )
+
+    assert "ACTIVE RISK PROFILE cap" in live_prompt
+    assert "AGGRESSIVE 1.5x / NEUTRAL 2x / CONSERVATIVE 2.5x" in live_prompt
+    assert "ACTIVE RISK PROFILE cap" not in signal_prompt
+    assert "SL distance = 1.5–2.5 × ATR" in signal_prompt
