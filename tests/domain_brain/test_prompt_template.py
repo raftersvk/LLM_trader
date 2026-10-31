@@ -1384,6 +1384,16 @@ def test_decision_rules_do_not_reference_a_missing_active_risk_profile():
     live brain path can add, otherwise every signal prompt silently falls back
     to undefined profile guidance.
     """
-    rules = make_manager().build_decision_rules(dynamic_thresholds={})
+    rules = make_manager().build_decision_rules(
+        dynamic_thresholds={}, has_risk_profile=False
+    )
     assert "ACTIVE RISK PROFILE" not in rules
     assert "Max position: 0.10 (10%)" in rules
+    assert "SL distance = 1.5–2.5 × ATR" in rules
+
+    live_rules = make_manager().build_decision_rules(
+        dynamic_thresholds={}, has_risk_profile=True
+    )
+    assert "ACTIVE RISK PROFILE cap" in live_rules
+    assert "AGGRESSIVE 1.5x / NEUTRAL 2x / CONSERVATIVE 2.5x" in live_rules
+    assert "active profile cap" in live_rules

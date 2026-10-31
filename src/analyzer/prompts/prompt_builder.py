@@ -622,7 +622,8 @@ class PromptBuilder:
         decision_rules = self.template_manager.build_decision_rules(
             has_chart_analysis,
             model_verbosity=eff_verbosity,
-            dynamic_thresholds=dynamic_thresholds
+            dynamic_thresholds=dynamic_thresholds,
+            has_risk_profile=bool(brain_context and "ACTIVE RISK PROFILE" in brain_context),
         )
 
         response_template = self.template_manager.build_response_template(

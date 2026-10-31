@@ -645,7 +645,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--folds", type=int, default=4)
     parser.add_argument("--horizons", default="1,2,3,4")
     parser.add_argument("--move-threshold-pct", type=float, default=DEFAULT_MOVE_THRESHOLD_PCT)
-    parser.add_argument("--tradeability-threshold", type=float, default=0.5)
     parser.add_argument("--fold-confidence-floor", type=float, default=None)
     parser.add_argument("--base", choices=["momentum", "llm"], default="momentum")
     parser.add_argument("--offline", action="store_true", help="Synthetic candles + local JEV stand-in (NOT a benchmark)")
@@ -662,11 +661,10 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _gate_for(mode: str, client: Any, threshold: float, floor: Optional[float]) -> JevGate:
+def _gate_for(mode: str, client: Any, floor: Optional[float]) -> JevGate:
     return JevGate(
         client=client,
         mode=mode,
-        tradeability_threshold=threshold,
         min_confidence=floor,
     )
 
@@ -740,7 +738,7 @@ async def run_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     results: List[Dict[str, Any]] = []
     for mode in modes:
         gate_mode = "off" if mode == "llm_alone" else mode.replace("jev_", "")
-        gate = _gate_for(gate_mode, client, args.tradeability_threshold, args.fold_confidence_floor)
+        gate = _gate_for(gate_mode, client, args.fold_confidence_floor)
         run = await run_mode(
             mode=mode,
             gate=gate,
