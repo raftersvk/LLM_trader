@@ -1668,9 +1668,8 @@ class PairAnalyzer:
 
         risk_approved=false when the SL/TP is missing or incoherent, the RR is
         under threshold, the confidence is under threshold or the signal is
-        expired. P0-B leaves noul diagnostic-only and never filters a long by
-        the JEV bias; a short is refused unless the attached JEV payload says
-        ``bias=short``.
+        expired. JEV veto and spread/liquidity bounds are the caller's gate in
+        v1 (see PLAN.md section 4); they are honoured when provided via jev.
 
         A HOLD never triggers an entry (Freqtrade requires action BUY/SELL and
         risk_approved=true), so it is never approved: keeping it false avoids a

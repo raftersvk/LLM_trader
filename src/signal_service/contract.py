@@ -50,7 +50,7 @@ ALLOWED_REGIMES = frozenset({
 ALLOWED_HTF_ALIGNMENTS = frozenset({"aligned", "counter", "neutral"})
 
 #: Optional JEV confidence numbers (v1.2). ``tradeability_probability`` is the
-#: raw noul: P0-B keeps it as a diagnostic only and never uses it as a gate.
+#: raw noul, accepted as an optional diagnostic (never a gate).
 JEV_CONFIDENCE_KEYS = frozenset({
     "regime_confidence",
     "bias_confidence",

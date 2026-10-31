@@ -1,11 +1,6 @@
 """JEV gate: typed decision parsing, no-look-ahead state builder and modes.
 
-The gate is a bias filter, never an executor. P0-B removed the noul threshold:
-noul is logged and kept in the payload as a diagnostic, but it never vetoes.
-Only shorts are filtered by bias (a SELL requires ``bias == short``); long
-entries are not filtered by the JEV bias.
-
-It supports four modes:
+The gate is a filter, never an executor. It supports four modes:
 
 * ``off``       no JEV call at all (default per PLAN Q6);
 * ``pre``       JEV is consulted for logging and decision enrichment only;
@@ -686,14 +681,6 @@ class JevGate:
                 error=detail,
             )
         self.last_signal = signal
-        logger.info(
-            "JEV diagnostic: noul=%s bias=%s regime=%s tradeability=%s confidence=%s",
-            signal.tradeability_probability,
-            signal.bias,
-            signal.regime,
-            signal.tradeability,
-            signal.confidence,
-        )
         return GateResult(allowed=True, reason="JEV consulted", consulted=True, signal=signal)
 
     async def check_pre(self, state: Dict[str, Any]) -> GateResult:

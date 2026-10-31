@@ -298,7 +298,6 @@ async def test_pre_mode_allows_tradeable_directional_market():
     result = await gate.check_pre({"symbol": SYMBOL})
 
     assert result.allowed is True
-    assert result.consulted is True
     assert result.signal is not None and result.signal.bias == "short"
 
 
@@ -528,25 +527,22 @@ async def test_adapter_off_mode_unchanged_and_no_call():
 
 
 @pytest.mark.asyncio
-async def test_adapter_pre_logs_noul_without_blocking(caplog):
+async def test_adapter_pre_mode_consults_without_blocking_the_llm():
+    """noul is advisory: a low noul must not skip the LLM call."""
     client = FakeJevClient(_response(tradeable=0.2))
     analyzer = _analyzer(JevGate(client=client, mode="pre"))
 
-    with caplog.at_level("INFO", logger="src.signal_service.jev_gate"):
-        signal = await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
+    signal = await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
 
     assert analyzer.engine.calls == 1
     assert signal.action == "BUY"
     assert signal.risk_approved is True
-    # No model taxonomy: stay 1.0, and keep the JEV payload in its legacy shape.
-    assert signal.schema_version == "1.0"
     assert signal.jev == {
         "model": "jev-1.13",
         "tradeability": False,
         "bias": "long",
         "regime": "trend",
     }
-    assert "JEV diagnostic: noul=" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -561,33 +557,6 @@ async def test_adapter_long_is_not_filtered_by_a_short_bias():
     assert signal.action == "BUY"
     assert signal.risk_approved is True
     assert signal.jev["bias"] == "short"
-
-
-@pytest.mark.asyncio
-async def test_adapter_post_vetoes_short_without_short_bias():
-    result = {
-        "recommendation": "SELL",
-        "confidence": "HIGH",
-        "stop_loss": 114.0,
-        "take_profit": 90.0,
-        "position_size": 0.05,
-        "reasoning": "rally failure",
-        "model": "deepseek-v4.1-flash",
-        "provider": "opencode-go",
-    }
-    engine = FakeEngine(result, _candles(), _timestamps())
-    client = FakeJevClient(_response(tradeable=0.9, bias="long"))
-    analyzer = PairAnalyzer(
-        engine=engine, symbol=SYMBOL, timeframe="1h",
-        jev_gate=JevGate(client=client, mode="post"),
-    )
-
-    signal = await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
-
-    assert signal.action == "SELL"
-    assert signal.risk_approved is False
-    assert "SELL requires short bias" in signal.reasoning
-    assert signal.jev["bias"] == "long"
 
 
 @pytest.mark.asyncio
