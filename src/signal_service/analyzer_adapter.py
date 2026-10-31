@@ -1816,8 +1816,11 @@ class PairAnalyzer:
         if draft.action not in ("BUY", "SELL") and setup is not None:
             setup = "none"
         snapshot = self._current_regime_snapshot()
-        if snapshot:
-            regime = snapshot.get("regime") or regime
+        snapshot_regime = snapshot.get("regime") if snapshot else None
+        if snapshot_regime:
+            # Gate on the snapshot carrying a regime, not on ADX: high_vol,
+            # low_vol, range and unclear can all be classified without ADX.
+            regime = snapshot_regime
             htf_alignment = snapshot.get("htf_alignment") or htf_alignment
             allowed = set(snapshot.get("allowed_setups") or ())
             if setup not in (None, "none") and setup not in allowed:

@@ -72,9 +72,11 @@ P1-B makes the taxonomy explicit end to end, additively:
   the shared 4h/live template is unchanged and never refers to a missing block.
   The adapter emits `1.2` only when the model actually emitted `setup` or
   `regime`; a deterministic snapshot alone never upgrades a production signal.
-  It prefers the snapshot's `regime`/`htf_alignment` (even when ADX is missing)
-  and drops a `setup` outside that regime's allowed families, so the model
-  cannot relabel the computed regime.
+  It prefers the snapshot's `regime`/`htf_alignment` whenever the snapshot
+  carries a regime (high_vol, low_vol, range and unclear can be classified with
+  `adx=None`) and drops a `setup` outside that regime's allowed families, so the
+  model cannot relabel the computed regime. A snapshot object without a regime
+  does not enforce its empty allowed list.
 - The Decision Rules system prompt lists all nine setups, the six regimes and
   the three alignments, with the regime -> allowed-family mapping, and only for
   a 1h target on the signal-service path that installs the snapshot provider.

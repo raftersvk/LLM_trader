@@ -2146,23 +2146,51 @@ async def test_no_model_taxonomy_keeps_the_signal_at_v10_even_with_a_snapshot():
     signal.validate()
 
 
+@pytest.mark.parametrize(("snapshot_regime", "allowed_setups"), [
+    ("high_vol", []),
+    ("low_vol", []),
+    ("range", ["range_fade_extreme", "range_mean_reversion"]),
+    ("unclear", []),
+])
 @pytest.mark.asyncio
-async def test_deterministic_snapshot_overrides_even_without_adx():
+async def test_deterministic_snapshot_overrides_even_without_adx(
+    snapshot_regime, allowed_setups
+):
     engine = FakeEngine(raw_response=RAW_TAXONOMY_BUY, result=dict(RESULT_META))
     analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
     analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
         "adx": None,
-        "regime": "range",
+        "regime": snapshot_regime,
         "htf_alignment": "counter",
-        "allowed_setups": ["range_fade_extreme", "range_mean_reversion"],
+        "allowed_setups": allowed_setups,
     }
 
     signal = await analyzer.analyze()
 
-    assert signal.regime == "range"
+    assert signal.regime == snapshot_regime
     assert signal.htf_alignment == "counter"
-    # trend_pullback is not allowed in a range: drop it rather than trust it.
+    # trend_pullback is not allowed outside trend_up: drop it rather than trust it.
     assert signal.setup is None
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_without_a_regime_does_not_drop_the_model_setup():
+    """A snapshot object with no regime must not enforce its empty allowed list."""
+    engine = FakeEngine(raw_response=RAW_TAXONOMY_BUY, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": None,
+        "regime": None,
+        "htf_alignment": None,
+        "allowed_setups": [],
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.regime == "trend_up"
+    assert signal.setup == "trend_pullback"
+    assert signal.schema_version == "1.2"
     signal.validate()
 
 
