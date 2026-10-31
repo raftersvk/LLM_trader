@@ -13,8 +13,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -468,6 +470,7 @@ class PairAnalyzer:
         # non-HOLD decision. The phase-1 risk layer keeps flagging an explicit
         # JEV bias conflict whenever a JEV payload is attached.
         as_of = self._analysis_as_of(candle_open_time)
+        self._current_analysis_as_of = as_of
         # The prompt for a closed candle must describe that candle's close, not
         # the wall-clock time when the analysis happens to run. This holds for
         # live (candle_open_time from the scheduler) and replay alike.
@@ -736,7 +739,7 @@ class PairAnalyzer:
         if candles is None or len(candles) == 0:
             return None
         timestamps = getattr(context, "timestamps", None)
-        snapshot = self._regime_snapshot_from_context(context)
+        snapshot = self._regime_snapshot_from_context(context, as_of)
         try:
             if timestamps is not None and len(timestamps) == len(candles):
                 return build_state(
@@ -763,7 +766,7 @@ class PairAnalyzer:
             return None
 
     # ---------------------------------------------------------- regime snapshot
-    def _install_regime_snapshot_provider(self) -> None:
+    def _install_regime_snapshot_provider(self, as_of: Optional[datetime] = None) -> None:
         """Render the deterministic regime block from the prompt's live context.
 
         The adapter computes the snapshot before the pre-gate for JEV, but the
@@ -776,11 +779,18 @@ class PairAnalyzer:
         if builder is None:
             return
         builder.regime_snapshot_provider = lambda context: format_regime_snapshot_block(
-            self._regime_snapshot_from_context(context)
+            self._regime_snapshot_from_context(context, as_of)
         )
 
-    def _regime_snapshot_from_context(self, context: Any) -> Optional[Dict[str, Any]]:
-        """Build a regime snapshot from an AnalysisContext, failing soft."""
+    def _regime_snapshot_from_context(
+        self, context: Any, as_of: Optional[datetime] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Build an ex-ante regime snapshot from an AnalysisContext, failing soft.
+
+        When ``as_of`` and context timestamps are available, the 1h series is
+        truncated to candles that closed at or before ``as_of`` so a forming
+        candle can never leak into the snapshot.
+        """
         if context is None:
             return None
         try:
@@ -788,23 +798,65 @@ class PairAnalyzer:
             daily_rows = None
             if isinstance(long_term_data, dict):
                 daily_rows = long_term_data.get("data")
+            candles = self._closed_rows(
+                getattr(context, "ohlcv_candles", None),
+                getattr(context, "timestamps", None),
+                as_of,
+            )
             btc = self._btc_close_series(context)
             return build_regime_snapshot(
                 technical_data=getattr(context, "technical_data", None) or None,
                 long_term_data=long_term_data,
                 weekly_macro=getattr(context, "weekly_macro_indicators", None) or None,
-                closes_1h=self._close_series(getattr(context, "ohlcv_candles", None)),
+                closes_1h=self._close_series(candles),
                 closes_1d=self._close_series(daily_rows),
                 closes_1w=self._close_series(getattr(context, "weekly_ohlcv", None)),
                 btc_closes_1h=btc.get("1h"),
                 btc_closes_1d=btc.get("1d"),
                 btc_closes_1w=btc.get("1w"),
+                atr_pct_median_90d=self._atr_pct_median(context),
                 timeframe=self.timeframe,
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # The snapshot is an advisory input: never abort an analysis for it.
             logger.warning("Cannot build regime snapshot for %s: %s", self.symbol, exc)
             return None
+
+    def _closed_rows(
+        self,
+        rows: Any,
+        timestamps: Any,
+        as_of: Optional[datetime],
+    ) -> Any:
+        """Keep only 1h rows fully closed at ``as_of`` (no look-ahead)."""
+        if rows is None or timestamps is None or as_of is None:
+            return rows
+        try:
+            if len(rows) != len(timestamps):
+                return rows
+            horizon = timedelta(seconds=timeframe_seconds(self.timeframe))
+            closed = []
+            for row, stamp in zip(rows, timestamps):
+                open_at = self._as_datetime(stamp)
+                if open_at + horizon <= as_of:
+                    closed.append(row)
+            return closed
+        except Exception:  # pylint: disable=broad-exception-caught
+            return rows
+
+    @staticmethod
+    def _atr_pct_median(context: Any) -> Optional[float]:
+        """Median ATR%% over the last 90 bars of the existing history, if any."""
+        history = getattr(context, "technical_history", None) or {}
+        values = history.get("atr_percent") if isinstance(history, dict) else None
+        if values is None:
+            return None
+        try:
+            finite = [float(value) for value in list(values)[-90:] if value is not None]
+        except (TypeError, ValueError):
+            return None
+        finite = [value for value in finite if math.isfinite(value)]
+        return float(median(finite)) if finite else None
 
     def _btc_close_series(self, context: Any) -> Dict[str, Optional[List[float]]]:
         """Read optional BTC benchmark series already exposed by the runtime.
@@ -1082,7 +1134,7 @@ class PairAnalyzer:
         """
         if json_mode is None:
             json_mode = self._json_format_enabled()
-        self._install_regime_snapshot_provider()
+        self._install_regime_snapshot_provider(getattr(self, "_current_analysis_as_of", None))
         return await self.engine.analyze_market(
             previous_response=None,
             previous_indicators=None,

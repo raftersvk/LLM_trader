@@ -170,6 +170,7 @@ def test_relative_strength_vs_btc_7d_and_30d():
 def test_missing_inputs_degrade_to_unclear():
     snapshot = build_regime_snapshot()
     assert snapshot["regime"] == "unclear"
+    assert snapshot["no_trade"] is True
     assert snapshot["allowed_setups"] == []
 
 
@@ -203,6 +204,7 @@ def test_regime_snapshot_block_is_compact_and_lists_setups():
     assert block.startswith("## REGIME SNAPSHOT (deterministic)")
     assert "regime=trend_down" in block
     assert "htf=aligned" in block
+    assert "tradeable=yes" in block
     assert "allowed_setups=rally_failure,breakdown_retest,momentum_short" in block
     assert len(block.splitlines()) == 4
 
@@ -277,16 +279,42 @@ class _FakeClient:
 
 
 @pytest.mark.asyncio
-async def test_range_regime_lowers_the_pre_gate_threshold():
+async def test_range_does_not_lower_the_noul_threshold():
+    """P0-B: lowering noul in range degraded the arm (-11.01 -> -15.73 R)."""
     client = _FakeClient(_response(tradeable=0.45, bias="long"))
     gate = JevGate(client=client, mode="pre")
 
-    directional = await gate.check_pre({"symbol": SYMBOL, "deterministic_regime": "trend_down"})
     in_range = await gate.check_pre({"symbol": SYMBOL, "deterministic_regime": "range"})
 
-    assert directional.allowed is False
-    assert in_range.allowed is True
-    assert in_range.signal is not None and in_range.signal.tradeability is True
+    assert in_range.allowed is False
+    assert in_range.signal is not None and in_range.signal.tradeability is False
+
+
+@pytest.mark.asyncio
+async def test_trend_down_short_exemption_uses_noul_010():
+    """A trend_down short is admitted from 0.10; a long keeps the 0.50 floor."""
+    client = _FakeClient(_response(tradeable=0.12, bias="short"))
+    gate = JevGate(client=client, mode="post")
+    state = {"symbol": SYMBOL, "deterministic_regime": "trend_down"}
+
+    short = await gate.check_post(state, "SELL")
+    long = await gate.check_post({**state, "setup": "trend_pullback"}, "BUY")
+
+    assert short.allowed is True
+    assert short.signal is not None and short.signal.tradeability is True
+    assert long.allowed is False
+    assert "not tradeable" in long.reason
+
+
+@pytest.mark.asyncio
+async def test_pre_gate_exempts_trend_down_for_a_potential_short():
+    client = _FakeClient(_response(tradeable=0.12, bias="short"))
+    gate = JevGate(client=client, mode="pre")
+
+    result = await gate.check_pre({"symbol": SYMBOL, "deterministic_regime": "trend_down"})
+
+    assert result.allowed is True
+    assert result.signal is not None and result.signal.tradeability is True
 
 
 @pytest.mark.asyncio
@@ -347,3 +375,27 @@ def test_adapter_installs_prompt_provider_using_the_prompt_context():
 
     assert block.startswith("## REGIME SNAPSHOT (deterministic)")
     assert "regime=trend_up" in block
+
+def test_adapter_snapshot_drops_the_forming_candle():
+    """Only candles closed at ``as_of`` may enter the regime snapshot."""
+    builder = SimpleNamespace(regime_snapshot_provider=None)
+    engine = SimpleNamespace(prompt_builder=builder)
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    context = SimpleNamespace(
+        technical_data=_trend_up_inputs()["technical_data"],
+        long_term_data=_trend_up_inputs()["long_term_data"],
+        weekly_macro_indicators=_trend_up_inputs()["weekly_macro"],
+        ohlcv_candles=[
+            [0, 98.0, 101.0, 97.0, 100.0, 10.0],
+            [3_600_000, 100.0, 106.0, 99.0, 105.0, 10.0],
+            [7_200_000, 105.0, 131.0, 104.0, 130.0, 10.0],
+        ],
+        timestamps=[BASE, BASE + timedelta(hours=1), BASE + timedelta(hours=2)],
+        weekly_ohlcv=None,
+    )
+
+    snapshot = analyzer._regime_snapshot_from_context(context, BASE + timedelta(hours=2))
+
+    assert snapshot is not None
+    assert snapshot["last_close"] == pytest.approx(105.0)
+    assert snapshot["extension_atr"] == pytest.approx(2.5)

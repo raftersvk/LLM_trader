@@ -32,11 +32,11 @@ logger = logging.getLogger(__name__)
 ALLOWED_BIAS = frozenset({"long", "short", "none"})
 ALLOWED_REGIME = frozenset({"trend", "range", "high_vol", "low_vol"})
 DEFAULT_TRADEABILITY_THRESHOLD = 0.5
-#: Range regimes naturally produce a lower no-look-ahead tradeability score:
-#: mean-reversion entries are taken at the range edge, not on breakout momentum.
-#: The factor applies to the configured threshold unless an explicit range
-#: threshold is supplied to the gate.
-RANGE_TRADEABILITY_FACTOR = 0.8
+#: P0-B exemption: a short in a deterministic trend_down is admitted from this
+#: noul, because the 1h evidence showed 7/7 refused shorts positive at 24h while
+#: lowering the threshold in range degraded the arm (-11.01 -> -15.73 R).
+#: Longs and every non-trend_down regime keep the normal threshold.
+SHORT_TREND_DOWN_TRADEABILITY_THRESHOLD = 0.10
 #: Default question set. v1 is the production wording and must stay the
 #: default so every existing run is byte-comparable.
 DEFAULT_QUESTION_SET = "v1"
@@ -314,6 +314,7 @@ def _apply_regime_snapshot(state: Dict[str, Any], snapshot: Dict[str, Any]) -> N
     state["rs_btc_30d"] = _round(snapshot.get("rs_btc_30d"))
     state["deterministic_regime"] = snapshot.get("regime")
     state["regime_confidence"] = _round(snapshot.get("confidence"))
+    state["no_trade"] = bool(snapshot.get("no_trade"))
     if snapshot.get("allowed_setups") is not None:
         state["allowed_setups"] = list(snapshot.get("allowed_setups") or [])
 
@@ -585,7 +586,6 @@ class JevGate:
         mode: Any = JevMode.OFF,
         tradeability_threshold: float = DEFAULT_TRADEABILITY_THRESHOLD,
         min_confidence: Optional[float] = None,
-        range_tradeability_threshold: Optional[float] = None,
     ) -> None:
         """Bind a client and mode.
 
@@ -596,16 +596,11 @@ class JevGate:
                 market tradeable in a directional/unknown regime.
             min_confidence: Optional score threshold below which a non-HOLD
                 decision is vetoed.
-            range_tradeability_threshold: Optional explicit noul threshold for
-                ``range`` regimes. Defaults to a fraction of
-                ``tradeability_threshold`` because mean-reversion entries are
-                taken at range edges and naturally score a lower noul.
         """
         self.client = client
         self.mode = parse_mode(mode)
         self.tradeability_threshold = tradeability_threshold
         self.min_confidence = min_confidence
-        self.range_tradeability_threshold = range_tradeability_threshold
         self.last_signal: Optional[JevSignal] = None
         self.last_error: Optional[str] = None
 
@@ -638,13 +633,21 @@ class JevGate:
         text = str(value).strip().lower()
         return text or None
 
-    def _effective_tradeability_threshold(self, state: Dict[str, Any]) -> float:
-        """Lower the noul threshold in a deterministic range regime."""
-        if self._state_regime(state) != "range":
-            return self.tradeability_threshold
-        if self.range_tradeability_threshold is not None:
-            return self.range_tradeability_threshold
-        return max(0.0, self.tradeability_threshold * RANGE_TRADEABILITY_FACTOR)
+    def _effective_tradeability_threshold(
+        self, state: Dict[str, Any], action: Optional[str] = None
+    ) -> float:
+        """Return the side-aware noul threshold for this state.
+
+        P0-B keeps the long threshold unchanged everywhere (including range,
+        where lowering it degraded the arm). Only a short in a deterministic
+        ``trend_down`` benefits from the 0.10 exemption. The pre-gate has no
+        side yet, so ``trend_down`` is allowed through at 0.10 and the post
+        gate applies the stricter long threshold if the LLM proposes a BUY.
+        """
+        normalized = action.upper() if action is not None else None
+        if self._state_regime(state) == "trend_down" and normalized in (None, "SELL"):
+            return min(self.tradeability_threshold, SHORT_TREND_DOWN_TRADEABILITY_THRESHOLD)
+        return self.tradeability_threshold
 
     @staticmethod
     def _state_setup(state: Dict[str, Any]) -> Optional[str]:
@@ -761,7 +764,7 @@ class JevGate:
                 reason="HOLD exempt from JEV veto",
                 consulted=False,
             )
-        threshold = self._effective_tradeability_threshold(state)
+        threshold = self._effective_tradeability_threshold(state, normalized_action)
         result = await self._consult(state, threshold)
         if not result.consulted or result.error is not None:
             return result

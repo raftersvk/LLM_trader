@@ -27,9 +27,10 @@ from typing import Any, Mapping, Sequence
 TREND_ADX = 25.0
 WEAK_ADX = 20.0
 RANGE_CHOPPINESS = 61.8
-TRENDING_CHOPPINESS = 38.2
-HIGH_VOL_ATR_PCT = 4.0
-LOW_VOL_ATR_PCT = 1.0
+HIGH_VOL_ATR_PCT_FLOOR = 3.0
+HIGH_VOL_ATR_MULTIPLE = 2.5
+LOW_VOL_ATR_MULTIPLE = 0.55
+LOW_VOL_CHOPPINESS = 55.0
 
 REGIMES = ("trend_up", "trend_down", "range", "low_vol", "high_vol", "unclear")
 
@@ -184,65 +185,56 @@ def _classify(
     minus_di: float | None,
     last_close: float | None,
     sma20: float | None,
-    supertrend: str | None,
     atr_pct: float | None,
+    atr_pct_median_90d: float | None,
 ) -> tuple[str, float]:
-    """Return the deterministic regime label and its agreement confidence."""
-    directional = (
-        plus_di is not None
-        and minus_di is not None
-        and plus_di != minus_di
-    )
-    strong_trend = adx is not None and adx >= TREND_ADX and directional
-    chop_allows_trend = choppiness is None or choppiness < RANGE_CHOPPINESS
+    """Return the P0-B 1h regime label and its agreement confidence.
 
-    if strong_trend and chop_allows_trend and plus_di > minus_di:
-        price_above = last_close is not None and sma20 is not None and last_close > sma20
-        st_up = supertrend is None or supertrend in ("bullish", "neutral")
-        if price_above and st_up:
-            votes = [True, True, price_above]
-            if supertrend is not None:
-                votes.append(supertrend == "bullish")
-            if choppiness is not None:
-                votes.append(choppiness < TRENDING_CHOPPINESS)
-            return "trend_up", round(sum(votes) / len(votes), 2)
-
-    if strong_trend and chop_allows_trend and minus_di > plus_di:
-        price_below = last_close is not None and sma20 is not None and last_close < sma20
-        st_down = supertrend is None or supertrend in ("bearish", "neutral")
-        if price_below and st_down:
-            votes = [True, True, price_below]
-            if supertrend is not None:
-                votes.append(supertrend == "bearish")
-            if choppiness is not None:
-                votes.append(choppiness < TRENDING_CHOPPINESS)
-            return "trend_down", round(sum(votes) / len(votes), 2)
-
+    Priority is fixed and ex-ante: high_vol, trend_up, trend_down, low_vol,
+    range, unclear. Only closed data supplied by the caller is used.
+    """
+    high_vol_reference = HIGH_VOL_ATR_PCT_FLOOR
+    if atr_pct_median_90d is not None:
+        high_vol_reference = max(
+            HIGH_VOL_ATR_PCT_FLOOR, HIGH_VOL_ATR_MULTIPLE * atr_pct_median_90d
+        )
     if (
         atr_pct is not None
-        and atr_pct >= HIGH_VOL_ATR_PCT
-        and not (strong_trend and chop_allows_trend)
+        and atr_pct > high_vol_reference
+        and (adx is None or adx < TREND_ADX)
     ):
         return "high_vol", 0.8
 
-    weak_trend = adx is None or adx < WEAK_ADX
-    if atr_pct is not None and atr_pct < LOW_VOL_ATR_PCT and weak_trend:
-        return "low_vol", 0.75
+    directional = plus_di is not None and minus_di is not None and plus_di != minus_di
+    if (
+        adx is not None
+        and adx >= TREND_ADX
+        and directional
+        and last_close is not None
+        and sma20 is not None
+    ):
+        if plus_di > minus_di and last_close > sma20:
+            return "trend_up", 1.0
+        if minus_di > plus_di and last_close < sma20:
+            return "trend_down", 1.0
 
-    range_evidence = 0
-    if choppiness is not None and choppiness >= RANGE_CHOPPINESS:
-        range_evidence += 1
-    if adx is not None and adx < WEAK_ADX:
-        range_evidence += 1
-    if choppiness is not None and TRENDING_CHOPPINESS <= choppiness < RANGE_CHOPPINESS:
-        range_evidence += 1
-    if range_evidence and not (strong_trend and chop_allows_trend):
-        confidence = 1.0 if range_evidence >= 2 else 0.6
-        return "range", confidence
+    if (
+        atr_pct is not None
+        and atr_pct_median_90d is not None
+        and atr_pct < LOW_VOL_ATR_MULTIPLE * atr_pct_median_90d
+        and choppiness is not None
+        and choppiness > LOW_VOL_CHOPPINESS
+    ):
+        return "low_vol", 0.8
 
-    if adx is None and choppiness is None and supertrend is None and atr_pct is None:
+    chop_range = choppiness is not None and choppiness > RANGE_CHOPPINESS
+    weak_adx = adx is not None and adx < WEAK_ADX
+    if chop_range or weak_adx:
+        return "range", 1.0 if (chop_range and weak_adx) else 0.7
+
+    if adx is None and choppiness is None and atr_pct is None:
         return "unclear", 0.0
-    return "unclear", 0.25
+    return "unclear", 0.0
 
 
 def build_regime_snapshot(
@@ -255,6 +247,7 @@ def build_regime_snapshot(
     btc_closes_1h: Sequence[float] | None = None,
     btc_closes_1d: Sequence[float] | None = None,
     btc_closes_1w: Sequence[float] | None = None,
+    atr_pct_median_90d: float | None = None,
     timeframe: str = "1h",
 ) -> dict[str, Any]:
     """Build a deterministic regime snapshot from already-collected data.
@@ -283,7 +276,14 @@ def build_regime_snapshot(
         extension_atr = (last_close - sma20) / atr
 
     regime, confidence = _classify(
-        adx, choppiness, plus_di, minus_di, last_close, sma20, supertrend, atr_pct
+        adx,
+        choppiness,
+        plus_di,
+        minus_di,
+        last_close,
+        sma20,
+        atr_pct,
+        _finite(atr_pct_median_90d),
     )
     daily = _daily_direction(long_term_data)
     weekly = _weekly_direction(weekly_macro)
@@ -316,13 +316,17 @@ def build_regime_snapshot(
         ),
     )
 
+    no_trade = regime in ("unclear", "low_vol", "high_vol")
     return {
         "timeframe": timeframe,
         "regime": regime,
         "confidence": confidence,
+        "no_trade": no_trade,
+        "last_close": _round(last_close, 8),
         "adx": _round(adx, 2),
         "choppiness": _round(choppiness, 2),
         "atr_pct": _round(atr_pct, 3),
+        "atr_pct_median_90d": _round(_finite(atr_pct_median_90d), 3),
         "plus_di": _round(plus_di, 2),
         "minus_di": _round(minus_di, 2),
         "supertrend": supertrend,
@@ -369,10 +373,11 @@ def format_regime_snapshot_block(snapshot: Mapping[str, Any] | None) -> str:
     rs7 = _fmt(snapshot.get("rs_btc_7d"), 2)
     rs30 = _fmt(snapshot.get("rs_btc_30d"), 2)
     setups = ",".join(snapshot.get("allowed_setups") or []) or "none"
+    tradeable = "no" if snapshot.get("no_trade") else "yes"
     return (
         "## REGIME SNAPSHOT (deterministic)\n"
-        f"regime={regime} confidence={confidence} adx={adx} chop={chop} "
-        f"atr%={atr_pct} htf={htf}\n"
+        f"regime={regime} confidence={confidence} tradeable={tradeable} "
+        f"adx={adx} chop={chop} atr%={atr_pct} htf={htf}\n"
         f"extension_atr={extension} rs_btc_7d={rs7} rs_btc_30d={rs30}\n"
         f"allowed_setups={setups}"
     )
