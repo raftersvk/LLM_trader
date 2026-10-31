@@ -64,7 +64,8 @@ P1-B makes the taxonomy explicit end to end, additively:
 - `signal.schema.json` accepts `schema_version` `1.2` and optional top-level
   `setup`, `regime`, `htf_alignment`. `jev` optionally accepts
   `regime_confidence`, `bias_confidence`, `tradeability_probability`,
-  `confidence` (all in `[0, 1]`).
+  `confidence` (all in `[0, 1]`). `tradeability_probability` is the raw noul:
+  it is diagnostic and never a gate.
 - `contract.py` validates the same enums. `1.0` and `1.1` records without the
   new keys remain valid; a producer that emits no taxonomy still writes `1.0`.
 - The decision JSON asks for `setup`, `regime`, `htf_alignment` only when the

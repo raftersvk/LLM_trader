@@ -232,7 +232,8 @@ async def test_no_raw_response_stored_in_signal():
 
 
 @pytest.mark.asyncio
-async def test_jev_veto():
+async def test_noul_and_short_bias_do_not_veto_a_long():
+    """P0-B: noul is diagnostic and longs are never filtered by JEV bias."""
     engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
     analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL)
 
@@ -246,11 +247,17 @@ async def test_jev_veto():
 
         analyzer._extract_draft = patched  # type: ignore[assignment]
 
-    # Coherent JEV: long bias + tradeable -> approved, and jev stored.
-    inject({"model": "jev-1.13-free", "tradeability": True, "bias": "long"})
+    inject({
+        "model": "jev-1.13-free",
+        "tradeability": False,
+        "tradeability_probability": 0.0,
+        "bias": "short",
+    })
     approved = await analyzer.analyze()
+
     assert approved.risk_approved is True
     assert approved.jev["model"] == "jev-1.13-free"
+    assert approved.jev["tradeability_probability"] == 0.0
 
     # noul is advisory: tradeability=false must not veto a BUY.
     engine2 = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
@@ -284,6 +291,38 @@ async def test_jev_veto():
     vetoed = await analyzer3.analyze()
     assert vetoed.action == "SELL"
     assert vetoed.risk_approved is False
+
+@pytest.mark.asyncio
+async def test_short_risk_layer_requires_short_bias():
+    """A SELL with an attached JEV payload is refused unless bias=short."""
+    def sell_engine():
+        return FakeEngine(
+            raw_response=(
+                '{"signal": "SELL", "confidence": "HIGH", "stop_loss": 70000.0, '
+                '"take_profit": 64000.0, "position_size": 5, "reasoning": "rally"}'
+            ),
+            result=dict(RESULT_META),
+        )
+
+    async def run(jev):
+        engine = sell_engine()
+        analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL)
+        original = analyzer._extract_draft
+
+        def patched(result, raw_response):
+            draft = original(result, raw_response)
+            draft.jev = jev
+            return draft
+
+        analyzer._extract_draft = patched  # type: ignore[assignment]
+        return await analyzer.analyze()
+
+    without_short = await run({"model": "jev", "bias": "long"})
+    assert without_short.risk_approved is False
+    assert without_short.action == "SELL"
+
+    with_short = await run({"model": "jev", "bias": "short"})
+    assert with_short.risk_approved is True
 
 
 def test_deterministic_candle_alignment():

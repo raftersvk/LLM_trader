@@ -298,7 +298,9 @@ async def test_pre_mode_allows_tradeable_directional_market():
     result = await gate.check_pre({"symbol": SYMBOL})
 
     assert result.allowed is True
-    assert result.signal is not None and result.signal.bias == "short"
+    assert result.consulted is True
+    assert result.signal is not None and result.signal.bias == bias
+    assert "JEV diagnostic: noul=" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -345,7 +347,7 @@ async def test_post_mode_never_filters_a_long_on_bias(bias):
     """The asymmetric policy leaves BUY untouched by any JEV bias."""
     gate = JevGate(client=FakeJevClient(_response(tradeable=0.01, bias=bias)), mode="post")
 
-    result = await gate.check_post({"symbol": SYMBOL}, "BUY")
+    result = await gate.check_post({"symbol": SYMBOL}, action)
 
     assert result.allowed is True
     assert result.signal is not None and result.signal.bias == bias
@@ -561,6 +563,33 @@ async def test_adapter_long_is_not_filtered_by_a_short_bias():
     assert signal.action == "BUY"
     assert signal.risk_approved is True
     assert signal.jev["bias"] == "short"
+
+
+@pytest.mark.asyncio
+async def test_adapter_post_vetoes_short_without_short_bias():
+    result = {
+        "recommendation": "SELL",
+        "confidence": "HIGH",
+        "stop_loss": 114.0,
+        "take_profit": 90.0,
+        "position_size": 0.05,
+        "reasoning": "rally failure",
+        "model": "deepseek-v4.1-flash",
+        "provider": "opencode-go",
+    }
+    engine = FakeEngine(result, _candles(), _timestamps())
+    client = FakeJevClient(_response(tradeable=0.9, bias="long"))
+    analyzer = PairAnalyzer(
+        engine=engine, symbol=SYMBOL, timeframe="1h",
+        jev_gate=JevGate(client=client, mode="post"),
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
+
+    assert signal.action == "SELL"
+    assert signal.risk_approved is False
+    assert "JEV veto: SELL requires bias=short" in signal.reasoning
+    assert signal.jev["bias"] == "long"
 
 
 @pytest.mark.asyncio
