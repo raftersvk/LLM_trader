@@ -11,10 +11,21 @@ Fills mirror SignalStrategy as closely as possible: entry at the next candle
 open, stoploss intrabar, take-profit and TTL on the candle close/open. The
 caller mounts the updates directory into Freqtrade; no position, API key or
 exchange call is involved here.
+
+Identifiers are namespaced with ``replay:`` so they can never collide with the
+market-scoped live ids written by ``position_sync`` (``spot:<trade_id>`` /
+``futures:<trade_id>``). When the caller knows which market it replays, pass
+``market`` and the position id becomes ``replay:<market>:<entry>``.
+``based_on_entry`` stays the real entry decision id so the consumer's
+``update_matches_entry`` linkage keeps working. The update ``decision_id`` is
+``<based_on_entry>-u<revision>``; a spot and a futures replay of the same pair
+must therefore write to separate ``--output`` directories to avoid
+deduplicating each other.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -85,31 +96,37 @@ class ReplayPositionStats:
         return data
 
 
-def _grid(
-    start: datetime,
+def _effective_end(
     end: datetime,
-    timeframe: str,
     as_of_cap: Optional[datetime] = None,
     now: Optional[datetime] = None,
-) -> Iterable[Tuple[datetime, datetime]]:
-    """Yield (candle open, candle close) never past ``now``/``as_of_cap``."""
-    period = timedelta(seconds=timeframe_seconds(timeframe))
+) -> datetime:
+    """Latest candle close the replay may use: never in the future."""
     effective_end = min(end, now or datetime.now(timezone.utc))
     if as_of_cap is not None:
         effective_end = min(effective_end, as_of_cap)
-    candle = start
-    while candle + period <= effective_end:
-        yield candle, candle + period
-        candle += period
+    return effective_end
 
 
-def _entry_index(entries: Iterable[Dict[str, Any]]) -> Dict[datetime, Dict[str, Any]]:
-    """Map signal candle close time to an executable BUY/SELL entry."""
+def _entry_index(
+    entries: Iterable[Dict[str, Any]],
+    symbol: Optional[str] = None,
+) -> Dict[datetime, Dict[str, Any]]:
+    """Map signal candle close time to an executable BUY/SELL entry.
+
+    Only approved BUY/SELL rows are kept: HOLD rows, unapproved proposals and
+    entries whose stop-loss is missing cannot open a simulated position. When
+    ``symbol`` is given, rows that name a different symbol are ignored so a
+    mixed or hand-edited JSONL cannot open a position on the wrong pair.
+    """
     index: Dict[datetime, Dict[str, Any]] = {}
     for entry in entries:
         if entry.get("action") not in ("BUY", "SELL"):
             continue
         if entry.get("risk_approved") is not True:
+            continue
+        entry_symbol = entry.get("symbol")
+        if symbol is not None and entry_symbol is not None and entry_symbol != symbol:
             continue
         close_at = parse_iso(entry.get("candle_close_time"))
         sl = entry.get("sl")
@@ -163,6 +180,7 @@ async def replay_positions_for_pair(
     as_of_cap: Optional[datetime] = None,
     now: Optional[datetime] = None,
     injector: Optional[Any] = None,
+    market: Optional[str] = None,
 ) -> ReplayPositionStats:
     """Replay one pair's open positions and write UPDATE/CLOSE records.
 
@@ -170,11 +188,23 @@ async def replay_positions_for_pair(
     is called only when a simulated position is still open at a candle close,
     so a 7-day backtest costs one call per open-position candle, not one per
     candle.
+
+    Candles are taken from the loaded series itself (not a synthetic grid), so
+    an off-grid ``start`` or a gap in the CSV skips nothing silently. ``market``
+    optionally scopes the emitted position id with ``spot``/``futures``.
     """
+    if market:
+        market = market.strip().lower()
+        if market not in ("spot", "futures"):
+            raise ValueError(f"invalid market label: {market!r} (expected spot|futures)")
+    else:
+        market = None
+
     stats = ReplayPositionStats()
-    by_close = _entry_index(entries)
+    by_close = _entry_index(entries, symbol=symbol)
     stats.entries_reused = len(by_close)
-    open_to_idx = {ts: i for i, ts in enumerate(timestamps)}
+    period = timedelta(seconds=timeframe_seconds(timeframe))
+    effective_end = _effective_end(end, as_of_cap, now)
     owns_injector = injector is None
     if injector is None:
         injector = ReplayDataInjector(analyzer, candles, timestamps)
@@ -182,15 +212,22 @@ async def replay_positions_for_pair(
     position: Optional[SimPosition] = None
     pending: Optional[Any] = None
     try:
-        for candle_open, as_of in _grid(start, end, timeframe, as_of_cap, now):
-            idx = open_to_idx.get(candle_open)
-            if idx is None:
+        for idx, candle_open in enumerate(timestamps):
+            as_of = candle_open + period
+            # `timestamps` is strictly ascending (the CSV loader enforces it),
+            # so the first close past the window ends the replay.
+            if as_of > effective_end:
+                break
+            if candle_open < start:
                 continue
             stats.candles_seen += 1
             row = candles[idx]
             injector.set_as_of(as_of)
 
             # A decision taken at the previous close is executable at this open.
+            # Apply it even when it was deduplicated on a rerun: otherwise the
+            # in-memory levels would drift from the persisted history and every
+            # later revision would be deduplicated too.
             if pending is not None and position is not None:
                 if pending.action == "CLOSE":
                     stats.closed_sim += 1
@@ -239,6 +276,13 @@ async def replay_positions_for_pair(
                 position.mae = max(position.mae, position.entry - low)
             position.bars += 1
 
+            # Market-scoped position id: never collide with the live
+            # ``spot:``/``futures:`` ids. ``based_on_entry`` stays the real entry
+            # decision id so the consumer's update/entry linkage keeps working.
+            scoped_position_id = (
+                f"replay:{market}:{position.enter_tag}" if market
+                else f"replay:{position.enter_tag}"
+            )
             snapshot = position.snapshot(symbol, close)
             try:
                 metrics = analyzer.position_metrics(snapshot, as_of=as_of)
@@ -246,7 +290,7 @@ async def replay_positions_for_pair(
                 logger.debug("Position metrics unavailable for %s: %s", symbol, exc)
                 metrics = {}
             ctx = UpdateContext(
-                position_id=f"replay:{position.enter_tag}",
+                position_id=scoped_position_id,
                 position_side=position.side,
                 entry_price=position.entry,
                 stop_loss=position.sl,
@@ -258,13 +302,17 @@ async def replay_positions_for_pair(
                 entry_tp=position.entry_tp,
             )
             try:
-                signal = await analyzer.analyze(
+                coro = analyzer.analyze(
                     candle_open_time=iso_z(candle_open),
                     position_context=format_position_context(
                         snapshot, position.sl, position.tp, metrics
                     ),
                     update_context=ctx,
                 )
+                if timeout_seconds and timeout_seconds > 0:
+                    signal = await asyncio.wait_for(coro, timeout=timeout_seconds)
+                else:
+                    signal = await coro
                 stats.analysis_calls += 1
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 stats.failed += 1
@@ -277,21 +325,24 @@ async def replay_positions_for_pair(
             # The producer stamps wall-clock now; replay must stamp the simulated
             # candle close or the backtest would treat the update as future data.
             signal.created_at = iso_z(as_of)
-            if update_storage.append(signal):
+            stored = update_storage.append(signal)
+            if stored:
                 stats.updates += 1
                 if signal.action == "CLOSE":
                     stats.closes += 1
-                pending = signal
-                stats.details.append(
-                    {
-                        "position": position.enter_tag,
-                        "candle": iso_z(candle_open),
-                        "action": signal.action,
-                        "sl": signal.sl,
-                        "tp": signal.tp,
-                        "reasoning": (signal.reasoning or "")[:200],
-                    }
-                )
+            # Always advance the simulation, even on a deduplicated rerun.
+            pending = signal
+            stats.details.append(
+                {
+                    "position": scoped_position_id,
+                    "candle": iso_z(candle_open),
+                    "action": signal.action,
+                    "sl": signal.sl,
+                    "tp": signal.tp,
+                    "stored": stored,
+                    "reasoning": (signal.reasoning or "")[:200],
+                }
+            )
     finally:
         if owns_injector:
             injector.restore()

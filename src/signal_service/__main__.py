@@ -153,6 +153,11 @@ def _build_parser() -> argparse.ArgumentParser:
     replay_positions.add_argument("--use-chart", type=_parse_bool_flag, default="true")
     replay_positions.add_argument("--timeout-seconds", type=float, default=300.0)
     replay_positions.add_argument("--max-hold-hours", type=float, default=24.0)
+    replay_positions.add_argument(
+        "--market", choices=["spot", "futures"], default=None,
+        help="Optional market label embedded in emitted position ids "
+             "(use a separate --output per market: decision ids are shared)",
+    )
 
     validate = sub.add_parser("validate", help="Validate JSONL signal files")
     validate.add_argument("--input", default=DEFAULT_SIGNALS_DIR)
@@ -411,10 +416,21 @@ async def _replay_positions_command(args: argparse.Namespace) -> None:
     symbol = pairs[0]
     start = parse_iso(args.start if "T" in args.start else args.start + "T00:00:00Z")
     end = parse_iso(args.end if "T" in args.end else args.end + "T00:00:00Z")
+    if end <= start:
+        raise ValueError(f"--end ({iso_z(end)}) must be after --start ({iso_z(start)})")
     as_of_cap = parse_iso(args.as_of) if args.as_of else None
     candles, timestamps = _load_candles_csv(args.candles)
     if not timestamps:
         raise ValueError(f"no candles found in {args.candles}: nothing to replay")
+
+    token = f"{symbol.replace('/', '_')}_{args.timeframe}.jsonl"
+    entries_path = os.path.join(args.entries, token)
+    if not os.path.isfile(entries_path):
+        raise ValueError(
+            f"entry signals not found: {entries_path}. "
+            "Run `replay` first (or point --entries at its output directory)."
+        )
+    entries = load_entries(entries_path)
 
     root = _load_engine_factory()
     deps = await root.build_dependencies()
@@ -430,8 +446,6 @@ async def _replay_positions_command(args: argparse.Namespace) -> None:
         # Position management is exempt from JEV; off avoids pointless calls.
         jev_gate=_build_jev_gate("off"),
     )
-    token = f"{symbol.replace('/', '_')}_{args.timeframe}.jsonl"
-    entries = load_entries(os.path.join(args.entries, token))
     os.makedirs(args.output, exist_ok=True)
     storage = UpdateStorage(update_file_path(args.output, symbol, args.timeframe))
     stats = await replay_positions_for_pair(
@@ -447,6 +461,7 @@ async def _replay_positions_command(args: argparse.Namespace) -> None:
         max_hold_hours=args.max_hold_hours,
         timeout_seconds=args.timeout_seconds,
         as_of_cap=as_of_cap,
+        market=args.market,
     )
     print(json.dumps({"symbol": symbol, **stats.as_dict()}, indent=2, default=str))
 
