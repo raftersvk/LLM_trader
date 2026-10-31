@@ -296,6 +296,41 @@ async def test_noul_and_short_bias_do_not_veto_a_long():
     assert vetoed.risk_approved is False
 
 @pytest.mark.asyncio
+async def test_v12_jev_keys_are_stripped_when_the_record_stays_v10():
+    """v1.2-only JEV keys must not leak into a 1.0/1.1 record shape."""
+    engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL)
+    original = analyzer._extract_draft
+
+    def patched(result, raw_response):
+        draft = original(result, raw_response)
+        draft.jev = {
+            "model": "jev-1.13-free",
+            "tradeability": True,
+            "bias": "long",
+            "regime": "trend",
+            "regime_confidence": 0.7,
+            "bias_confidence": 0.8,
+            "tradeability_probability": 0.6,
+            "confidence": 0.75,
+        }
+        return draft
+
+    analyzer._extract_draft = patched  # type: ignore[assignment]
+    signal = await analyzer.analyze()
+
+    assert signal.schema_version == "1.0"
+    assert set(signal.jev) == {"model", "tradeability", "bias", "regime"}
+    for key in (
+        "regime_confidence",
+        "bias_confidence",
+        "tradeability_probability",
+        "confidence",
+    ):
+        assert key not in signal.jev
+
+
+@pytest.mark.asyncio
 async def test_short_risk_layer_requires_short_bias():
     """A SELL with an attached JEV payload is refused unless bias=short."""
     def sell_engine():
