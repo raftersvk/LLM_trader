@@ -1808,8 +1808,15 @@ class PairAnalyzer:
         setup = draft.setup
         regime = draft.regime
         htf_alignment = draft.htf_alignment
+        # Only records where the model actually emitted a taxonomy field become
+        # v1.2. A snapshot alone must not upgrade every production signal, which
+        # would break strict 1.0/1.1 readers for no emitted taxonomy.
+        if setup is None and regime is None:
+            return None, None, None
+        if draft.action not in ("BUY", "SELL") and setup is not None:
+            setup = "none"
         snapshot = self._current_regime_snapshot()
-        if snapshot and snapshot.get("adx") is not None:
+        if snapshot:
             regime = snapshot.get("regime") or regime
             htf_alignment = snapshot.get("htf_alignment") or htf_alignment
             allowed = set(snapshot.get("allowed_setups") or ())
@@ -1856,7 +1863,7 @@ class PairAnalyzer:
         setup, regime, htf_alignment = self._resolved_taxonomy(draft)
         schema_version = (
             "1.2"
-            if any(value is not None for value in (setup, regime, htf_alignment))
+            if setup is not None or regime is not None
             else "1.0"
         )
         signal = Signal(

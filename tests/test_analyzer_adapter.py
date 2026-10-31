@@ -2086,6 +2086,12 @@ RAW_TAXONOMY_BUY = (
 async def test_taxonomy_is_emitted_from_the_decision_object():
     engine = FakeEngine(raw_response=RAW_TAXONOMY_BUY, result=dict(RESULT_META))
     analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": 31.0,
+        "regime": "trend_up",
+        "htf_alignment": "aligned",
+        "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
+    }
 
     signal = await analyzer.analyze()
 
@@ -2103,6 +2109,12 @@ async def test_unknown_taxonomy_is_dropped_without_failing_the_signal():
     raw = RAW_TAXONOMY_BUY.replace("trend_pullback", "vibes")
     engine = FakeEngine(raw_response=raw, result=dict(RESULT_META))
     analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": 31.0,
+        "regime": "trend_up",
+        "htf_alignment": "aligned",
+        "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
+    }
 
     signal = await analyzer.analyze()
 
@@ -2113,11 +2125,33 @@ async def test_unknown_taxonomy_is_dropped_without_failing_the_signal():
 
 
 @pytest.mark.asyncio
-async def test_deterministic_snapshot_overrides_the_reported_regime():
-    engine = FakeEngine(raw_response=RAW_TAXONOMY_BUY, result=dict(RESULT_META))
+async def test_no_model_taxonomy_keeps_the_signal_at_v10_even_with_a_snapshot():
+    """A deterministic snapshot alone must not upgrade every production signal."""
+    engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
     analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
     analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
         "adx": 31.0,
+        "regime": "trend_up",
+        "htf_alignment": "aligned",
+        "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.schema_version == "1.0"
+    assert signal.setup is None
+    assert signal.regime is None
+    assert signal.htf_alignment is None
+    assert "setup" not in signal.to_dict()
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_deterministic_snapshot_overrides_even_without_adx():
+    engine = FakeEngine(raw_response=RAW_TAXONOMY_BUY, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": None,
         "regime": "range",
         "htf_alignment": "counter",
         "allowed_setups": ["range_fade_extreme", "range_mean_reversion"],
@@ -2129,4 +2163,27 @@ async def test_deterministic_snapshot_overrides_the_reported_regime():
     assert signal.htf_alignment == "counter"
     # trend_pullback is not allowed in a range: drop it rather than trust it.
     assert signal.setup is None
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_setup_is_none_on_a_non_entry_action():
+    raw = (
+        '{"signal": "HOLD", "confidence": "MEDIUM", "reasoning": "wait", '
+        '"setup": "trend_pullback", "regime": "trend_up", "htf_alignment": "aligned"}'
+    )
+    engine = FakeEngine(raw_response=raw, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": 31.0,
+        "regime": "trend_up",
+        "htf_alignment": "aligned",
+        "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.action == "HOLD"
+    assert signal.setup == "none"
+    assert signal.schema_version == "1.2"
     signal.validate()

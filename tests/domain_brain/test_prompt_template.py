@@ -200,9 +200,6 @@ SNAPSHOT_KEYS = {
     "stop_loss",
     "take_profit",
     "position_size",
-    "setup",
-    "regime",
-    "htf_alignment",
     "reasoning",
     "key_levels",
     "trend",
@@ -214,6 +211,7 @@ SNAPSHOT_KEYS = {
     "reduce_only",
     "leverage",
 }
+SNAPSHOT_KEYS_1H = SNAPSHOT_KEYS | {"setup", "regime", "htf_alignment"}
 NARRATIVE_PRESENT = LOW_LABELS + MEDIUM_LABELS + HIGH_LABELS
 
 
@@ -234,12 +232,17 @@ def render(
     """Compose the full prompt PromptBuilder emits: base, rules, steps, format."""
     return "\n\n".join([
         manager.build_system_prompt(symbol, timeframe, dynamic_thresholds=dynamic_thresholds),
-        manager.build_decision_rules(has_chart_analysis, dynamic_thresholds=dynamic_thresholds),
+        manager.build_decision_rules(
+            has_chart_analysis,
+            dynamic_thresholds=dynamic_thresholds,
+            timeframe=timeframe,
+        ),
         manager.build_analysis_steps(symbol, has_chart_analysis=has_chart_analysis),
         manager.build_response_template(
             has_chart_analysis,
             dynamic_thresholds=dynamic_thresholds,
             json_object_output=json_object_output,
+            timeframe=timeframe,
         ),
     ])
 
@@ -612,7 +615,7 @@ def test_decision_rules_render_one_line_per_rule():
 
 def test_decision_rules_contain_the_complete_1h_setup_taxonomy():
     """P1-B pins every enum value and the ex-ante/no-look-ahead rule."""
-    rules = make_manager().build_decision_rules()
+    rules = make_manager().build_decision_rules(timeframe="1h")
     assert_fragments(rules, [
         "=== Setup Taxonomy (1h) ===",
         "trend_pullback",
@@ -638,6 +641,25 @@ def test_decision_rules_contain_the_complete_1h_setup_taxonomy():
         "never infer a regime from a future candle or from the week's realized return",
         "latest closed 1h candle",
     ])
+
+
+@pytest.mark.parametrize("timeframe", ["4h", "1d", "15m", None])
+def test_setup_taxonomy_is_not_injected_outside_the_1h_target(timeframe):
+    """The shared template also serves the 4h live bot: keep its prompt unchanged."""
+    rules = make_manager().build_decision_rules(timeframe=timeframe)
+    template = make_manager().build_response_template(timeframe=timeframe)
+    assert "=== Setup Taxonomy" not in rules
+    assert "trend_pullback" not in rules
+    assert '"setup": "none"' not in template
+    assert '"regime": "unclear"' not in template
+
+
+def test_taxonomy_keys_only_enter_the_1h_json_example():
+    template_1h = make_manager().build_response_template(timeframe="1h")
+    template_4h = make_manager().build_response_template(timeframe="4h")
+    for key in ('"setup": "none"', '"regime": "unclear"', '"htf_alignment": "neutral"'):
+        assert key in template_1h
+        assert key not in template_4h
 
 
 def test_breakout_doctrine_forbids_staged_entries():
@@ -827,9 +849,6 @@ def test_response_template_json_example_is_parser_safe():
     assert analysis["take_profit"] is None
     assert analysis["risk_reward_ratio"] is None
     assert analysis["order_type"] is None
-    assert analysis["setup"] == "none"
-    assert analysis["regime"] == "unclear"
-    assert analysis["htf_alignment"] == "neutral"
     assert set(analysis["confluence_factors"]) == {
         "trend_alignment",
         "momentum_strength",
@@ -912,7 +931,7 @@ def test_signal_json_mode_prompt_is_json_only_for_litellm():
         re.search(r"```json\s*(.*?)\s*```", prompt, re.DOTALL | re.IGNORECASE).group(1)
     )
     assert set(example) == {"narrative", "analysis"}
-    assert set(example["analysis"]) == SNAPSHOT_KEYS
+    assert set(example["analysis"]) == SNAPSHOT_KEYS_1H
 
     prose_prompt = render(manager)
     assert "Output: 13 plain-text numbered lines + JSON." in prose_prompt

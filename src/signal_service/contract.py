@@ -315,7 +315,9 @@ class Signal:
             ("regime", self.regime, ALLOWED_REGIMES),
             ("htf_alignment", self.htf_alignment, ALLOWED_HTF_ALIGNMENTS),
         ):
-            if value is not None and value not in allowed:
+            if value is None:
+                continue
+            if not isinstance(value, str) or value not in allowed:
                 raise SignalValidationError(
                     f"{name} must be one of {sorted(allowed)!r} or null, got {value!r}"
                 )

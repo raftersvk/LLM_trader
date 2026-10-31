@@ -611,6 +611,7 @@ class TemplateManager:
         model_verbosity: str | None = None,
         dynamic_thresholds: dict[str, Any] | None = None,
         has_risk_profile: bool = False,
+        timeframe: str | None = None,
     ) -> str:
         """Build the Decision Rules section: all trading decision logic, sizing, and risk rules.
 
@@ -716,7 +717,9 @@ class TemplateManager:
             "(see SL Tightening Policy in position context)"
         )
 
-        setup_taxonomy = """=== Setup Taxonomy (1h) ===
+        setup_taxonomy = ""
+        if timeframe == "1h":
+            setup_taxonomy = """=== Setup Taxonomy (1h) ===
 The REGIME SNAPSHOT block supplied in Trading Context is authoritative. Use its regime, htf and allowed_setups values as given; do not recompute ADX/choppiness/ATR or refetch candles, and never infer a regime from a future candle or from the week's realized return (no look-ahead).
 Regime -> allowed setups:
 - trend_up: trend_pullback, breakout_retest, momentum_continuation (long only).
@@ -903,7 +906,8 @@ create additional signals. End with a brief risk disclaimer before the final thr
     def build_response_template(self, has_chart_analysis: bool = False,
                                 model_verbosity: str | None = None,
                                 dynamic_thresholds: dict[str, Any] | None = None,
-                                json_object_output: bool = False) -> str:
+                                json_object_output: bool = False,
+                                timeframe: str | None = None) -> str:
         """Build the response format template: output structure, JSON schema, field rules.
 
         Decision logic (R/R gates, position sizing, SL/TP rules, macro conflict) lives in
@@ -999,6 +1003,16 @@ create additional signals. End with a brief risk disclaimer before the final thr
         provider = self.config.PROVIDER.strip().lower()
         is_json_object_output = json_object_output or provider in ("deepseek", "all")
 
+        # The 1h taxonomy is opt-in by timeframe: the same template serves the
+        # 4h live bot, whose output contract must not gain these keys.
+        taxonomy_fields = ""
+        if timeframe == "1h":
+            taxonomy_fields = (
+                '        "setup": "none",\n'
+                '        "regime": "unclear",\n'
+                '        "htf_alignment": "neutral",\n'
+            )
+
         _analysis_object = f"""    "analysis": {{
         "signal": "HOLD",
         "confidence": 72,
@@ -1013,10 +1027,7 @@ create additional signals. End with a brief risk disclaimer before the final thr
         "stop_loss": null,
         "take_profit": null,
         "position_size": 0.0,
-        "setup": "none",
-        "regime": "unclear",
-        "htf_alignment": "neutral",
-        "reasoning": "{_reasoning_guidance}",
+{taxonomy_fields}        "reasoning": "{_reasoning_guidance}",
         "key_levels": {{"support": [64032.54, 63370.50], "resistance": [64478.17, 64961.17]}},
         "trend": {{"direction": "NEUTRAL", "strength_4h": 20, "strength_daily": 15, "timeframe_alignment": "DIVERGENT"}},
         "risk_reward_ratio": null,

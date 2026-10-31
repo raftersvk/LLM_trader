@@ -181,12 +181,19 @@ def test_parse_rejects_unknown_choice_values(caplog):
 def test_jev_payload_matches_contract_keys():
     signal = parse_jev_signal(_response())
     payload = signal.to_payload()
-    assert set(payload) <= {"model", "tradeability", "bias", "regime"}
+    assert set(payload) <= {
+        "model", "tradeability", "bias", "regime",
+        "regime_confidence", "bias_confidence", "tradeability_probability", "confidence",
+    }
     assert payload == {
         "model": "jev-1.13",
         "tradeability": True,
         "bias": "long",
         "regime": "trend",
+        "regime_confidence": 0.7,
+        "bias_confidence": 0.8,
+        "tradeability_probability": 0.8,
+        "confidence": 0.75,
     }
 
 
@@ -535,6 +542,10 @@ async def test_adapter_pre_mode_consults_without_blocking_the_llm():
         "tradeability": False,
         "bias": "long",
         "regime": "trend",
+        "tradeability_probability": 0.2,
+        "bias_confidence": 0.8,
+        "regime_confidence": 0.7,
+        "confidence": 0.75,
     }
 
 

@@ -276,6 +276,13 @@ def test_v12_taxonomy_rejects_unknown_values(field, bad):
         Signal(**make_signal_kwargs(**{field: bad})).validate()
 
 
+@pytest.mark.parametrize("bad", [1, ["trend_pullback"], {"setup": "trend_pullback"}, True])
+def test_v12_taxonomy_rejects_non_string_values_without_typeerror(bad):
+    """A non-string enum must be a SignalValidationError, not an unhashable TypeError."""
+    with pytest.raises(SignalValidationError):
+        Signal(**make_signal_kwargs(setup=bad)).validate()
+
+
 def test_v12_taxonomy_accepts_every_contract_value():
     for setup in ALLOWED_SETUPS:
         Signal(**make_signal_kwargs(setup=setup)).validate()

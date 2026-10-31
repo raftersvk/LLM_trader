@@ -67,15 +67,18 @@ P1-B makes the taxonomy explicit end to end, additively:
   `confidence` (all in `[0, 1]`).
 - `contract.py` validates the same enums. `1.0` and `1.1` records without the
   new keys remain valid; a producer that emits no taxonomy still writes `1.0`.
-- The decision JSON now asks for `setup`, `regime`, `htf_alignment`. The adapter
-  emits `1.2` only when at least one is present. It prefers the deterministic
-  snapshot's `regime`/`htf_alignment` and drops a `setup` outside that regime's
-  allowed families, so the model cannot relabel the computed regime.
+- The decision JSON asks for `setup`, `regime`, `htf_alignment` only when the
+  prompt target is 1h; the shared 4h/live template is unchanged. The adapter
+  emits `1.2` only when the model actually emitted `setup` or `regime`; a
+  deterministic snapshot alone never upgrades a production signal. It prefers
+  the snapshot's `regime`/`htf_alignment` (even when ADX is missing) and drops a
+  `setup` outside that regime's allowed families, so the model cannot relabel
+  the computed regime.
 - The Decision Rules system prompt lists all nine setups, the six regimes and
-  the three alignments, with the regime -> allowed-family mapping. It states
-  that the supplied `REGIME SNAPSHOT` is authoritative, that indicators must not
-  be recomputed or refetched, and that only the latest closed 1h candle may be
-  used (no future candle, no retrospective week return).
+  the three alignments, with the regime -> allowed-family mapping, and only for
+  a 1h target. It states that the supplied `REGIME SNAPSHOT` is authoritative,
+  that indicators must not be recomputed or refetched, and that only the latest
+  closed 1h candle may be used (no future candle, no retrospective week return).
 
 ## P1-A price-preserving exits (not implemented here)
 
