@@ -582,3 +582,54 @@ def test_legacy_bare_position_id_without_market():
 
 def test_contract_accepts_market_scoped_position_id():
     Signal(**update_kwargs(position_id="futures:42")).validate()
+
+
+def test_empty_trade_id_is_skipped():
+    snap = snapshot_from_trades([
+        {"trade_id": "", "pair": "BTC/USDT", "open_rate": 67500.0},
+        {"trade_id": None, "pair": "ETH/USDT", "open_rate": 2300.0},
+        {"trade_id": 42, "pair": "BTC/USDT", "open_rate": 67500.0},
+    ], market="spot")
+    assert [p.position_id for p in snap.positions] == ["spot:42"]
+
+
+def test_invalid_market_label_rejected():
+    with pytest.raises(ValueError):
+        snapshot_from_trades([{"trade_id": 1, "pair": "BTC/USDT", "open_rate": 1.0}],
+                             market="margin")
+
+
+def test_duplicate_config_market_labels_rejected(tmp_path):
+    from src.signal_service.position_sync import build_clients_from_configs
+
+    paths = []
+    for i in range(2):
+        p = tmp_path / f"cfg{i}.json"
+        p.write_text(json.dumps({"trading_mode": "spot", "api_server": {
+            "listen_port": 8080 + i, "username": "u", "password": "p"}}))
+        paths.append(str(p))
+    with pytest.raises(RuntimeError):
+        build_clients_from_configs(paths)
+
+
+def test_unknown_config_market_label_rejected(tmp_path):
+    from src.signal_service.position_sync import build_client_from_config
+
+    p = tmp_path / "cfg.json"
+    p.write_text(json.dumps({"trading_mode": "", "api_server": {
+        "listen_port": 8080, "username": "u", "password": "p"}}))
+    with pytest.raises(RuntimeError):
+        build_client_from_config(str(p))
+
+
+def test_env_client_defaults_to_spot_market(monkeypatch):
+    from src.signal_service.position_sync import build_client_from_env
+
+    monkeypatch.setenv("FREQTRADE_API_URL", "http://127.0.0.1:8080")
+    monkeypatch.setenv("FREQTRADE_API_USER", "u")
+    monkeypatch.setenv("FREQTRADE_API_PASSWORD", "p")
+    monkeypatch.delenv("FREQTRADE_API_MARKET", raising=False)
+    assert build_client_from_env().market == "spot"
+    monkeypatch.setenv("FREQTRADE_API_MARKET", "margin")
+    with pytest.raises(RuntimeError):
+        build_client_from_env()

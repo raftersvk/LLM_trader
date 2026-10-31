@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_API_URL = "http://127.0.0.1:8080"
 TOKEN_TIMEOUT = 10.0
+VALID_MARKETS = frozenset({"spot", "futures"})
 
 
 class FreqtradeReadOnlyClient:
@@ -113,12 +114,17 @@ def snapshot_from_trades(
     records which API produced the position (informational, never a secret).
     """
     positions: List[PositionSnapshot] = []
-    market_label = (market or "").strip()
+    market_label = (market or "").strip().lower()
+    if market_label and market_label not in VALID_MARKETS:
+        raise ValueError(f"invalid market label: {market!r} (expected spot|futures)")
     for trade in trades:
         if not isinstance(trade, dict):
             continue
+        trade_id = str(trade.get("trade_id", "") or "").strip()
+        if not trade_id:
+            logger.warning("Skipping Freqtrade trade without a trade_id")
+            continue
         try:
-            trade_id = str(trade.get("trade_id", ""))
             # Market-scoped id: spot and futures keep separate trade-id
             # sequences, so a bare id could collide across markets. Records
             # written before this change keep the bare id (legacy fallback).
@@ -200,13 +206,27 @@ def build_client_from_config(
     password = str(api.get("password", ""))
     if not username or not password:
         raise RuntimeError(f"api_server credentials missing in {config_path}")
-    label = market or str(config.get("trading_mode", "")) or "unknown"
+    raw_label = market or str(config.get("trading_mode", ""))
+    label = raw_label.strip().lower()
+    if label not in VALID_MARKETS:
+        raise RuntimeError(
+            f"config {config_path} has an invalid trading_mode/market {raw_label!r} "
+            "(expected spot|futures)"
+        )
     return FreqtradeReadOnlyClient(f"http://127.0.0.1:{port}", username, password, market=label)
 
 
 def build_clients_from_configs(config_paths: List[str]) -> List[FreqtradeReadOnlyClient]:
-    """Build one client per Freqtrade config (spot + futures)."""
-    return [build_client_from_config(path) for path in config_paths]
+    """Build one client per Freqtrade config (spot + futures).
+
+    Two configs with the same market label are rejected: they would produce
+    duplicate position ids and cross-apply updates.
+    """
+    clients = [build_client_from_config(path) for path in config_paths]
+    labels = [client.market for client in clients]
+    if len(labels) != len(set(labels)):
+        raise RuntimeError(f"duplicate market labels in configs: {labels}")
+    return clients
 
 
 def build_client_from_env() -> FreqtradeReadOnlyClient:
@@ -218,7 +238,12 @@ def build_client_from_env() -> FreqtradeReadOnlyClient:
         raise RuntimeError(
             "FREQTRADE_API_USER and FREQTRADE_API_PASSWORD must be set in the environment"
         )
-    return FreqtradeReadOnlyClient(url, user, password)
+    market = os.environ.get("FREQTRADE_API_MARKET", "spot").strip().lower()
+    if market not in VALID_MARKETS:
+        raise RuntimeError(
+            f"FREQTRADE_API_MARKET must be spot|futures, got {market!r}"
+        )
+    return FreqtradeReadOnlyClient(url, user, password, market=market)
 
 
 async def run_forever(
