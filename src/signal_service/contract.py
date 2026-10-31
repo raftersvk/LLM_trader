@@ -203,6 +203,8 @@ class Signal:
     raw_response_hash: Optional[str] = None
     jev: Optional[Dict[str, Any]] = field(default=None)
     # v1.1 position-update fields (omitted on v1.0 entry records).
+    # position_id is market-scoped: "<market>:<trade_id>" (spot|futures),
+    # because the two Freqtrade databases have separate trade-id sequences.
     position_id: Optional[str] = None
     position_side: Optional[str] = None
     revision: Optional[int] = None

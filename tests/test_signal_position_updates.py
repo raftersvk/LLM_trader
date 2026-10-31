@@ -529,6 +529,7 @@ def test_position_sync_multi_api_merges_and_normalizes_symbols(tmp_path):
     assert symbols == {"BTC/USDT"}
     assert markets == {"spot", "futures"}
     assert sides == {"long", "short"}
+    assert {p["position_id"] for p in payload["positions"]} == {"spot:7", "futures:8"}
     assert not list(tmp_path.glob(".positions-*.tmp"))
 
 
@@ -559,3 +560,25 @@ def test_producer_reads_positions_from_both_markets(tmp_path):
     loaded = load_positions(str(path))
     matched = loaded.for_symbol("BTC/USDT")
     assert {p.market for p in matched} == {"spot", "futures"}
+
+
+def test_same_trade_id_on_spot_and_futures_is_two_positions():
+    # Spot and futures use separate trade-id sequences: a shared id must not
+    # collapse the two positions under one key.
+    spot = snapshot_from_trades([{"trade_id": 42, "pair": "BTC/USDT", "open_rate": 67500.0}],
+                                market="spot")
+    fut = snapshot_from_trades([{"trade_id": 42, "pair": "BTC/USDT:USDT", "is_short": True,
+                                 "open_rate": 78000.0}], market="futures")
+    assert [p.position_id for p in spot.positions] == ["spot:42"]
+    assert [p.position_id for p in fut.positions] == ["futures:42"]
+    assert spot.positions[0].symbol == fut.positions[0].symbol == "BTC/USDT"
+
+
+def test_legacy_bare_position_id_without_market():
+    legacy = snapshot_from_trades([{"trade_id": 42, "pair": "BTC/USDT", "open_rate": 67500.0}])
+    assert [p.position_id for p in legacy.positions] == ["42"]
+    assert legacy.positions[0].market is None
+
+
+def test_contract_accepts_market_scoped_position_id():
+    Signal(**update_kwargs(position_id="futures:42")).validate()

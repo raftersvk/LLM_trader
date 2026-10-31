@@ -113,12 +113,18 @@ def snapshot_from_trades(
     records which API produced the position (informational, never a secret).
     """
     positions: List[PositionSnapshot] = []
+    market_label = (market or "").strip()
     for trade in trades:
         if not isinstance(trade, dict):
             continue
         try:
+            trade_id = str(trade.get("trade_id", ""))
+            # Market-scoped id: spot and futures keep separate trade-id
+            # sequences, so a bare id could collide across markets. Records
+            # written before this change keep the bare id (legacy fallback).
+            position_id = f"{market_label}:{trade_id}" if market_label else trade_id
             snapshot = PositionSnapshot(
-                position_id=str(trade.get("trade_id", "")),
+                position_id=position_id,
                 symbol=contract_symbol(str(trade.get("pair", ""))),
                 side="short" if trade.get("is_short") else "long",
                 entry_price=float(trade.get("open_rate", 0.0) or 0.0),
@@ -133,7 +139,7 @@ def snapshot_from_trades(
                     trade.get("current_rate") or trade.get("last") or trade.get("close_rate")
                 ),
                 enter_tag=trade.get("enter_tag"),
-                market=market,
+                market=market_label or None,
             )
             snapshot.validate()
         except (TypeError, ValueError) as exc:
