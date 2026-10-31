@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.signal_service.analyzer_adapter import PairAnalyzer
+from src.signal_service.analyzer_adapter import POSITION_OUTPUT_CONTRACT, PairAnalyzer
 from src.signal_service.contract import Signal, SignalValidationError
 from src.signal_service.positions import (
     PositionSnapshot,
@@ -205,6 +205,22 @@ def _ctx(revision=1):
         stop_loss=66500.0, take_profit=72000.0, revision=revision,
         based_on_entry="entry-1", current_price=69000.0,
     )
+
+
+def test_position_update_uses_position_output_contract():
+    """Position mode must not inherit the entry contract that forbids UPDATE."""
+    raw = json.dumps({
+        "signal": "UPDATE", "confidence": "HIGH", "stop_loss": 68000.0,
+        "take_profit": 72000.0, "reasoning": "tighten after progress",
+    })
+    analyzer = _analyzer(raw)
+    asyncio.run(
+        analyzer.analyze(candle_open_time="2026-10-30T10:00:00Z", update_context=_ctx())
+    )
+    suffix = analyzer.engine.calls[-1]["system_prompt_suffix"]
+    assert suffix == POSITION_OUTPUT_CONTRACT
+    assert "UPDATE or CLOSE" in suffix
+    assert "Never emit BUY, SELL or HOLD" in suffix
 
 
 def test_adapter_emits_update_when_compliant():

@@ -190,3 +190,47 @@ def _as_optional_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def format_position_context(
+    position: "PositionSnapshot",
+    stop_loss: float,
+    take_profit: Optional[float],
+    metrics: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Build the compact position-management block injected into the prompt.
+
+    Shared by the live position-aware service and the position replay so both
+    describe a position identically. Entry/SL/TP alone are not enough to decide
+    whether to trail or close, so current price, unrealised PnL in R, MFE/MAE,
+    time in trade and ATR are included when the caller supplies them.
+    """
+    take_profit_text = f"{take_profit:g}" if take_profit is not None else "unknown"
+    lines = [
+        "### Open position to manage",
+        f"symbol={position.symbol} side={position.side} "
+        f"entry={position.entry_price:g} amount={position.amount:g} "
+        f"stop_loss={stop_loss:g} take_profit={take_profit_text} "
+        f"opened={position.open_date or 'unknown'}",
+    ]
+    metrics = metrics or {}
+    if metrics.get("current_price") is not None:
+        lines.append(f"current_price={metrics['current_price']:g}")
+    if metrics.get("pnl_R") is not None:
+        lines.append(f"unrealised_pnl_R={metrics['pnl_R']:+.2f}")
+    if metrics.get("mfe_R") is not None and metrics.get("mae_R") is not None:
+        lines.append(f"mfe_R={metrics['mfe_R']:+.2f} mae_R={metrics['mae_R']:+.2f}")
+    if metrics.get("hours_in_trade") is not None:
+        lines.append(f"hours_in_trade={metrics['hours_in_trade']:.1f}")
+    if metrics.get("atr") is not None:
+        pct = metrics.get("atr_pct")
+        lines.append(
+            f"atr={metrics['atr']:g}" + (f" ({pct:.2f}% of price)" if pct is not None else "")
+        )
+    lines.append(
+        "If you would adjust this position, answer UPDATE with a new stop_loss "
+        "and/or take_profit (tighten the stop, improve the target, or move it to "
+        "break-even). If you would close it, answer CLOSE. Do not answer BUY or "
+        "SELL for an already open position."
+    )
+    return "\n".join(lines)

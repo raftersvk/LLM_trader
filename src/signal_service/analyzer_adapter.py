@@ -128,6 +128,33 @@ SIGNAL_OUTPUT_CONTRACT = (
     "is mandatory on every cycle.\n"
 )
 
+#: Position-management output contract. It replaces the entry contract when the
+#: caller passes an ``UpdateContext``: the same trading template is kept, but the
+#: trailing "authoritative" block must allow UPDATE/CLOSE instead of forbidding
+#: them. Without this split the model was told "Never emit CLOSE, UPDATE" while
+#: the position block asked it to do exactly that, so updates were never
+#: produced.
+POSITION_OUTPUT_CONTRACT = (
+    "POSITION MANAGEMENT OUTPUT CONTRACT (authoritative; overrides any conflicting "
+    "style guidance):\n"
+    "- Respond with exactly ONE JSON object and nothing else: no prose, no markdown, "
+    "no code fences and no comments before or after it.\n"
+    '- Required shape: {"analysis": {"signal": "UPDATE|CLOSE", '
+    '"confidence": <integer 0-100>, "stop_loss": <number|null>, '
+    '"take_profit": <number|null>, "reasoning": "<why>", "symbol": "<pair>"}}.\n'
+    "- signal MUST be exactly one of UPDATE or CLOSE. Never emit BUY, SELL or HOLD "
+    "for an already open position.\n"
+    "- UPDATE means keep the position open and move the stop-loss and/or take-profit. "
+    "Provide the new absolute price(s); null keeps the current level.\n"
+    "- CLOSE means exit the position now for the reason in reasoning.\n"
+    "- The new stop_loss must be on the loss side of the current price and may only "
+    "tighten (fixed: the strategy refuses a wider stop beyond 1.5x the original). "
+    "take_profit, when provided, must be on the profit side and may only improve.\n"
+    "- confidence MUST be an integer from 0 to 100, or one of HIGH, MEDIUM, LOW.\n"
+    "- NEVER answer with an analysis-only envelope or replace the decision object "
+    "with a narrative report. The decision object above is mandatory.\n"
+)
+
 #: One-shot repair instruction. Kept short so a repair reuses the original
 #: answer instead of paying for a second full market-analysis prompt.
 JSON_REPAIR_INSTRUCTION = (
@@ -491,11 +518,16 @@ class PairAnalyzer:
         result: Dict[str, Any]
         window_state: Dict[str, bool] = {"empty": False}
         try:
+            position_mode = update_context is not None
             if candle_open_dt is None:
-                result = await self._analyze_market(position_context=position_context)
+                result = await self._analyze_market(
+                    position_context=position_context, position_mode=position_mode
+                )
             else:
                 with ClosedCandleWindow(self.engine, self.timeframe, candle_open_dt) as window_state:
-                    result = await self._analyze_market(position_context=position_context)
+                    result = await self._analyze_market(
+                        position_context=position_context, position_mode=position_mode
+                    )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Analysis failed for %s: %s", self.symbol, exc)
             return self._hold_fallback(reasoning=f"analysis error: {exc}", candle_open_dt=candle_open_dt)
@@ -538,7 +570,9 @@ class PairAnalyzer:
                 "(finish_reason=%s, content_chars=%d)",
                 self.symbol, finish_reason or "unknown", len(original_raw),
             )
-            rerun = await self._rerun_without_json_mode(candle_open_dt, position_context)
+            rerun = await self._rerun_without_json_mode(
+                candle_open_dt, position_context, position_mode=update_context is not None
+            )
             if rerun is None:
                 logger.warning("Invalid LLM response for %s: %s", self.symbol, ECHO_RERUN_FAILED_REASON)
                 model, provider = self._resolve_model_provider(result if isinstance(result, dict) else {})
@@ -702,6 +736,92 @@ class PairAnalyzer:
             self.timeframe,
             as_of,
         )
+
+    def position_metrics(self, position: Any, as_of: Optional[datetime] = None) -> Dict[str, Any]:
+        """Return closed-candle metrics for an open position.
+
+        Used only to enrich the position-management prompt: current price,
+        unrealised PnL in R, MFE/MAE since the entry and the current ATR. Every
+        value is optional and derived from candles already closed at ``as_of``;
+        a missing context yields an empty dict so the prompt degrades to entry,
+        side, SL/TP and open date.
+
+        Args:
+            position: A position snapshot-like object (side, entry_price,
+                stop_loss, open_date).
+            as_of: Reference time (candle close). Defaults to now.
+
+        Returns:
+            A dict with any of ``current_price``, ``pnl_R``, ``mfe_R``,
+            ``mae_R``, ``mfe_pct``, ``mae_pct``, ``hours_in_trade``, ``atr``,
+            ``atr_pct``.
+        """
+        context = getattr(self.engine, "context", None)
+        candles = getattr(context, "ohlcv_candles", None) if context is not None else None
+        if candles is None or len(candles) == 0:
+            return {}
+        rows = list(candles)
+        timestamps = getattr(context, "timestamps", None) if context is not None else None
+        if timestamps is not None and len(timestamps) == len(rows):
+            times = [self._as_datetime(value) for value in timestamps]
+        else:
+            times = None
+        ref = as_of or datetime.now(timezone.utc)
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=timezone.utc)
+        period = timedelta(seconds=timeframe_seconds(self.timeframe))
+        # Keep only candles closed at or before the reference time.
+        indices = [
+            i for i in range(len(rows))
+            if times is None or times[i] + period <= ref
+        ]
+        if not indices:
+            return {}
+        last = indices[-1]
+        current_price = float(rows[last][4])
+        entry = float(getattr(position, "entry_price", 0.0) or 0.0)
+        side = str(getattr(position, "side", "long") or "long").lower()
+        stop_loss = getattr(position, "stop_loss", None)
+        risk = abs(entry - float(stop_loss)) if isinstance(stop_loss, (int, float)) and stop_loss else None
+        opened = parse_iso(getattr(position, "open_date", None) or "")
+        window = [
+            i for i in indices
+            if opened is None or (times is not None and times[i] >= opened) or times is None
+        ]
+        if not window:
+            window = [last]
+        highs = [float(rows[i][2]) for i in window]
+        lows = [float(rows[i][3]) for i in window]
+        metrics: Dict[str, Any] = {"current_price": current_price}
+        if entry > 0:
+            if side == "short":
+                mfe_pct = (entry - min(lows)) / entry * 100.0
+                mae_pct = (max(highs) - entry) / entry * 100.0
+                pnl_pct = (entry - current_price) / entry * 100.0
+            else:
+                mfe_pct = (max(highs) - entry) / entry * 100.0
+                mae_pct = (entry - min(lows)) / entry * 100.0
+                pnl_pct = (current_price - entry) / entry * 100.0
+            metrics.update({"mfe_pct": round(mfe_pct, 4), "mae_pct": round(mae_pct, 4)})
+            if risk and risk > 0:
+                metrics["pnl_R"] = round((pnl_pct / 100.0) * entry / risk, 4)
+                metrics["mfe_R"] = round((mfe_pct / 100.0) * entry / risk, 4)
+                metrics["mae_R"] = round((mae_pct / 100.0) * entry / risk, 4)
+        if opened is not None:
+            metrics["hours_in_trade"] = round((ref - opened).total_seconds() / 3600.0, 2)
+        # ATR(14) on closed candles, same true-range definition as the engine.
+        atr_values: List[float] = []
+        start = max(1, last - 13)
+        for i in range(start, last + 1):
+            high, low = float(rows[i][2]), float(rows[i][3])
+            prev_close = float(rows[i - 1][4])
+            atr_values.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        if atr_values:
+            atr = sum(atr_values) / len(atr_values)
+            metrics["atr"] = round(atr, 8)
+            if current_price > 0:
+                metrics["atr_pct"] = round(atr / current_price * 100.0, 4)
+        return metrics
 
     def _analysis_as_of(self, candle_open_time: Optional[str]) -> datetime:
         """Reference time of the analysis: the analysed candle close or now."""
@@ -954,7 +1074,10 @@ class PairAnalyzer:
         return None
 
     async def _analyze_market(
-        self, json_mode: Optional[bool] = None, position_context: str = ""
+        self,
+        json_mode: Optional[bool] = None,
+        position_context: str = "",
+        position_mode: bool = False,
     ) -> Dict[str, Any]:
         """Call the engine statelessly (one analysis, no continuity state).
 
@@ -964,10 +1087,12 @@ class PairAnalyzer:
 
         ``position_context`` is empty in the default (stateless) mode. The
         position-aware mode passes a compact block so the model can propose a
-        position UPDATE; ``previous_response``/``brain_service`` stay None.
+        position UPDATE; ``previous_response``/``brain_service`` stay None and
+        the output contract allows UPDATE/CLOSE instead of forbidding them.
         """
         if json_mode is None:
             json_mode = self._json_format_enabled()
+        suffix = POSITION_OUTPUT_CONTRACT if position_mode else SIGNAL_OUTPUT_CONTRACT
         return await self.engine.analyze_market(
             previous_response=None,
             previous_indicators=None,
@@ -975,13 +1100,16 @@ class PairAnalyzer:
             performance_context="",
             brain_service=None,
             dynamic_thresholds=None,
-            system_prompt_suffix=SIGNAL_OUTPUT_CONTRACT,
+            system_prompt_suffix=suffix,
             response_format={"type": "json_object"} if json_mode else None,
             json_object_output=json_mode,
         )
 
     async def _rerun_without_json_mode(
-        self, candle_open_dt: Optional[datetime], position_context: str = "",
+        self,
+        candle_open_dt: Optional[datetime],
+        position_context: str = "",
+        position_mode: bool = False,
     ) -> Optional[tuple[Dict[str, Any], str]]:
         """Re-run the full analysis once without response_format after an echo.
 
@@ -992,11 +1120,13 @@ class PairAnalyzer:
         window_state: Dict[str, bool] = {"empty": False}
         try:
             if candle_open_dt is None:
-                result = await self._analyze_market(json_mode=False, position_context=position_context)
+                result = await self._analyze_market(
+                    json_mode=False, position_context=position_context, position_mode=position_mode
+                )
             else:
                 with ClosedCandleWindow(self.engine, self.timeframe, candle_open_dt) as window_state:
                     result = await self._analyze_market(
-                        json_mode=False, position_context=position_context
+                        json_mode=False, position_context=position_context, position_mode=position_mode
                     )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Full-analysis retry without JSON mode failed for %s: %s", self.symbol, exc)

@@ -47,8 +47,10 @@ from src.signal_service.service import SignalService
 from src.signal_service.storage import (
     PROJECT_ROOT,
     SignalStorage,
+    UpdateStorage,
     default_signals_dir,
     signal_file_path,
+    update_file_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,6 +133,26 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--use-chart", type=_parse_bool_flag, default="true")
     replay.add_argument("--timeout-seconds", type=float, default=300.0)
     replay.add_argument("--jev-mode", default=JevMode.OFF.value, choices=[m.value for m in JevMode])
+
+    replay_positions = sub.add_parser(
+        "replay-positions",
+        help="Position-aware replay: reuse entries, emit UPDATE/CLOSE only for open candles",
+    )
+    replay_positions.add_argument("--pairs", default="BTC/USDT")
+    replay_positions.add_argument("--timeframe", default="4h")
+    replay_positions.add_argument("--start", required=True)
+    replay_positions.add_argument("--end", required=True)
+    replay_positions.add_argument("--as-of", default=None)
+    replay_positions.add_argument("--candles", required=True)
+    replay_positions.add_argument(
+        "--entries", required=True,
+        help="Directory holding <SYMBOL>_<timeframe>.jsonl entry signals (reused, never regenerated)",
+    )
+    replay_positions.add_argument("--output", required=True, help="Updates directory")
+    replay_positions.add_argument("--no-news", action="store_true")
+    replay_positions.add_argument("--use-chart", type=_parse_bool_flag, default="true")
+    replay_positions.add_argument("--timeout-seconds", type=float, default=300.0)
+    replay_positions.add_argument("--max-hold-hours", type=float, default=24.0)
 
     validate = sub.add_parser("validate", help="Validate JSONL signal files")
     validate.add_argument("--input", default=DEFAULT_SIGNALS_DIR)
@@ -370,6 +392,65 @@ def _has_closed_candle(
     return any(ts + period <= as_of for ts in timestamps)
 
 
+async def _replay_positions_command(args: argparse.Namespace) -> None:
+    """Manage simulated open positions on top of existing entry signals.
+
+    Unlike ``replay``, this never re-analyses the entry candles: it loads the
+    existing JSONL, simulates fills, and calls the LLM only when a position is
+    still open at a candle close. That keeps a 7-day backtest to one update call
+    per open-position candle instead of one per candle.
+    """
+    from src.signal_service.replay_positions import (
+        load_entries,
+        replay_positions_for_pair,
+    )
+
+    pairs = [pair.strip() for pair in args.pairs.split(",") if pair.strip()]
+    if len(pairs) != 1:
+        raise ValueError("replay-positions supports exactly one pair per invocation in v1")
+    symbol = pairs[0]
+    start = parse_iso(args.start if "T" in args.start else args.start + "T00:00:00Z")
+    end = parse_iso(args.end if "T" in args.end else args.end + "T00:00:00Z")
+    as_of_cap = parse_iso(args.as_of) if args.as_of else None
+    candles, timestamps = _load_candles_csv(args.candles)
+    if not timestamps:
+        raise ValueError(f"no candles found in {args.candles}: nothing to replay")
+
+    root = _load_engine_factory()
+    deps = await root.build_dependencies()
+    engines = await _build_initialized_engines(
+        [symbol], deps["market_analyzer_factory"], deps["exchange_manager"], args.timeframe,
+    )
+    analyzer = PairAnalyzer(
+        engine=engines[symbol],
+        symbol=symbol,
+        timeframe=args.timeframe,
+        use_news=not args.no_news,
+        use_chart=args.use_chart,
+        # Position management is exempt from JEV; off avoids pointless calls.
+        jev_gate=_build_jev_gate("off"),
+    )
+    token = f"{symbol.replace('/', '_')}_{args.timeframe}.jsonl"
+    entries = load_entries(os.path.join(args.entries, token))
+    os.makedirs(args.output, exist_ok=True)
+    storage = UpdateStorage(update_file_path(args.output, symbol, args.timeframe))
+    stats = await replay_positions_for_pair(
+        analyzer=analyzer,
+        symbol=symbol,
+        timeframe=args.timeframe,
+        candles=candles,
+        timestamps=timestamps,
+        entries=entries,
+        start=start,
+        end=end,
+        update_storage=storage,
+        max_hold_hours=args.max_hold_hours,
+        timeout_seconds=args.timeout_seconds,
+        as_of_cap=as_of_cap,
+    )
+    print(json.dumps({"symbol": symbol, **stats.as_dict()}, indent=2, default=str))
+
+
 async def _replay_command(args: argparse.Namespace) -> None:
     pairs: List[str] = args.pairs.split(",")
     if len(pairs) != 1:
@@ -573,6 +654,9 @@ def main(argv: List[str] = None) -> int:
         _force_exit(0)
     if command == "replay":
         asyncio.run(_replay_command(args))
+        _force_exit(0)
+    if command == "replay-positions":
+        asyncio.run(_replay_positions_command(args))
         _force_exit(0)
     print(f"Unknown command: {command}")
     return 2

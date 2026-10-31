@@ -22,7 +22,12 @@ from src.signal_service.analyzer_adapter import (
 )
 from src.signal_service.contract import iso_z, parse_iso, timeframe_seconds, utc_now_iso
 from src.signal_service.jev_gate import JevGate
-from src.signal_service.positions import PositionSnapshot, PositionsSnapshot, load_positions
+from src.signal_service.positions import (
+    PositionSnapshot,
+    PositionsSnapshot,
+    format_position_context,
+    load_positions,
+)
 from src.signal_service.storage import (
     SignalStorage,
     UpdateStorage,
@@ -295,6 +300,14 @@ class SignalService:
                 continue
             latest = latest_by_position.get(position.position_id)
             revision = (latest.revision or 0) + 1 if latest is not None else 1
+            as_of = parse_iso(candle_open_iso) + timedelta(
+                seconds=timeframe_seconds(self.timeframe)
+            )
+            try:
+                metrics = analyzer.position_metrics(position, as_of=as_of)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.debug("Position metrics unavailable for %s: %s", symbol, exc)
+                metrics = {}
             ctx = UpdateContext(
                 position_id=position.position_id,
                 position_side=position.side,
@@ -311,7 +324,9 @@ class SignalService:
                 signal = await asyncio.wait_for(
                     analyzer.analyze(
                         candle_open_time=candle_open_iso,
-                        position_context=self._position_context_text(position, stop_loss, take_profit),
+                        position_context=self._position_context_text(
+                            position, stop_loss, take_profit, metrics
+                        ),
                         update_context=ctx,
                     ),
                     timeout=self.timeout_seconds,
@@ -361,20 +376,13 @@ class SignalService:
 
     @staticmethod
     def _position_context_text(
-        position: PositionSnapshot, stop_loss: float, take_profit: Optional[float]
+        position: PositionSnapshot,
+        stop_loss: float,
+        take_profit: Optional[float],
+        metrics: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Compact position block injected into the position-aware prompt."""
-        take_profit_text = f"{take_profit:g}" if take_profit is not None else "unknown"
-        return (
-            "### Open position to manage\n"
-            f"symbol={position.symbol} side={position.side} "
-            f"entry={position.entry_price:g} amount={position.amount:g} "
-            f"stop_loss={stop_loss:g} take_profit={take_profit_text} "
-            f"opened={position.open_date or 'unknown'}\n"
-            "If you would adjust this position, answer UPDATE with a new stop_loss "
-            "and/or take_profit. If you would close it, answer CLOSE. Do not answer "
-            "BUY or SELL for an already open position."
-        )
+        """Return the shared position-management prompt block."""
+        return format_position_context(position, stop_loss, take_profit, metrics)
 
     def last_closed_candle_open(self, now: Optional[datetime] = None) -> datetime:
         """Return the open time of the most recent *closed* candle.
