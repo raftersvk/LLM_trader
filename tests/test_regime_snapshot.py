@@ -641,3 +641,24 @@ def test_adapter_treats_raw_long_term_rows_as_missing():
     assert snapshot["regime"] == "trend_up"
     assert snapshot["daily_trend"] is None
     assert snapshot["htf_alignment"] == "neutral"
+
+
+def test_adapter_treats_a_numpy_long_term_series_as_missing():
+    """A raw NumPy daily series must not raise on truthiness inside the snapshot."""
+    np = pytest.importorskip("numpy")
+    engine = SimpleNamespace(prompt_builder=SimpleNamespace(regime_snapshot_provider=None))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    context = SimpleNamespace(
+        technical_data=_trend_up_inputs()["technical_data"],
+        long_term_data=np.asarray([[0, 90.0, 91.0, 89.0, 90.0, 1.0]]),
+        weekly_macro_indicators=None,
+        ohlcv_candles=[[0, 99.0, 106.0, 98.0, 105.0, 10.0]],
+        weekly_ohlcv=None,
+    )
+
+    snapshot = analyzer._regime_snapshot_from_context(context)
+
+    assert snapshot is not None
+    assert snapshot["regime"] == "trend_up"
+    assert snapshot["daily_trend"] is None
+    assert snapshot["htf_alignment"] == "neutral"
