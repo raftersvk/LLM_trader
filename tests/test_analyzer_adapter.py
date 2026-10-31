@@ -2146,6 +2146,33 @@ async def test_no_model_taxonomy_keeps_the_signal_at_v10_even_with_a_snapshot():
     signal.validate()
 
 
+@pytest.mark.asyncio
+async def test_htf_alignment_alone_does_not_bump_to_v12():
+    """v1.2 requires a model-emitted setup/regime, not a lone htf echo."""
+    raw = (
+        '{"signal": "BUY", "confidence": "HIGH", "stop_loss": 67000.0, '
+        '"take_profit": 70000.0, "position_size": 5, "reasoning": "breakout", '
+        '"htf_alignment": "aligned"}'
+    )
+    engine = FakeEngine(raw_response=raw, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": 31.0,
+        "regime": "trend_up",
+        "htf_alignment": "aligned",
+        "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.schema_version == "1.0"
+    assert signal.setup is None
+    assert signal.regime is None
+    assert signal.htf_alignment is None
+    assert "htf_alignment" not in signal.to_dict()
+    signal.validate()
+
+
 @pytest.mark.parametrize(("snapshot_regime", "allowed_setups"), [
     ("high_vol", []),
     ("low_vol", []),

@@ -1864,11 +1864,11 @@ class PairAnalyzer:
         if veto_reason is not None:
             reasoning = f"{reasoning} [JEV veto: {veto_reason}]"[:8000]
         setup, regime, htf_alignment = self._resolved_taxonomy(draft)
-        schema_version = (
-            "1.2"
-            if setup is not None or regime is not None
-            else "1.0"
-        )
+        # The version bump follows the model-provided fields only: the snapshot
+        # always carries a regime/htf, and letting it bump every record would
+        # make strict 1.0/1.1 readers reject signals with no emitted taxonomy.
+        emitted_taxonomy = draft.setup is not None or draft.regime is not None
+        schema_version = "1.2" if emitted_taxonomy else "1.0"
         signal = Signal(
             schema_version=schema_version,
             decision_id=build_decision_id(self.symbol, self.timeframe, open_at),
