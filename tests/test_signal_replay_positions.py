@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -11,8 +12,10 @@ import pytest
 
 from src.signal_service.contract import Signal
 from src.signal_service.replay_positions import (
+    DEFAULT_MIN_RR,
     _entry_index,
     _exit_on_candle,
+    entry_price_gate,
     replay_positions_for_pair,
     SimPosition,
 )
@@ -97,8 +100,10 @@ class _FakeAnalyzer:
         self.responses = list(responses)
         self.delay = delay
         self.calls = []
+        self.metrics_stops = []
 
     def position_metrics(self, snapshot, as_of=None):
+        self.metrics_stops.append(snapshot.stop_loss)
         return {"current_price": snapshot.current_price}
 
     async def analyze(self, candle_open_time=None, position_context="", update_context=None):
@@ -131,6 +136,7 @@ def _run(
     market=None,
     start=None,
     storage=None,
+    min_rr=DEFAULT_MIN_RR,
 ):
     storage = storage or UpdateStorage(str(tmp_path / "BTC_USDT_4h.jsonl"))
     stats = asyncio.run(
@@ -147,6 +153,7 @@ def _run(
             max_hold_hours=max_hold_hours,
             timeout_seconds=timeout_seconds,
             market=market,
+            min_rr=min_rr,
             injector=_DummyInjector(),
         )
     )
@@ -253,13 +260,18 @@ def test_replay_respects_max_hold_hours(tmp_path):
         _candle(12, 100.8, 101.0, 100.0, 100.2),
     ]
     analyzer = _FakeAnalyzer([_update("HOLD", 1)])
-    stats, _ = _run(
+    stats, storage = _run(
         tmp_path, analyzer, candles, _ts(0, 4, 8, 12),
         max_hold_hours=4.0,
     )
-    # Opened at 04:00, TTL at the 08:00 open (4h) closes it with no LLM call.
+    # Opened at 04:00, TTL at the 08:00 open (4h) closes it with no LLM call,
+    # and the simulated exit is explicit in the persisted stream.
     assert [c["candle"] for c in analyzer.calls] == ["2026-10-01T04:00:00Z"]
     assert stats.analysis_calls == 1
+    assert stats.ttl_exits == 1 and stats.closed_sim == 1
+    assert stats.closes == 1
+    row = json.loads(open(storage.path).read().splitlines()[-1])
+    assert row["action"] == "CLOSE" and row["close_reason"] == "signal_ttl"
 
 
 def test_exit_on_candle_gap_fills_at_open():
@@ -324,10 +336,11 @@ def test_replay_rerun_reapplies_deduplicated_updates(tmp_path):
     lines_after_first = len(open(storage.path).read().splitlines())
     assert stats1.updates == 2 and lines_after_first == 2
 
-    # A rerun must reproduce the same trajectory: the deduplicated revision 1
-    # still tightens the in-memory stop so revision 2 is requested.
+    # Rerun with a non-deterministic model: revision 1 comes back different and
+    # is deduplicated. The simulation must use the PERSISTED u1 (sl=100.0), not
+    # the dropped proposal (sl=100.3), so u2 is still requested.
     second = _FakeAnalyzer([
-        _update("UPDATE", 1, sl=100.0, tp=115.0),
+        _update("UPDATE", 1, sl=100.3, tp=115.0),
         _update("UPDATE", 2, sl=100.4, tp=115.0),
     ])
     stats2, _ = _run(
@@ -335,6 +348,7 @@ def test_replay_rerun_reapplies_deduplicated_updates(tmp_path):
     )
     assert stats2.updates == 0
     assert [c["revision"] for c in second.calls] == [1, 2]
+    assert second.calls[1]["sl"] == 100.0, "rerun must apply the stored revision"
     assert lines_after_first == len(open(storage.path).read().splitlines())
 
 
@@ -410,7 +424,15 @@ def test_replay_positions_parser_exposes_options():
     assert args.timeframe == "4h"
     assert args.max_hold_hours == 24.0
     assert args.timeout_seconds == 300.0
+    assert args.signal_min_rr == DEFAULT_MIN_RR
     assert args.market is None
+    alias = _build_parser().parse_args([
+        "replay-positions",
+        "--start", "2026-01-01", "--end", "2026-01-02",
+        "--candles", "c.csv", "--entries", "entries", "--output", "updates",
+        "--signal-max-hold-hours", "8",
+    ])
+    assert alias.max_hold_hours == 8.0
 
 
 def test_replay_positions_command_reports_stats(tmp_path, monkeypatch, capsys):
@@ -630,3 +652,176 @@ def test_replay_update_is_indexed_by_c_real_alias_function(tmp_path):
     index = module.index_updates([row])
     assert "entry:entry-1" in index
     assert [u["revision"] for u in index["entry:entry-1"]] == [1]
+
+
+def _entry_variant(**overrides):
+    return {**_entry(), **overrides}
+
+
+def test_entry_gate_refuses_entry_when_rr_is_too_low(tmp_path):
+    # Fill at 113: inside the bracket but reward 2 vs risk 18 -> RR < 1.5.
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 113.0, 114.0, 112.0, 113.5),
+    ]
+    analyzer = _FakeAnalyzer([])
+    stats, _ = _run(tmp_path, analyzer, candles, _ts(0, 4), end_hours=8)
+    assert analyzer.calls == []
+    assert stats.entries_refused == 1
+    assert stats.entries_entered == 0
+    assert stats.analysis_calls == 0
+
+
+def test_entry_gate_refuses_fill_outside_the_bracket(tmp_path):
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 120.0, 121.0, 119.0, 120.0),  # above TP 115
+    ]
+    analyzer = _FakeAnalyzer([])
+    stats, _ = _run(tmp_path, analyzer, candles, _ts(0, 4), end_hours=8)
+    assert analyzer.calls == []
+    assert stats.entries_refused == 1
+
+
+def test_spot_sell_entry_is_refused(tmp_path):
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 100.0, 101.0, 99.0, 100.5),
+    ]
+    analyzer = _FakeAnalyzer([])
+    stats, _ = _run(
+        tmp_path, analyzer, candles, _ts(0, 4), end_hours=8,
+        entries=[_entry_variant(action="SELL", sl=105.0, tp=90.0)],
+        market="spot",
+    )
+    assert analyzer.calls == []
+    assert stats.entries_refused == 1
+    assert stats.entries_entered == 0
+
+
+def test_futures_sell_entry_is_allowed(tmp_path):
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 100.0, 101.0, 99.0, 100.5),
+    ]
+    analyzer = _FakeAnalyzer([_update("HOLD", 1)])
+    stats, _ = _run(
+        tmp_path, analyzer, candles, _ts(0, 4), end_hours=8,
+        entries=[_entry_variant(action="SELL", sl=105.0, tp=90.0)],
+        market="futures",
+    )
+    assert stats.entries_entered == 1
+    assert stats.analysis_calls == 1
+    assert analyzer.calls[0]["position_id"] == "futures:replay:entry-1"
+
+
+def test_expired_entry_is_not_simulated(tmp_path):
+    entry = _entry_variant(
+        candle_close_time="2026-10-01T00:00:00Z",
+        expires_at="2026-10-01T02:00:00Z",
+    )
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 100.0, 101.0, 99.0, 100.5),
+    ]
+    analyzer = _FakeAnalyzer([])
+    stats, _ = _run(
+        tmp_path, analyzer, candles, _ts(0, 4), end_hours=8,
+        entries=[entry], start=T0 + timedelta(hours=4),
+    )
+    assert analyzer.calls == []
+    assert stats.entries_expired == 1
+
+
+def test_gap_after_signal_fills_on_next_available_candle(tmp_path):
+    # The 04:00 candle is missing; the entry must fill at the 08:00 open, not
+    # be dropped by an exact-close lookup.
+    entry = _entry_variant(expires_at="2026-10-01T12:00:00Z")
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(8, 100.0, 101.0, 99.0, 100.5),
+    ]
+    analyzer = _FakeAnalyzer([_update("HOLD", 1)])
+    stats, _ = _run(
+        tmp_path, analyzer, candles, _ts(0, 8), end_hours=12, entries=[entry],
+    )
+    assert stats.entries_entered == 1
+    assert [c["candle"] for c in analyzer.calls] == ["2026-10-01T08:00:00Z"]
+    assert analyzer.calls[0]["entry_price"] == 100.0
+
+
+def test_position_metrics_uses_entry_stop_not_trailed_stop(tmp_path):
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 100.0, 101.0, 99.0, 100.5),
+        _candle(8, 100.5, 101.0, 100.2, 100.8),
+    ]
+    analyzer = _FakeAnalyzer([
+        _update("UPDATE", 1, sl=100.0, tp=115.0),
+        _update("HOLD", 2),
+    ])
+    stats, _ = _run(tmp_path, analyzer, candles, _ts(0, 4, 8), end_hours=12)
+    assert stats.analysis_calls == 2
+    # Entry SL (95) stays the fixed R denominator after the stop trails to 100.
+    assert analyzer.metrics_stops == [95.0, 95.0]
+
+
+def test_entry_without_decision_id_is_ignored(tmp_path):
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 100.0, 101.0, 99.0, 100.5),
+    ]
+    analyzer = _FakeAnalyzer([])
+    stats, _ = _run(
+        tmp_path, analyzer, candles, _ts(0, 4), end_hours=8,
+        entries=[_entry_variant(decision_id="")],
+    )
+    assert stats.entries_reused == 0
+    assert analyzer.calls == []
+
+
+def test_injector_as_of_is_always_the_candle_close(tmp_path):
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 100.0, 101.0, 99.0, 100.5),
+    ]
+    injector = _DummyInjector()
+    asyncio.run(
+        replay_positions_for_pair(
+            analyzer=_FakeAnalyzer([_update("HOLD", 1)]),
+            symbol=SYMBOL,
+            timeframe="4h",
+            candles=np.array(candles, dtype=np.float64),
+            timestamps=_ts(0, 4),
+            entries=[_entry()],
+            start=T0,
+            end=T0 + timedelta(hours=8),
+            update_storage=UpdateStorage(str(tmp_path / "u.jsonl")),
+            injector=injector,
+        )
+    )
+    assert injector.as_of == [T0 + timedelta(hours=4), T0 + timedelta(hours=8)]
+
+
+@pytest.mark.skipif(
+    C_SIGNAL_LOGIC is None,
+    reason="C's signal_logic with the entry price gate is not available",
+)
+def test_entry_gate_matches_c_signal_logic():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("c_signal_logic_gate", C_SIGNAL_LOGIC)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    cases = [
+        ({"action": "BUY", "sl": 95.0, "tp": 115.0}, "long", 100.0),
+        ({"action": "BUY", "sl": 95.0, "tp": 115.0}, "long", 113.0),
+        ({"action": "BUY", "sl": 95.0, "tp": 115.0}, "long", 120.0),
+        ({"action": "SELL", "sl": 105.0, "tp": 90.0}, "short", 100.0),
+        ({"action": "SELL", "sl": 105.0, "tp": 90.0}, "short", 96.0),
+    ]
+    for entry, side, rate in cases:
+        ours = entry_price_gate(entry, side, rate, DEFAULT_MIN_RR)
+        theirs = module.entry_price_gate(entry, side, rate, min_rr=DEFAULT_MIN_RR)
+        assert ours[0] is theirs[0], (entry, side, rate, ours, theirs)

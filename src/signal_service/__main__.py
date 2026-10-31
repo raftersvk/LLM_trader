@@ -42,6 +42,7 @@ from src.signal_service.contract import (
     timeframe_seconds,
 )
 from src.signal_service.jev_client import JevClient
+from src.signal_service.replay_positions import DEFAULT_MIN_RR
 from src.signal_service.jev_gate import JevGate, JevMode, parse_mode
 from src.signal_service.service import SignalService
 from src.signal_service.storage import (
@@ -152,11 +153,22 @@ def _build_parser() -> argparse.ArgumentParser:
     replay_positions.add_argument("--no-news", action="store_true")
     replay_positions.add_argument("--use-chart", type=_parse_bool_flag, default="true")
     replay_positions.add_argument("--timeout-seconds", type=float, default=300.0)
-    replay_positions.add_argument("--max-hold-hours", type=float, default=24.0)
+    replay_positions.add_argument(
+        "--max-hold-hours", "--signal-max-hold-hours", dest="max_hold_hours",
+        type=float, default=24.0,
+        help="Holding TTL, mirroring the strategy's signal_max_hold_hours "
+             "(default 24h, floored at 1h); a TTL exit emits a CLOSE",
+    )
+    replay_positions.add_argument(
+        "--signal-min-rr", type=float, default=DEFAULT_MIN_RR,
+        help="Minimum reward/risk at the real fill price, mirroring the "
+             "strategy's signal_min_rr (default 1.5)",
+    )
     replay_positions.add_argument(
         "--market", choices=["spot", "futures"], default=None,
         help="Optional market label embedded in emitted position ids "
-             "(use a separate --output per market: decision ids are shared)",
+             "(spot is long-only; use a separate --output per market because "
+             "decision ids are shared)",
     )
 
     validate = sub.add_parser("validate", help="Validate JSONL signal files")
@@ -462,6 +474,7 @@ async def _replay_positions_command(args: argparse.Namespace) -> None:
         timeout_seconds=args.timeout_seconds,
         as_of_cap=as_of_cap,
         market=args.market,
+        min_rr=args.signal_min_rr,
     )
     print(json.dumps({"symbol": symbol, **stats.as_dict()}, indent=2, default=str))
 
