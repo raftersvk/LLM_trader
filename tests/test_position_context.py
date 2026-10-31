@@ -83,3 +83,17 @@ def test_position_metrics_computes_r_and_atr():
     assert metrics["hours_in_trade"] == 80.0
     assert metrics["atr"] > 0
     assert 0 < metrics["atr_pct"] < 10
+
+
+def test_position_metrics_without_open_date_degrades():
+    """A missing open_date must not raise: hours are just omitted."""
+    candles, timestamps = _candles(20)
+    analyzer = PairAnalyzer(engine=_Engine(candles, timestamps), symbol="BTC/USDT", timeframe="4h")
+    position = PositionSnapshot(
+        position_id="entry-1", symbol="BTC/USDT", side="long", entry_price=100.0,
+        amount=1.0, stop_loss=95.0,
+    )
+    metrics = analyzer.position_metrics(position, as_of=timestamps[-1] + timedelta(hours=4))
+    assert metrics["current_price"] == 120.0
+    assert "hours_in_trade" not in metrics
+    assert metrics["pnl_R"] > 0

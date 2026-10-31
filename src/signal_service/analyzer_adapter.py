@@ -783,7 +783,8 @@ class PairAnalyzer:
         side = str(getattr(position, "side", "long") or "long").lower()
         stop_loss = getattr(position, "stop_loss", None)
         risk = abs(entry - float(stop_loss)) if isinstance(stop_loss, (int, float)) and stop_loss else None
-        opened = parse_iso(getattr(position, "open_date", None) or "")
+        opened_raw = getattr(position, "open_date", None)
+        opened = parse_iso(opened_raw) if opened_raw else None
         window = [
             i for i in indices
             if opened is None or (times is not None and times[i] >= opened) or times is None
