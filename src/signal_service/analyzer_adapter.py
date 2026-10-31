@@ -1827,8 +1827,10 @@ class PairAnalyzer:
         regime = draft.regime
         htf_alignment = draft.htf_alignment
         # Only records where the model actually emitted a taxonomy field become
-        # v1.2. A snapshot alone must not upgrade every production signal, which
-        # would break strict 1.0/1.1 readers for no emitted taxonomy.
+        # v1.2. htf_alignment is a taxonomy field too: a lone htf echo must be
+        # kept and may then take the snapshot's overrides. A snapshot alone must
+        # not upgrade every production signal, which would break strict
+        # 1.0/1.1 readers for no emitted taxonomy.
         if setup is None and regime is None and htf_alignment is None:
             return None, None, None
         if draft.action not in ("BUY", "SELL") and setup is not None:
