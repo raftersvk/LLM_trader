@@ -53,6 +53,10 @@ class PromptBuilder:
         # Prompt clock: None means the current wall clock; replay/signals set
         # the analysed candle close so no later date leaks into the prompt.
         self.analysis_as_of: datetime | None = None
+        # Optional deterministic regime block provider. The signal service
+        # installs one so the block is computed from the prompt's fresh context;
+        # the live bot leaves it unset and its prompt is unchanged.
+        self.regime_snapshot_provider = None
         self.config = config
         if format_utils is None:
             raise ValueError("format_utils is required for PromptBuilder")
@@ -156,6 +160,16 @@ class PromptBuilder:
         if context.ohlcv_candles is not None:
             sections.append(self.build_market_data_section(context.ohlcv_candles))
         sections.append(self.technical_analysis_formatter.format_technical_analysis(context, self.timeframe))
+
+        if self.regime_snapshot_provider is not None:
+            try:
+                regime_block = self.regime_snapshot_provider(context)
+            except Exception as exc:  # pylint: disable=broad-exception-caught  # noqa: BLE001
+                regime_block = None
+                if self.logger is not None:
+                    self.logger.warning("Regime snapshot block failed: %s", exc)
+            if regime_block:
+                sections.append(regime_block)
 
         sections.append(self.build_market_period_metrics_section(context.market_metrics))
 
@@ -608,7 +622,8 @@ class PromptBuilder:
         decision_rules = self.template_manager.build_decision_rules(
             has_chart_analysis,
             model_verbosity=eff_verbosity,
-            dynamic_thresholds=dynamic_thresholds
+            dynamic_thresholds=dynamic_thresholds,
+            has_risk_profile=bool(brain_context and "ACTIVE RISK PROFILE" in brain_context),
         )
 
         response_template = self.template_manager.build_response_template(

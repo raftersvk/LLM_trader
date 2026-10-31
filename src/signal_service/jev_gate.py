@@ -3,12 +3,16 @@
 The gate is a filter, never an executor. It supports four modes:
 
 * ``off``       no JEV call at all (default per PLAN Q6);
-* ``pre``       JEV decides whether the LLM is worth calling at all;
-* ``post``      JEV vetoes a non-HOLD LLM decision;
+* ``pre``       JEV is consulted for logging and decision enrichment only;
+* ``post``      the short-only bias filter vetoes a non-HOLD LLM decision;
 * ``pre_post``  both checks, each with its own JEV call.
 
-HOLD is always a legitimate decision and is never blocked: the post gate does
-not even spend a JEV call on it.
+The production policy is **bias only, asymmetric short** (post-OOS decision):
+a SELL is admitted only when ``jev.bias == "short"``; a BUY is never filtered
+by the JEV bias. The noul tradeability probability is kept in the payload and
+logged, but it is never a threshold, the ``trend_down`` short exemption and
+the regime gate are retired. HOLD is always a legitimate decision and is never
+blocked: the post gate does not even spend a JEV call on it.
 
 The state builder only uses candles that are fully closed at the reference
 time. No news, no future candle and no Freqtrade position ever enters the v1
@@ -31,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_BIAS = frozenset({"long", "short", "none"})
 ALLOWED_REGIME = frozenset({"trend", "range", "high_vol", "low_vol"})
+#: Only used to derive the advisory ``tradeability`` boolean carried in the
+#: payload. The gate never filters on it: noul is logged, not enforced.
 DEFAULT_TRADEABILITY_THRESHOLD = 0.5
 #: Default question set. v1 is the production wording and must stay the
 #: default so every existing run is byte-comparable.
@@ -192,6 +198,7 @@ def build_state(
     timestamps: Optional[Sequence[datetime]] = None,
     as_of: Optional[datetime] = None,
     calibration_context: bool = False,
+    regime_snapshot: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the JEV state from closed candles only.
 
@@ -205,6 +212,10 @@ def build_state(
         as_of: Reference time; defaults to the current UTC time.
         calibration_context: Add the optional v2 reference block computed from
             past closes only. ``False`` keeps the v1 state byte-comparable.
+        regime_snapshot: Optional deterministic regime snapshot. When omitted
+            the v1 state stays byte-comparable; when supplied its trend,
+            volatility, HTF and relative-strength fields are added for the
+            regime-aware gate. The state is not part of the public contract.
 
     Returns:
         A JSON-serializable state dict for JEV.
@@ -287,9 +298,26 @@ def build_state(
         },
         "recent_closes": [_round(value) for value in closes[-8:]],
     }
+    if regime_snapshot:
+        _apply_regime_snapshot(state, regime_snapshot)
     if calibration_context:
         state["calibration_context"] = _calibration_context(closes)
     return state
+
+
+def _apply_regime_snapshot(state: Dict[str, Any], snapshot: Dict[str, Any]) -> None:
+    """Add the deterministic regime fields to the JEV state (non-contractual)."""
+    state["adx"] = _round(snapshot.get("adx"))
+    state["choppiness"] = _round(snapshot.get("choppiness"))
+    state["htf_alignment"] = snapshot.get("htf_alignment")
+    state["extension_atr"] = _round(snapshot.get("extension_atr"))
+    state["rs_btc_7d"] = _round(snapshot.get("rs_btc_7d"))
+    state["rs_btc_30d"] = _round(snapshot.get("rs_btc_30d"))
+    state["deterministic_regime"] = snapshot.get("regime")
+    state["regime_confidence"] = _round(snapshot.get("confidence"))
+    state["no_trade"] = bool(snapshot.get("no_trade"))
+    if snapshot.get("allowed_setups") is not None:
+        state["allowed_setups"] = list(snapshot.get("allowed_setups") or [])
 
 
 # ------------------------------------------------------------------ questions
@@ -557,7 +585,6 @@ class JevGate:
         self,
         client: Optional[JevClient] = None,
         mode: Any = JevMode.OFF,
-        tradeability_threshold: float = DEFAULT_TRADEABILITY_THRESHOLD,
         min_confidence: Optional[float] = None,
     ) -> None:
         """Bind a client and mode.
@@ -565,14 +592,11 @@ class JevGate:
         Args:
             client: JevClient instance; required for any mode except ``off``.
             mode: off|pre|post|pre_post.
-            tradeability_threshold: noul probability needed to consider the
-                market tradeable.
             min_confidence: Optional score threshold below which a non-HOLD
                 decision is vetoed.
         """
         self.client = client
         self.mode = parse_mode(mode)
-        self.tradeability_threshold = tradeability_threshold
         self.min_confidence = min_confidence
         self.last_signal: Optional[JevSignal] = None
         self.last_error: Optional[str] = None
@@ -590,6 +614,25 @@ class JevGate:
         """True when the mode runs the post-LLM gate."""
         return self.mode in (JevMode.POST, JevMode.PRE_POST)
 
+    @staticmethod
+    def _log_consultation(scope: str, state: Dict[str, Any], signal: JevSignal) -> None:
+        """Log the advisory noul/bias values; they are never thresholds.
+
+        The post-OOS policy only filters shorts on ``bias == "short"``. noul is
+        kept in the log (and in the payload) so a later study can measure it,
+        but it must not gate the decision.
+        """
+        probability = signal.tradeability_probability
+        detail = "unknown" if probability is None else f"{probability:.3f}"
+        logger.info(
+            "JEV %s %s: noul=%s bias=%s regime=%s (advisory only)",
+            scope,
+            state.get("symbol", "?"),
+            detail,
+            signal.bias,
+            signal.regime,
+        )
+
     async def _consult(self, state: Dict[str, Any]) -> GateResult:
         """Call JEV once and parse the answer set.
 
@@ -606,7 +649,7 @@ class JevGate:
             )
         try:
             response = await self.client.ask(state, build_questions())
-            signal = parse_jev_signal(response, self.tradeability_threshold)
+            signal = parse_jev_signal(response)
         except JevError as exc:
             self.last_error = str(exc)
             logger.warning("JEV unavailable, failing open: %s", exc)
@@ -633,7 +676,12 @@ class JevGate:
         return GateResult(allowed=True, reason="JEV consulted", consulted=True, signal=signal)
 
     async def check_pre(self, state: Dict[str, Any]) -> GateResult:
-        """Decide whether the LLM should be called at all."""
+        """Consult JEV before the LLM call without blocking on noul or regime.
+
+        The pre-gate has no side, so it cannot apply the short-only bias rule.
+        It only enriches the decision and logs noul; any filtering happens in
+        the post-gate and in the adapter risk layer once the side is known.
+        """
         if not self.uses_pre():
             return GateResult(allowed=True, reason="JEV pre-gate disabled", consulted=False)
         result = await self._consult(state)
@@ -641,29 +689,21 @@ class JevGate:
             return result
         signal = result.signal
         assert signal is not None  # consulted implies parsed signal
-        if signal.tradeability is False:
-            probability = signal.tradeability_probability
-            detail = "unknown" if probability is None else f"{probability:.3f}"
-            return GateResult(
-                allowed=False,
-                reason=(
-                    "JEV pre-gate: not tradeable "
-                    f"(noul={detail} < {self.tradeability_threshold})"
-                ),
-                consulted=True,
-                signal=signal,
-            )
-        if signal.bias == "none":
-            return GateResult(
-                allowed=False,
-                reason="JEV pre-gate: bias none",
-                consulted=True,
-                signal=signal,
-            )
-        return GateResult(allowed=True, reason="JEV pre-gate: tradeable", consulted=True, signal=signal)
+        self._log_consultation("pre-gate", state, signal)
+        return GateResult(
+            allowed=True,
+            reason="JEV pre-gate: consulted (advisory only)",
+            consulted=True,
+            signal=signal,
+        )
 
     async def check_post(self, state: Dict[str, Any], action: str) -> GateResult:
-        """Veto a non-HOLD LLM decision. HOLD is never blocked."""
+        """Veto a non-HOLD LLM decision. HOLD is never blocked.
+
+        Policy: bias only, asymmetric short. A SELL is admitted only when the
+        parsed JEV bias is ``short``; a BUY is never filtered by the bias. A
+        missing/unparseable bias fails open, and noul is only logged.
+        """
         if not self.uses_post():
             return GateResult(allowed=True, reason="JEV post-gate disabled", consulted=False)
         normalized_action = str(action).upper()
@@ -678,29 +718,18 @@ class JevGate:
             return result
         signal = result.signal
         assert signal is not None  # consulted implies parsed signal
-        if signal.tradeability is False:
-            probability = signal.tradeability_probability
-            detail = "unknown" if probability is None else f"{probability:.3f}"
+        self._log_consultation("post-gate", state, signal)
+        if (
+            normalized_action == "SELL"
+            and signal.bias is not None
+            and signal.bias != "short"
+        ):
             return GateResult(
                 allowed=False,
                 reason=(
-                    "JEV veto: not tradeable "
-                    f"(noul={detail} < {self.tradeability_threshold})"
+                    "JEV veto: SELL requires short bias "
+                    f"(bias={signal.bias})"
                 ),
-                consulted=True,
-                signal=signal,
-            )
-        if normalized_action == "BUY" and signal.bias == "short":
-            return GateResult(
-                allowed=False,
-                reason="JEV veto: short bias conflicts with BUY",
-                consulted=True,
-                signal=signal,
-            )
-        if normalized_action == "SELL" and signal.bias == "long":
-            return GateResult(
-                allowed=False,
-                reason="JEV veto: long bias conflicts with SELL",
                 consulted=True,
                 signal=signal,
             )

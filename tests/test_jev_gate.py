@@ -269,26 +269,19 @@ async def test_off_mode_makes_no_call():
 
 
 @pytest.mark.asyncio
-async def test_pre_mode_blocks_untradeable_market():
-    gate = JevGate(client=FakeJevClient(_response(tradeable=0.2)), mode="pre")
-    state = {"symbol": SYMBOL}
+async def test_pre_mode_never_blocks_on_noul_or_none_bias(caplog):
+    """The pre-gate has no side, so it only logs noul/bias (advisory)."""
+    gate = JevGate(client=FakeJevClient(_response(tradeable=0.2, bias="none")), mode="pre")
 
-    result = await gate.check_pre(state)
+    with caplog.at_level("INFO"):
+        result = await gate.check_pre({"symbol": SYMBOL})
 
-    assert result.allowed is False
+    assert result.allowed is True
     assert result.consulted is True
-    assert "not tradeable" in result.reason
+    assert "advisory" in result.reason
     assert result.signal is not None and result.signal.tradeability is False
-
-
-@pytest.mark.asyncio
-async def test_pre_mode_blocks_none_bias():
-    gate = JevGate(client=FakeJevClient(_response(bias="none")), mode="pre")
-
-    result = await gate.check_pre({"symbol": SYMBOL})
-
-    assert result.allowed is False
-    assert "bias none" in result.reason
+    assert "noul=0.200" in caplog.text
+    assert "bias=none" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -314,25 +307,66 @@ async def test_post_mode_never_blocks_hold_and_does_not_call_jev():
 
 
 @pytest.mark.asyncio
-async def test_post_mode_vetoes_conflicting_bias():
-    buy_gate = JevGate(client=FakeJevClient(_response(bias="short")), mode="post")
-    sell_gate = JevGate(client=FakeJevClient(_response(bias="long")), mode="post")
+async def test_post_mode_short_is_accepted_only_on_short_bias(caplog):
+    """A SELL is admitted only when jev.bias == short, whatever noul says."""
+    client = FakeJevClient(_response(tradeable=0.01, bias="short"))
+    gate = JevGate(client=client, mode="post")
 
-    buy = await buy_gate.check_post({"symbol": SYMBOL}, "BUY")
-    sell = await sell_gate.check_post({"symbol": SYMBOL}, "SELL")
+    with caplog.at_level("INFO"):
+        result = await gate.check_post({"symbol": SYMBOL}, "SELL")
 
-    assert buy.allowed is False and "short bias conflicts with BUY" in buy.reason
-    assert sell.allowed is False and "long bias conflicts with SELL" in sell.reason
+    assert result.allowed is True
+    assert result.signal is not None and result.signal.tradeability is False
+    assert "noul=0.010" in caplog.text
+    assert "bias=short" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_post_mode_vetoes_untradeable_market():
-    gate = JevGate(client=FakeJevClient(_response(tradeable=0.1, bias="long")), mode="post")
+@pytest.mark.parametrize("bias", ["long", "none"])
+async def test_post_mode_vetoes_a_short_without_short_bias(bias):
+    gate = JevGate(client=FakeJevClient(_response(bias=bias)), mode="post")
+
+    result = await gate.check_post({"symbol": SYMBOL}, "SELL")
+
+    assert result.allowed is False
+    assert "SELL requires short bias" in result.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bias", ["short", "long", "none"])
+async def test_post_mode_never_filters_a_long_on_bias(bias):
+    """The asymmetric policy leaves BUY untouched by any JEV bias."""
+    gate = JevGate(client=FakeJevClient(_response(tradeable=0.01, bias=bias)), mode="post")
 
     result = await gate.check_post({"symbol": SYMBOL}, "BUY")
 
-    assert result.allowed is False
-    assert "JEV veto: not tradeable" in result.reason
+    assert result.allowed is True
+    assert result.signal is not None and result.signal.bias == bias
+
+
+@pytest.mark.asyncio
+async def test_post_mode_ignores_a_setup_key_not_produced_by_the_pipeline():
+    """No setup is wired into the state in P0, so it cannot change the veto."""
+    short_gate = JevGate(client=FakeJevClient(_response(bias="long")), mode="post")
+    long_gate = JevGate(client=FakeJevClient(_response(bias="short")), mode="post")
+    state = {"symbol": SYMBOL, "setup": "momentum_short"}
+
+    short = await short_gate.check_post(state, "SELL")
+    long = await long_gate.check_post({**state, "setup": "momentum_continuation"}, "BUY")
+
+    assert short.allowed is False and "SELL requires short bias" in short.reason
+    assert long.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_post_mode_logs_noul_but_never_vetoes_on_it(caplog):
+    gate = JevGate(client=FakeJevClient(_response(tradeable=0.0, bias="long")), mode="post")
+
+    with caplog.at_level("INFO"):
+        result = await gate.check_post({"symbol": SYMBOL}, "BUY")
+
+    assert result.allowed is True
+    assert "noul=0.000" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -486,18 +520,16 @@ async def test_adapter_off_mode_unchanged_and_no_call():
 
 
 @pytest.mark.asyncio
-async def test_adapter_pre_blocks_llm_call():
+async def test_adapter_pre_mode_consults_without_blocking_the_llm():
+    """noul is advisory: a low noul must not skip the LLM call."""
     client = FakeJevClient(_response(tradeable=0.2))
     analyzer = _analyzer(JevGate(client=client, mode="pre"))
 
     signal = await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
 
-    assert analyzer.engine.calls == 0
-    assert signal.action == "HOLD"
-    assert signal.source == "jev"
-    assert signal.risk_approved is False
-    assert signal.model == "jev-1.13"
-    assert "JEV pre-gate: not tradeable" in signal.reasoning
+    assert analyzer.engine.calls == 1
+    assert signal.action == "BUY"
+    assert signal.risk_approved is True
     assert signal.jev == {
         "model": "jev-1.13",
         "tradeability": False,
@@ -507,7 +539,8 @@ async def test_adapter_pre_blocks_llm_call():
 
 
 @pytest.mark.asyncio
-async def test_adapter_post_veto_sets_risk_false_with_reason():
+async def test_adapter_long_is_not_filtered_by_a_short_bias():
+    """Asymmetric policy: a BUY passes even when JEV bias is short."""
     client = FakeJevClient(_response(tradeable=0.9, bias="short"))
     analyzer = _analyzer(JevGate(client=client, mode="post"))
 
@@ -515,8 +548,7 @@ async def test_adapter_post_veto_sets_risk_false_with_reason():
 
     assert analyzer.engine.calls == 1
     assert signal.action == "BUY"
-    assert signal.risk_approved is False
-    assert "JEV veto: short bias conflicts with BUY" in signal.reasoning
+    assert signal.risk_approved is True
     assert signal.jev["bias"] == "short"
 
 
@@ -534,15 +566,17 @@ async def test_adapter_pre_post_calls_jev_twice():
 
 
 @pytest.mark.asyncio
-async def test_adapter_pre_post_skips_llm_when_pre_blocks():
+async def test_adapter_pre_post_never_blocks_on_none_bias():
+    """A none bias may not filter a BUY: pre is advisory and BUY is unfiltered."""
     client = FakeJevClient(_response(tradeable=0.0, bias="none"))
     analyzer = _analyzer(JevGate(client=client, mode="pre_post"))
 
     signal = await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
 
-    assert len(client.calls) == 1
-    assert analyzer.engine.calls == 0
-    assert signal.action == "HOLD"
+    assert len(client.calls) == 2
+    assert analyzer.engine.calls == 1
+    assert signal.action == "BUY"
+    assert signal.risk_approved is True
 
 
 @pytest.mark.asyncio
@@ -633,28 +667,24 @@ async def test_adapter_pre_gate_refreshes_context_before_gating():
 
     assert client.calls[0]["candles_used"] == 6
     assert client.calls[0]["last_close"] == 105.0
-    assert signal.action == "HOLD"
-    assert signal.source == "jev"
-    assert analyzer.engine.calls == 0  # pre blocked: LLM never called
+    assert analyzer.engine.calls == 1  # pre is advisory: LLM is still called
+    assert signal.action == "BUY"
 
 
 @pytest.mark.asyncio
-async def test_adapter_pre_gate_no_collector_skips_state():
-    """Without a collector the context cannot be refreshed: the gate fails open."""
+async def test_adapter_pre_gate_no_collector_logs_on_the_available_context():
+    """Without a collector the pre-gate consults the context it has and never blocks."""
     client = FakeJevClient(_response(tradeable=0.2))
     engine = _live_engine(with_collector=False)
     analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h", jev_gate=JevGate(client=client, mode="pre"))
 
     signal = await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
 
-    # Without a collector the context cannot be refreshed first: the pre-gate
-    # decides on the stale (5-candle) context anyway, documenting the residual
-    # one-candle lag for engine doubles without a data_collector. The
-    # production engine always exposes one.
+    # Without a collector the context cannot be refreshed first: the advisory
+    # pre-gate sees the available (5-candle) context and lets the analysis run.
     assert client.calls[0]["candles_used"] == 5
-    assert analyzer.engine.calls == 0  # pre blocked: LLM never called
-    assert signal.action == "HOLD"
-    assert signal.source == "jev"
+    assert analyzer.engine.calls == 1
+    assert signal.action == "BUY"
 
 
 @pytest.mark.asyncio

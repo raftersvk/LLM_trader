@@ -610,11 +610,18 @@ class TemplateManager:
         has_chart_analysis: bool = False,
         model_verbosity: str | None = None,
         dynamic_thresholds: dict[str, Any] | None = None,
+        has_risk_profile: bool = False,
     ) -> str:
         """Build the Decision Rules section: all trading decision logic, sizing, and risk rules.
 
         Separated from Response Format to place decision rules near Decision Protocol
         in the system prompt where they are processed earlier by the model.
+
+        ``has_risk_profile`` must be True only when the caller also injects an
+        ``## ACTIVE RISK PROFILE`` block (the live brain path). The signal
+        service never injects one, so it gets the configured cap and the
+        generic ATR range instead of guidance pointing at a missing section.
+
         Returns:
             str: Decision Rules block for inclusion in the system prompt
         """
@@ -637,6 +644,25 @@ class TemplateManager:
         if max_pos <= 0:
             max_pos = 0.10
         min_pos_size = min(thresholds.get("min_position_size", 0.02), max_pos)
+        if has_risk_profile:
+            max_position_text = (
+                "the ACTIVE RISK PROFILE cap (AGGRESSIVE 10% / NEUTRAL 8% / "
+                "CONSERVATIVE 5% — see ACTIVE RISK PROFILE section); if no profile "
+                f"is shown, fall back to {max_pos:.2f} ({max_pos*100:.0f}%)"
+            )
+            base_size_text = "confidence/100 × active profile cap"
+            min_size_text = f"min({min_pos_size:.3f}, active profile cap)"
+            sl_multiple_text = (
+                "ACTIVE RISK PROFILE ATR multiple × ATR (AGGRESSIVE 1.5x / "
+                "NEUTRAL 2x / CONSERVATIVE 2.5x — see ACTIVE RISK PROFILE section)"
+            )
+            sl_multiple_reference = "profile multiple"
+        else:
+            max_position_text = f"{max_pos:.2f} ({max_pos*100:.0f}%)"
+            base_size_text = "confidence/100 × max position"
+            min_size_text = f"min({min_pos_size:.3f}, max position)"
+            sl_multiple_text = "1.5–2.5 × ATR"
+            sl_multiple_reference = "ATR multiple"
         is_futures = self.config.MARKET_TYPE == "futures"
         entry_signal_open = "LONG" if is_futures else "BUY"
         entry_signal_close = "SHORT" if is_futures else "SELL"
@@ -731,10 +757,10 @@ R/R: LONG/BUY reward = TP - entry, risk = entry - SL; SHORT/SELL reward = entry 
 For HOLD without a position there is no active R/R. If a hypothetical setup is informative, show at most one complete example in line 11 using EXACTLY this format with ungrouped decimal numbers: RR_CHECK side=<LONG|SHORT> entry=<price> SL=<price> TP=<price> reward=<distance> risk=<distance> R/R=<ratio>. Use current levels, not prior prices. Otherwise write N/A and no numeric hypothetical ratio. Every RR_CHECK number is verified by Python; an incorrect actionable R/R blocks the entry.
 
 POSITION SIZING:
-- Max position: the ACTIVE RISK PROFILE cap (AGGRESSIVE 10% / NEUTRAL 8% / CONSERVATIVE 5% — see ACTIVE RISK PROFILE section). If no profile is shown, fall back to {max_pos:.2f} ({max_pos*100:.0f}%). Never exceed the profile cap — the system clamps to it.
-- Base = confidence/100 × active profile cap.
+- Max position: {max_position_text}. Never exceed this configured cap — the system clamps to it.
+- Base = {base_size_text}.
 - MIXED alignment: −{pos_reduce_mixed*100:.0f}%. DIVERGENT: −{pos_reduce_div*100:.0f}%.
-- Weak trend (ADX < {adx_weak}): reduce size. Advisory size reference: min({min_pos_size:.3f}, active profile cap), never a minimum. Don't round up.
+- Weak trend (ADX < {adx_weak}): reduce size. Advisory size reference: {min_size_text}, never a minimum. Don't round up.
 
 QUANTITY CALCULATION (for automated execution):
 - quantity = (available_capital × position_size) / entry_price
@@ -748,7 +774,7 @@ State "365D MACRO CONFLICT: [direction]" in analysis.
 SHORT TRADES: Valid with sufficient confluence even in bull macro. Look for overextension, divergence, volume climax at resistance.
 
 STOP LOSS & TAKE PROFIT:{safe_mae_line}
-- SL distance = ACTIVE RISK PROFILE ATR multiple × ATR (AGGRESSIVE 1.5x / NEUTRAL 2x / CONSERVATIVE 2.5x — see ACTIVE RISK PROFILE section) is the NORM, not a floor on how far it may sit. LONG: SL below the swing low / range support; SHORT: SL above the swing high / range resistance. Structural levels may be WIDER than the profile multiple, never arbitrarily tighter — but when a validated structural boundary (range edge, swing extreme, or the level whose break invalidates the thesis) sits CLOSER than the profile multiple, place the SL just beyond THAT boundary instead: a stop parked past the range edge risks more than the trade can pay, and no valid setup can carry that. Never place the SL inside noise or at an arbitrary round number — it must sit beyond a real level or beyond the profile multiple. Historical winning-trade SL reference: {avg_sl:.1f}% from entry (guidance, not a hard cap). TP at resistance/Fib levels (LONG) or support/Fib levels (SHORT) — EXCEPT in a TRENDING regime (ADX >= {adx_strong} with aligned +DI/-DI): there the nearest level is a WAYPOINT, not a cap. Set the TP by measured move (project the range/impulse height from the breakout point) or by the next higher-timeframe level, so the reward is not clipped at a level price is currently pushing through. In a trending regime a target that sits inside the momentum's path forces sub-1.0 R/R by construction and MUST NOT be used — extend the target instead of shrinking the trade.
+- SL distance = {sl_multiple_text} is the NORM, not a floor on how far it may sit. LONG: SL below the swing low / range support; SHORT: SL above the swing high / range resistance. Structural levels may be WIDER than the {sl_multiple_reference}, never arbitrarily tighter — but when a validated structural boundary (range edge, swing extreme, or the level whose break invalidates the thesis) sits CLOSER than the {sl_multiple_reference}, place the SL just beyond THAT boundary instead: a stop parked past the range edge risks more than the trade can pay, and no valid setup can carry that. Never place the SL inside noise or at an arbitrary round number — it must sit beyond a real level or beyond the {sl_multiple_reference}. Historical winning-trade SL reference: {avg_sl:.1f}% from entry (guidance, not a hard cap). TP at resistance/Fib levels (LONG) or support/Fib levels (SHORT) — EXCEPT in a TRENDING regime (ADX >= {adx_strong} with aligned +DI/-DI): there the nearest level is a WAYPOINT, not a cap. Set the TP by measured move (project the range/impulse height from the breakout point) or by the next higher-timeframe level, so the reward is not clipped at a level price is currently pushing through. In a trending regime a target that sits inside the momentum's path forces sub-1.0 R/R by construction and MUST NOT be used — extend the target instead of shrinking the trade.
 - Execution normalizes AI-proposed distances before opening: SL below 1% expands to 1%, SL above 10% clamps to 10%, and TP above 50% clamps to 50%. R/R is recomputed from those corrected levels, so propose structural levels inside these bounds.
 
 Mandatory: All trades require stops based on technical levels (not arbitrary %), accounting for ATR volatility, positioned to invalidate thesis if hit.{chart_validation_guidance}"""

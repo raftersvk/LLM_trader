@@ -13,8 +13,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -37,6 +39,10 @@ from src.signal_service.contract import (
     timeframe_seconds,
 )
 from src.signal_service.jev_gate import GateResult, JevGate, build_state
+from src.signal_service.regime_snapshot import (
+    build_regime_snapshot,
+    format_regime_snapshot_block,
+)
 from src.signal_service.storage import SignalStorage, write_heartbeat
 
 logger = logging.getLogger(__name__)
@@ -62,6 +68,51 @@ def _normalize_position_pct(raw_size) -> float:
 
 DEFAULT_POSITION_SIZE_PCT = 0.05
 PROMPT_VERSION = "llm-trader-signal-v1"
+#: Keys of ``long_term_data`` that come directly from the collector; every
+#: other key is derived from the daily rows and must be recomputed when those
+#: rows change.
+_RAW_LONG_TERM_KEYS = frozenset({"data", "is_new_token", "available_days", "is_complete"})
+
+
+def _truncate_rows_to_as_of(rows: Any, as_of: datetime, horizon: timedelta) -> Any:
+    """Truncate an OHLCV array by its first-column open timestamps.
+
+    A row is kept only when its candle is fully closed at ``as_of``. The raw
+    container type is preserved (list or NumPy array).
+    """
+    if rows is None:
+        return rows
+    kept = []
+    try:
+        for row in rows:
+            try:
+                raw = float(row[0])
+            except (IndexError, TypeError, ValueError):
+                kept.append(row)
+                continue
+            seconds = raw / 1000.0 if raw > 1e11 else raw
+            try:
+                open_at = datetime.fromtimestamp(seconds, tz=timezone.utc)
+            except (OSError, OverflowError, ValueError):
+                kept.append(row)
+                continue
+            if open_at + horizon <= as_of:
+                kept.append(row)
+    except TypeError:
+        return rows
+    if isinstance(rows, np.ndarray):
+        if not kept:
+            return rows[:0]
+        return np.asarray(kept, dtype=rows.dtype)
+    return kept
+
+
+def _row_count(rows: Any) -> Optional[int]:
+    """Return len(rows) for sized containers, or None for opaque payloads."""
+    try:
+        return len(rows)
+    except TypeError:
+        return None
 
 
 @dataclass
@@ -326,8 +377,26 @@ class ClosedCandleWindow:
             self.timeframe,
             self.as_of,
         )
+        # The daily/weekly blocks must obey the same ex-ante clock: the engine
+        # recomputes their indicators right after collection, so truncating the
+        # raw rows here keeps the prompt snapshot and the post-gate state on the
+        # analysed 1h candle instead of a still-forming daily/weekly candle.
+        self._truncate_long_term(context)
         self.state["empty"] = not kept
         return result
+
+    def _truncate_long_term(self, context: Any) -> None:
+        """Drop daily/weekly rows that had not closed at the 1h analysis clock."""
+        long_term = getattr(context, "long_term_data", None)
+        if isinstance(long_term, dict) and long_term.get("data") is not None:
+            long_term["data"] = _truncate_rows_to_as_of(
+                long_term["data"], self.as_of, timedelta(days=1)
+            )
+        weekly = getattr(context, "weekly_ohlcv", None)
+        if weekly is not None:
+            context.weekly_ohlcv = _truncate_rows_to_as_of(
+                weekly, self.as_of, timedelta(days=7)
+            )
 
     def __enter__(self) -> Dict[str, bool]:
         collector = getattr(self.engine, "data_collector", None)
@@ -460,10 +529,11 @@ class PairAnalyzer:
         # shared process-wide, so another pair's flags may currently be bound.
         self._apply_flags()
 
-        # JEV gate: `pre` only decides whether the LLM is called; `post` vetoes a
-        # non-HOLD decision. The phase-1 risk layer keeps flagging an explicit
-        # JEV bias conflict whenever a JEV payload is attached.
+        # JEV gate: `pre` only consults and logs; `post` applies the short-only
+        # bias veto. The risk layer applies the same asymmetric rule when a JEV
+        # payload is attached, so `pre`-only mode still filters shorts.
         as_of = self._analysis_as_of(candle_open_time)
+        self._current_analysis_as_of = as_of
         # The prompt for a closed candle must describe that candle's close, not
         # the wall-clock time when the analysis happens to run. This holds for
         # live (candle_open_time from the scheduler) and replay alike.
@@ -675,23 +745,31 @@ class PairAnalyzer:
 
     # --------------------------------------------------------------- jev state
     async def _refresh_context(self, as_of: datetime) -> None:
-        """Collect fresh candles and truncate the context to closed-at-or-before as_of.
+        """Refresh, truncate and recompute the context used by the pre-gate.
 
-        The pre-gate runs before the analysis, but the engine context may still
-        hold the candles truncated during the previous cycle. Refreshing here
-        lets the pre-gate decide on the candle that just closed instead of the
-        previous one. Best-effort: any collection error leaves the context
-        untouched and the gate fails open downstream.
+        Collection overwrites ``long_term_data`` with the raw daily payload and
+        leaves the indicator cache from the previous cycle in place. The
+        pre-gate must decide on the same closed candle the engine will analyse,
+        so this method refetches, truncates every series to ``as_of``, clears
+        the previous cycle's derived indicators and then reuses the engine's
+        own technical/long-term computation. A missing recompute therefore
+        degrades the snapshot to "missing" instead of reusing stale values.
+        Best-effort: any failure leaves the gate fail-open downstream.
         """
         collector = getattr(self.engine, "data_collector", None)
         if collector is None:
             return
+        context = getattr(self.engine, "context", None)
         try:
-            await collector.collect_data()
+            try:
+                await collector.collect_data(context)
+            except TypeError:
+                # Test doubles and older collectors expose collect_data() only.
+                await collector.collect_data()
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("JEV pre-gate data refresh failed for %s: %s", self.symbol, exc)
             return
-        context = self.engine.context
+        context = getattr(self.engine, "context", None)
         if context is None:
             return
         timestamps = getattr(context, "timestamps", None)
@@ -702,6 +780,62 @@ class PairAnalyzer:
             self.timeframe,
             as_of,
         )
+        await self._recompute_refreshed_context(context, as_of)
+
+    async def _recompute_refreshed_context(self, context: Any, as_of: datetime) -> None:
+        """Rebuild indicators after a refresh, using the engine's computation.
+
+        Reusing the engine methods keeps a single implementation of every
+        indicator and of the daily/weekly derived fields. The old derived
+        fields are dropped first so a partial or absent recompute produces a
+        missing snapshot (``unclear``) instead of a stale one. When a
+        lightweight engine double does not expose the engine methods the
+        snapshot simply degrades, as it does for any missing input.
+        """
+        self._reset_derived_context(context)
+        self._truncate_long_term_to_as_of(context, as_of)
+        calculate = getattr(self.engine, "_calculate_technical_indicators", None)
+        process_long_term = getattr(self.engine, "_process_long_term_data", None)
+        try:
+            if callable(calculate):
+                await calculate()
+            if callable(process_long_term):
+                await process_long_term()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "JEV pre-gate indicator refresh failed for %s: %s", self.symbol, exc
+            )
+
+    @staticmethod
+    def _reset_derived_context(context: Any) -> None:
+        """Drop the previous cycle's derived indicators before recomputing.
+
+        ``technical_data``, ``technical_history`` and the daily/weekly fields
+        of ``long_term_data`` are all derived. Clearing them first means a
+        refresh that cannot recompute degrades to a missing snapshot instead of
+        feeding stale values into the regime block or the JEV state.
+        """
+        context.technical_data = {}
+        context.technical_history = {}
+        context.weekly_macro_indicators = None
+        long_term = getattr(context, "long_term_data", None)
+        if not isinstance(long_term, dict):
+            return
+        for key in [key for key in long_term if key not in _RAW_LONG_TERM_KEYS]:
+            long_term.pop(key, None)
+
+    def _truncate_long_term_to_as_of(self, context: Any, as_of: datetime) -> None:
+        """Drop daily/weekly rows that had not closed at ``as_of``."""
+        long_term = getattr(context, "long_term_data", None)
+        if isinstance(long_term, dict) and long_term.get("data") is not None:
+            long_term["data"] = _truncate_rows_to_as_of(
+                long_term["data"], as_of, timedelta(days=1)
+            )
+        weekly = getattr(context, "weekly_ohlcv", None)
+        if weekly is not None:
+            context.weekly_ohlcv = _truncate_rows_to_as_of(
+                weekly, as_of, timedelta(days=7)
+            )
 
     def _analysis_as_of(self, candle_open_time: Optional[str]) -> datetime:
         """Reference time of the analysis: the analysed candle close or now."""
@@ -732,6 +866,7 @@ class PairAnalyzer:
         if candles is None or len(candles) == 0:
             return None
         timestamps = getattr(context, "timestamps", None)
+        snapshot = self._regime_snapshot_from_context(context, as_of)
         try:
             if timestamps is not None and len(timestamps) == len(candles):
                 return build_state(
@@ -740,16 +875,254 @@ class PairAnalyzer:
                     candles,
                     timestamps=[self._as_datetime(ts) for ts in timestamps],
                     as_of=as_of,
+                    regime_snapshot=snapshot,
                 )
             # No timestamps: be conservative and drop the last (possibly forming) candle.
             if len(candles) < 3:
                 return None
-            return build_state(self.symbol, self.timeframe, list(candles)[:-1])
+            return build_state(
+                self.symbol,
+                self.timeframe,
+                list(candles)[:-1],
+                regime_snapshot=snapshot,
+            )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # A state-building failure must never abort the analysis: the
             # documented JEV fail-open contract covers every failure mode.
             logger.warning("Cannot build JEV state for %s: %s", self.symbol, exc)
             return None
+
+    # ---------------------------------------------------------- regime snapshot
+    def _install_regime_snapshot_provider(self, as_of: Optional[datetime] = None) -> None:
+        """Render the deterministic regime block from the prompt's live context.
+
+        The adapter computes the snapshot before the pre-gate for JEV, but the
+        prompt is built by the engine after its own data collection and
+        technical pass. A provider closure lets the prompt see that fresh
+        context instead of the previous cycle's indicators, without importing
+        the signal service into the analyzer layer.
+        """
+        builder = getattr(self.engine, "prompt_builder", None)
+        if builder is None:
+            return
+        builder.regime_snapshot_provider = lambda context: format_regime_snapshot_block(
+            self._regime_snapshot_from_context(context, as_of)
+        )
+
+    def _regime_snapshot_from_context(
+        self, context: Any, as_of: Optional[datetime] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Build an ex-ante regime snapshot from an AnalysisContext, failing soft.
+
+        When ``as_of`` and context timestamps are available, the 1h series is
+        truncated to candles that closed at or before ``as_of`` so a forming
+        candle can never leak into the snapshot.
+        """
+        if context is None:
+            return None
+        try:
+            # Read the attribute first: a raw daily payload is usually a NumPy
+            # array, and `array or None` raises ValueError on its truthiness.
+            long_term_data = getattr(context, "long_term_data", None)
+            # A collector can leave raw rows (list/ndarray) here; only the
+            # indicator mapping carries daily direction, so anything else is
+            # treated as missing instead of crashing the whole snapshot.
+            if not isinstance(long_term_data, dict):
+                long_term_data = None
+            daily_rows = long_term_data.get("data") if long_term_data is not None else None
+            weekly_rows = getattr(context, "weekly_ohlcv", None)
+            weekly_macro = getattr(context, "weekly_macro_indicators", None) or None
+            if as_of is not None:
+                # The daily/weekly blocks are consumed by the same ex-ante
+                # snapshot as the 1h closes: drop still-forming rows and
+                # recompute their indicators from the retained rows.
+                daily_rows, long_term_data = self._truncate_daily_block(
+                    long_term_data, daily_rows, as_of
+                )
+                weekly_rows, weekly_macro = self._truncate_weekly_block(
+                    weekly_rows, weekly_macro, as_of
+                )
+            candles = self._closed_rows(
+                getattr(context, "ohlcv_candles", None),
+                getattr(context, "timestamps", None),
+                as_of,
+            )
+            btc = self._btc_close_series(context)
+            return build_regime_snapshot(
+                technical_data=getattr(context, "technical_data", None) or None,
+                long_term_data=long_term_data,
+                weekly_macro=weekly_macro,
+                closes_1h=self._close_series(candles),
+                closes_1d=self._close_series(daily_rows),
+                closes_1w=self._close_series(weekly_rows),
+                btc_closes_1h=btc.get("1h"),
+                btc_closes_1d=btc.get("1d"),
+                btc_closes_1w=btc.get("1w"),
+                atr_pct_median_90d=self._atr_pct_median(context),
+                timeframe=self.timeframe,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # The snapshot is an advisory input: never abort an analysis for it.
+            logger.warning("Cannot build regime snapshot for %s: %s", self.symbol, exc)
+            return None
+
+    def _truncate_daily_block(
+        self,
+        long_term_data: Optional[Dict[str, Any]],
+        daily_rows: Any,
+        as_of: datetime,
+    ) -> tuple[Any, Optional[Dict[str, Any]]]:
+        """Truncate daily rows and recompute their derived indicators.
+
+        Returns the rows to use for close series and a ``long_term_data`` block
+        whose daily fields describe those rows. When no row is dropped the
+        engine-provided block is already ex-ante and is reused untouched.
+        """
+        if daily_rows is None:
+            return daily_rows, long_term_data
+        truncated = _truncate_rows_to_as_of(daily_rows, as_of, timedelta(days=1))
+        if _row_count(truncated) == _row_count(daily_rows):
+            return daily_rows, long_term_data
+        block: Dict[str, Any] = {
+            key: value
+            for key, value in (long_term_data or {}).items()
+            if key in _RAW_LONG_TERM_KEYS
+        }
+        block["data"] = truncated
+        recompute = getattr(
+            getattr(self.engine, "technical_calculator", None),
+            "get_long_term_indicators",
+            None,
+        )
+        if callable(recompute):
+            try:
+                block.update(recompute(np.asarray(truncated)))
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning(
+                    "Cannot recompute daily indicators for %s: %s", self.symbol, exc
+                )
+        return truncated, block
+
+    def _truncate_weekly_block(
+        self,
+        weekly_rows: Any,
+        weekly_macro: Optional[Dict[str, Any]],
+        as_of: datetime,
+    ) -> tuple[Any, Optional[Dict[str, Any]]]:
+        """Truncate weekly rows and recompute the weekly macro block."""
+        if weekly_rows is None:
+            return weekly_rows, weekly_macro
+        truncated = _truncate_rows_to_as_of(weekly_rows, as_of, timedelta(days=7))
+        if _row_count(truncated) == _row_count(weekly_rows):
+            return weekly_rows, weekly_macro
+        recompute = getattr(
+            getattr(self.engine, "technical_calculator", None),
+            "get_weekly_macro_indicators",
+            None,
+        )
+        if callable(recompute):
+            try:
+                return truncated, recompute(np.asarray(truncated))
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning(
+                    "Cannot recompute weekly indicators for %s: %s", self.symbol, exc
+                )
+        return truncated, None
+
+    def _closed_rows(
+        self,
+        rows: Any,
+        timestamps: Any,
+        as_of: Optional[datetime],
+    ) -> Any:
+        """Keep only 1h rows fully closed at ``as_of`` (no look-ahead)."""
+        if rows is None or timestamps is None or as_of is None:
+            return rows
+        try:
+            if len(rows) != len(timestamps):
+                return rows
+            horizon = timedelta(seconds=timeframe_seconds(self.timeframe))
+            closed = []
+            for row, stamp in zip(rows, timestamps):
+                open_at = self._as_datetime(stamp)
+                if open_at + horizon <= as_of:
+                    closed.append(row)
+            return closed
+        except Exception:  # pylint: disable=broad-exception-caught
+            return rows
+
+    @staticmethod
+    def _atr_pct_median(context: Any) -> Optional[float]:
+        """Median ATR%% over the last 90 bars of the existing history, if any."""
+        history = getattr(context, "technical_history", None) or {}
+        values = history.get("atr_percent") if isinstance(history, dict) else None
+        if values is None:
+            return None
+        try:
+            finite = [float(value) for value in list(values)[-90:] if value is not None]
+        except (TypeError, ValueError):
+            return None
+        finite = [value for value in finite if math.isfinite(value)]
+        return float(median(finite)) if finite else None
+
+    def _btc_close_series(self, context: Any) -> Dict[str, Optional[List[float]]]:
+        """Read optional BTC benchmark series already exposed by the runtime.
+
+        P0 does not fetch BTC data: relative strength is populated only when a
+        caller (replay fixture or a future shared benchmark) exposes the series
+        on the context or engine. Missing series yield ``None`` fields.
+        """
+        sources = (context, self.engine)
+        mapping = None
+        for source in sources:
+            candidate = getattr(source, "btc_closes", None)
+            if isinstance(candidate, dict):
+                mapping = candidate
+                break
+        result: Dict[str, Optional[List[float]]] = {}
+        for label in ("1h", "1d", "1w"):
+            series = None
+            for source in sources:
+                value = getattr(source, f"btc_closes_{label}", None)
+                if value is not None:
+                    series = self._close_series(value)
+                    break
+            if series is None and mapping is not None:
+                series = self._close_series(mapping.get(label))
+            result[label] = series
+        return result
+
+    @staticmethod
+    def _close_series(rows: Any) -> Optional[List[float]]:
+        """Extract a close series from OHLCV rows or an existing close list."""
+        if rows is None:
+            return None
+        try:
+            count = len(rows)
+        except TypeError:
+            return None
+        if count == 0:
+            return None
+        closes: List[float] = []
+        for row in rows:
+            try:
+                values = list(row)
+            except TypeError:
+                values = None
+            if values is None:
+                # A plain close series (numpy 1-D array or list of floats).
+                try:
+                    closes.append(float(row))
+                except (TypeError, ValueError):
+                    continue
+                continue
+            if len(values) < 5:
+                continue
+            try:
+                closes.append(float(values[-5:][3]))
+            except (TypeError, ValueError):
+                continue
+        return closes or None
 
     @staticmethod
     def _as_datetime(value: Any) -> datetime:
@@ -968,6 +1341,7 @@ class PairAnalyzer:
         """
         if json_mode is None:
             json_mode = self._json_format_enabled()
+        self._install_regime_snapshot_provider(getattr(self, "_current_analysis_as_of", None))
         return await self.engine.analyze_market(
             previous_response=None,
             previous_indicators=None,
@@ -1221,12 +1595,15 @@ class PairAnalyzer:
         if confidence_float < self.min_confidence:
             return False, f"confidence below threshold ({self.min_confidence})"
         jev = draft.jev or {}
-        if jev.get("tradeability") is False:
-            return False, "JEV veto"
-        if draft.action == "BUY" and jev.get("bias") == "short":
-            return False, "JEV bias conflict"
-        if draft.action == "SELL" and jev.get("bias") == "long":
-            return False, "JEV bias conflict"
+        # Post-OOS JEV policy: bias only, asymmetric short. noul is advisory
+        # (logged by the gate) and never vetoes here. A BUY is never filtered
+        # by the JEV bias; a SELL is admitted only on an explicit short bias.
+        # A missing/unparseable bias fails open to avoid blocking on a partial
+        # JEV payload.
+        if draft.action == "SELL":
+            bias = jev.get("bias")
+            if bias is not None and bias != "short":
+                return False, "JEV bias conflict"
         return True, "ok"
 
     # ------------------------------------------------------------- signal build

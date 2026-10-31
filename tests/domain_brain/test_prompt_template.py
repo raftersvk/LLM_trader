@@ -10,9 +10,12 @@ import json
 import re
 from collections.abc import Sequence
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+from src.analyzer.analysis_context import AnalysisContext
+from src.analyzer.prompts.prompt_builder import PromptBuilder
 from src.analyzer.prompts.template_manager import TemplateManager
 from src.utils.timeframe_validator import TimeframeValidator
 from src.utils.token_counter import TokenCounter
@@ -581,10 +584,10 @@ def test_decision_rules_render_one_line_per_rule():
         ("- UPDATE: tighten SL only after the hybrid tightening policy threshold is met "
         "(see SL Tightening Policy in position context)"),
         "POSITION SIZING:",
-        "- Base = confidence/100 × active profile cap.",
+        "- Base = confidence/100 × max position.",
         "- MIXED alignment: −20%. DIVERGENT: −35%.",
         ("- Weak trend (ADX < 20): reduce size. Advisory size reference: "
-         "min(0.020, active profile cap), never a minimum. Don't round up."),
+         "min(0.020, max position), never a minimum. Don't round up."),
         "QUANTITY CALCULATION (for automated execution):",
         "- quantity = (available_capital × position_size) / entry_price",
         "MACRO CONFLICT:",
@@ -616,7 +619,7 @@ def test_stop_loss_rule_permits_tighter_structural_stop():
     assert_fragments(rules, [
         "is the NORM, not a floor on how far it may sit",
         "place the SL just beyond THAT boundary instead",
-        ("Structural levels may be WIDER than the profile multiple, never arbitrarily "
+        ("Structural levels may be WIDER than the ATR multiple, never arbitrarily "
         "tighter"),
     ])
     assert_absent(rules, ["Never tighten SL below the profile multiple"])
@@ -631,9 +634,7 @@ def test_stop_loss_rule_permits_tighter_structural_stop():
         "- R/R >= 1.0: NOT a rejection by itself. Judge the trade on EV (see EXPECTED VALUE FRAMEWORK)",
         ("- Brain-recommended R/R target: 2.0+ (aspirational — NOT enforced, NOT a "
         "gate; do NOT reject a valid setup just to match it)"),
-        ("- Max position: the ACTIVE RISK PROFILE cap (AGGRESSIVE 10% / NEUTRAL 8% / "
-        "CONSERVATIVE 5% — see ACTIVE RISK PROFILE section). If no profile is shown, "
-        "fall back to 0.10 (10%)."),
+        "- Max position: 0.10 (10%). Never exceed this configured cap — the system clamps to it.",
         "Historical winning-trade SL reference: 2.5% from entry (guidance, not a hard cap).",
         "SL below 1% expands to 1%, SL above 10% clamps to 10%, and TP above 50% clamps to 50%.",
     ]),
@@ -1131,8 +1132,8 @@ def test_garbage_config_numerics_fall_back_to_documented_defaults():
     assert_fragments(rules, [
         "- R/R < 1.0: REJECTED — below the sanity floor (hard block)",
         "R/R >= 1.0 (sanity floor only — entry quality is decided by EV, not by the ratio)",
-        "fall back to 0.10 (10%)",
-        "min(0.020, active profile cap), never a minimum. Don't round up.",
+        "- Max position: 0.10 (10%). Never exceed this configured cap — the system clamps to it.",
+        "min(0.020, max position), never a minimum. Don't round up.",
     ])
 
 
@@ -1177,7 +1178,7 @@ def test_execution_contract_and_grounding_guidance_are_unambiguous():
     assert close_row.split("|")[6].strip() == "current position quantity"
     rules = manager.build_decision_rules(dynamic_thresholds={"min_position_size": 0.15})
     assert "Min normal:" not in rules
-    assert "min(0.100, active profile cap), never a minimum" in rules
+    assert "min(0.100, max position), never a minimum" in rules
     prompt = manager.build_system_prompt(SYMBOL)
     assert "current user-data period summaries, not prior analysis" in prompt
     assert "negative but rising OBV is not bearish because of its sign" in prompt
@@ -1377,3 +1378,58 @@ def test_verbosity_targets_new_narrative_tokens_not_previous_context(verbosity, 
     assert "not a hard API cap or a truncation rule" in template
     assert ("## 1) Technical Analysis Overview" in template) == (verbosity == "full")
     assert "full research report" in manager.build_system_prompt(SYMBOL, model_verbosity="full")
+
+
+def test_decision_rules_do_not_reference_a_missing_active_risk_profile():
+    """The signal path never injects an ACTIVE RISK PROFILE section.
+
+    The shared template must not tell the model to read a section that only the
+    live brain path can add, otherwise every signal prompt silently falls back
+    to undefined profile guidance.
+    """
+    rules = make_manager().build_decision_rules(
+        dynamic_thresholds={}, has_risk_profile=False
+    )
+    assert "ACTIVE RISK PROFILE" not in rules
+    assert "Max position: 0.10 (10%)" in rules
+    assert "SL distance = 1.5–2.5 × ATR" in rules
+
+    live_rules = make_manager().build_decision_rules(
+        dynamic_thresholds={}, has_risk_profile=True
+    )
+    assert "ACTIVE RISK PROFILE cap" in live_rules
+    assert "AGGRESSIVE 1.5x / NEUTRAL 2x / CONSERVATIVE 2.5x" in live_rules
+    assert "active profile cap" in live_rules
+
+
+def _prompt_builder() -> PromptBuilder:
+    """PromptBuilder wired with the real template and inert formatters."""
+    return PromptBuilder(
+        timeframe="1h",
+        config=make_config(),
+        format_utils=MagicMock(),
+        template_manager=make_manager(),
+        overview_formatter=MagicMock(),
+        long_term_formatter=MagicMock(),
+        technical_formatter=MagicMock(),
+        market_formatter=MagicMock(),
+        timeframe_validator=TimeframeValidator(),
+    )
+
+
+def test_live_prompt_keeps_the_risk_profile_block_guidance():
+    """The live brain profile must still drive sizing and ATR multiples."""
+    builder = _prompt_builder()
+    live_context = "## ACTIVE RISK PROFILE: NEUTRAL (8% max, 2x ATR)"
+
+    live_prompt = builder.build_system_prompt(
+        SYMBOL, AnalysisContext(symbol=SYMBOL), brain_context=live_context
+    )
+    signal_prompt = builder.build_system_prompt(
+        SYMBOL, AnalysisContext(symbol=SYMBOL)
+    )
+
+    assert "ACTIVE RISK PROFILE cap" in live_prompt
+    assert "AGGRESSIVE 1.5x / NEUTRAL 2x / CONSERVATIVE 2.5x" in live_prompt
+    assert "ACTIVE RISK PROFILE cap" not in signal_prompt
+    assert "SL distance = 1.5–2.5 × ATR" in signal_prompt

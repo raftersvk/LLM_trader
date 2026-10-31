@@ -226,6 +226,21 @@ async def test_unavailable_llm_backend_does_not_crash_the_run():
     assert all("unavailable" in (prediction.error or "") for prediction in run.predictions)
 
 
+def test_gate_for_builds_a_gate_without_the_removed_noul_threshold():
+    """Benchmark startup must use the current JevGate signature."""
+    gate = bench_jev._gate_for("post", None, 0.6)
+
+    assert isinstance(gate, bench_jev.JevGate)
+    assert gate.mode.value == "post"
+    assert gate.min_confidence == 0.6
+
+
+def test_cli_no_longer_exposes_the_removed_tradeability_threshold():
+    """The CLI flag was retired with the noul threshold."""
+    with pytest.raises(SystemExit):
+        bench_jev._build_parser().parse_args(["--tradeability-threshold", "0.5"])
+
+
 def test_default_output_is_repo_relative(monkeypatch):
     """The report default must not point into a personal home directory."""
     import os
