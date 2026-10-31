@@ -40,9 +40,11 @@ left to the gate policy, not to the snapshot.
 
 - The long noul threshold stays **0.50** everywhere. In particular, **range is
   not lowered**: the P0-B arm degraded from -11.01 R to -15.73 R.
-- A short in a deterministic `trend_down` is admitted from **noul >= 0.10**
-  (the pre-gate lets the state through, the post-gate applies 0.10 to SELL and
-  keeps 0.50 to BUY).
+- A short in a deterministic `trend_down` is admitted from **noul >= 0.10**.
+  In `pre_post` mode the pre-gate lets the state through at 0.10 and the
+  post-gate applies 0.10 to SELL and keeps 0.50 to BUY. In **pre-only** mode
+  there is no post-gate to re-apply 0.50, so the pre-gate keeps 0.50 for every
+  side.
 - A bias conflict vetoes only when the regime is `unclear` or the setup is
   `momentum_*`, symmetrically for BUY/short and SELL/long.
 - The setup taxonomy and contract fields remain out of scope: P1-B only,

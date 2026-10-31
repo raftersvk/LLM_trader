@@ -682,23 +682,29 @@ class PairAnalyzer:
 
     # --------------------------------------------------------------- jev state
     async def _refresh_context(self, as_of: datetime) -> None:
-        """Collect fresh candles and truncate the context to closed-at-or-before as_of.
+        """Refresh, truncate and recompute the context used by the pre-gate.
 
-        The pre-gate runs before the analysis, but the engine context may still
-        hold the candles truncated during the previous cycle. Refreshing here
-        lets the pre-gate decide on the candle that just closed instead of the
-        previous one. Best-effort: any collection error leaves the context
-        untouched and the gate fails open downstream.
+        Collection overwrites ``long_term_data`` with the raw daily payload and
+        leaves the indicator cache from the previous cycle in place. The
+        pre-gate must decide on the same closed candle the engine will analyse,
+        so this method refetches, truncates every series to ``as_of`` and then
+        reuses the engine's own technical/long-term computation. Best-effort:
+        any failure leaves the gate fail-open downstream.
         """
         collector = getattr(self.engine, "data_collector", None)
         if collector is None:
             return
+        context = getattr(self.engine, "context", None)
         try:
-            await collector.collect_data()
+            try:
+                await collector.collect_data(context)
+            except TypeError:
+                # Test doubles and older collectors expose collect_data() only.
+                await collector.collect_data()
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("JEV pre-gate data refresh failed for %s: %s", self.symbol, exc)
             return
-        context = self.engine.context
+        context = getattr(self.engine, "context", None)
         if context is None:
             return
         timestamps = getattr(context, "timestamps", None)
@@ -709,6 +715,70 @@ class PairAnalyzer:
             self.timeframe,
             as_of,
         )
+        await self._recompute_refreshed_context(context, as_of)
+
+    async def _recompute_refreshed_context(self, context: Any, as_of: datetime) -> None:
+        """Rebuild indicators after a refresh, using the engine's computation.
+
+        Reusing the engine methods keeps a single implementation of every
+        indicator and of the daily/weekly derived fields. When a lightweight
+        engine double does not expose them the snapshot simply degrades, as it
+        does for any missing input.
+        """
+        self._truncate_long_term_to_as_of(context, as_of)
+        calculate = getattr(self.engine, "_calculate_technical_indicators", None)
+        process_long_term = getattr(self.engine, "_process_long_term_data", None)
+        try:
+            if callable(calculate):
+                await calculate()
+            if callable(process_long_term):
+                await process_long_term()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "JEV pre-gate indicator refresh failed for %s: %s", self.symbol, exc
+            )
+
+    def _truncate_long_term_to_as_of(self, context: Any, as_of: datetime) -> None:
+        """Drop daily/weekly rows that had not closed at ``as_of``."""
+        long_term = getattr(context, "long_term_data", None)
+        if isinstance(long_term, dict) and long_term.get("data") is not None:
+            long_term["data"] = self._truncate_rows_to_as_of(
+                long_term["data"], as_of, timedelta(days=1)
+            )
+        weekly = getattr(context, "weekly_ohlcv", None)
+        if weekly is not None:
+            context.weekly_ohlcv = self._truncate_rows_to_as_of(
+                weekly, as_of, timedelta(days=7)
+            )
+
+    @staticmethod
+    def _truncate_rows_to_as_of(rows: Any, as_of: datetime, horizon: timedelta) -> Any:
+        """Truncate an OHLCV array by its first-column open timestamps."""
+        if rows is None:
+            return rows
+        kept = []
+        try:
+            for row in rows:
+                try:
+                    raw = float(row[0])
+                except (IndexError, TypeError, ValueError):
+                    kept.append(row)
+                    continue
+                seconds = raw / 1000.0 if raw > 1e11 else raw
+                try:
+                    open_at = datetime.fromtimestamp(seconds, tz=timezone.utc)
+                except (OSError, OverflowError, ValueError):
+                    kept.append(row)
+                    continue
+                if open_at + horizon <= as_of:
+                    kept.append(row)
+        except TypeError:
+            return rows
+        if isinstance(rows, np.ndarray):
+            if not kept:
+                return rows[:0]
+            return np.asarray(kept, dtype=rows.dtype)
+        return kept
 
     def _analysis_as_of(self, candle_open_time: Optional[str]) -> datetime:
         """Reference time of the analysis: the analysed candle close or now."""

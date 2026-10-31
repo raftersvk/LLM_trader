@@ -6,6 +6,7 @@ synthetic close series.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from types import SimpleNamespace
@@ -307,14 +308,31 @@ async def test_trend_down_short_exemption_uses_noul_010():
 
 
 @pytest.mark.asyncio
-async def test_pre_gate_exempts_trend_down_for_a_potential_short():
+async def test_pre_only_mode_keeps_the_long_threshold_in_trend_down():
+    """Without a post gate there is no side, so pre-only must keep 0.50."""
     client = _FakeClient(_response(tradeable=0.12, bias="short"))
     gate = JevGate(client=client, mode="pre")
 
     result = await gate.check_pre({"symbol": SYMBOL, "deterministic_regime": "trend_down"})
 
-    assert result.allowed is True
-    assert result.signal is not None and result.signal.tradeability is True
+    assert result.allowed is False
+    assert result.signal is not None and result.signal.tradeability is False
+
+
+@pytest.mark.asyncio
+async def test_pre_post_pre_gate_exempts_trend_down_for_the_post_gate():
+    client = _FakeClient(_response(tradeable=0.12, bias="short"))
+    gate = JevGate(client=client, mode="pre_post")
+    state = {"symbol": SYMBOL, "deterministic_regime": "trend_down"}
+
+    pre = await gate.check_pre(state)
+    post_short = await gate.check_post(state, "SELL")
+    post_long = await gate.check_post({**state, "setup": "trend_pullback"}, "BUY")
+
+    assert pre.allowed is True
+    assert post_short.allowed is True
+    assert post_long.allowed is False
+    assert "not tradeable" in post_long.reason
 
 
 @pytest.mark.asyncio
@@ -399,3 +417,140 @@ def test_adapter_snapshot_drops_the_forming_candle():
     assert snapshot is not None
     assert snapshot["last_close"] == pytest.approx(105.0)
     assert snapshot["extension_atr"] == pytest.approx(2.5)
+
+class _RefreshingEngine:
+    """Engine double that mimics collect -> truncate -> recompute ordering."""
+
+    def __init__(self) -> None:
+        self._raw_candles = [
+            [0, 98.0, 101.0, 97.0, 100.0, 10.0],
+            [3_600_000, 100.0, 106.0, 99.0, 105.0, 10.0],
+            [7_200_000, 105.0, 131.0, 104.0, 130.0, 10.0],
+        ]
+        self._raw_timestamps = [
+            BASE,
+            BASE + timedelta(hours=1),
+            BASE + timedelta(hours=2),
+        ]
+        self.context = SimpleNamespace(
+            ohlcv_candles=list(self._raw_candles),
+            timestamps=list(self._raw_timestamps),
+            current_price=130.0,
+            technical_data={},
+            technical_history={},
+            long_term_data={"data": []},
+            weekly_macro_indicators=None,
+            weekly_ohlcv=None,
+        )
+        self.data_collector = self
+        self.collect_args: List[Any] = []
+        self.calculate_calls = 0
+        self.process_calls = 0
+        self.last_llm_response = json.dumps(
+            {
+                "signal": "SELL",
+                "confidence": "HIGH",
+                "stop_loss": 112.0,
+                "take_profit": 90.0,
+                "position_size": 0.05,
+                "reasoning": "trend_down rally failure",
+            }
+        )
+
+    async def collect_data(self, context: Any = None) -> Dict[str, Any]:
+        """Refetch raw data and drop the computed long-term fields, as the real collector does."""
+        target = context or self.context
+        self.collect_args.append(context)
+        target.ohlcv_candles = list(self._raw_candles)
+        target.timestamps = list(self._raw_timestamps)
+        target.current_price = 130.0
+        target.long_term_data = {"data": [[0, 90, 91, 89, 90, 1], [172_800_000, 90, 91, 89, 90, 1]]}
+        target.weekly_ohlcv = [[0, 80, 81, 79, 80, 1]]
+        return {"success": True}
+
+    async def _calculate_technical_indicators(self) -> None:
+        self.calculate_calls += 1
+        self.context.technical_data = {
+            "adx": 30.0,
+            "plus_di": 10.0,
+            "minus_di": 30.0,
+            "choppiness": 40.0,
+            "atr": 2.0,
+            "atr_percent": 2.0,
+            "sma_20": 110.0,
+            "supertrend_direction": -1,
+        }
+        self.context.technical_history = {"atr_percent": [1.8, 2.0, 2.2]}
+
+    async def _process_long_term_data(self) -> None:
+        self.process_calls += 1
+        self.context.long_term_data.update(
+            {
+                "daily_adx": 30.0,
+                "daily_plus_di": 10.0,
+                "daily_minus_di": 28.0,
+                "sma_values": {50: 90.0, 200: 100.0},
+                "macro_trend": {"trend_direction": "Bearish"},
+            }
+        )
+
+    async def analyze_market(self, **_kwargs: Any) -> Dict[str, Any]:
+        await self.data_collector.collect_data(self.context)
+        await self._calculate_technical_indicators()
+        await self._process_long_term_data()
+        return {
+            "recommendation": "SELL",
+            "confidence": "HIGH",
+            "stop_loss": 112.0,
+            "take_profit": 90.0,
+            "position_size": 0.05,
+            "reasoning": "trend_down rally failure",
+            "model": "deepseek-v4.1-flash",
+            "provider": "opencode-go",
+        }
+
+
+@pytest.mark.asyncio
+async def test_refresh_recomputes_indicators_and_restores_daily_fields():
+    engine = _RefreshingEngine()
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    as_of = BASE + timedelta(hours=2)
+
+    await analyzer._refresh_context(as_of)
+
+    assert engine.collect_args == [engine.context]
+    assert engine.calculate_calls == 1
+    assert engine.process_calls == 1
+    assert len(engine.context.ohlcv_candles) == 2
+    assert engine.context.technical_data["adx"] == pytest.approx(30.0)
+    assert engine.context.long_term_data["daily_adx"] == pytest.approx(30.0)
+
+    state = analyzer._jev_state(as_of)
+
+    assert state is not None
+    assert state["last_close"] == pytest.approx(105.0)
+    assert state["adx"] == pytest.approx(30.0)
+    assert state["deterministic_regime"] == "trend_down"
+
+
+@pytest.mark.asyncio
+async def test_post_gate_state_matches_the_analysed_candle():
+    """Pre and post gates must see the same closed candle and indicators."""
+    engine = _RefreshingEngine()
+    client = _FakeClient(_response(tradeable=0.8, bias="short"))
+    analyzer = PairAnalyzer(
+        engine=engine,
+        symbol=SYMBOL,
+        timeframe="1h",
+        jev_gate=JevGate(client=client, mode="pre_post"),
+    )
+
+    signal = await analyzer.analyze(candle_open_time="2026-01-01T01:00:00Z")
+
+    assert signal.action == "SELL"
+    assert len(client.calls) == 2
+    pre_state, post_state = client.calls
+    assert pre_state["last_close"] == post_state["last_close"] == pytest.approx(105.0)
+    assert pre_state["adx"] == post_state["adx"] == pytest.approx(30.0)
+    assert pre_state["candles_used"] == post_state["candles_used"] == 2
+    assert pre_state["deterministic_regime"] == post_state["deterministic_regime"] == "trend_down"

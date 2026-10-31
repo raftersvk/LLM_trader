@@ -640,13 +640,21 @@ class JevGate:
 
         P0-B keeps the long threshold unchanged everywhere (including range,
         where lowering it degraded the arm). Only a short in a deterministic
-        ``trend_down`` benefits from the 0.10 exemption. The pre-gate has no
-        side yet, so ``trend_down`` is allowed through at 0.10 and the post
-        gate applies the stricter long threshold if the LLM proposes a BUY.
+        ``trend_down`` benefits from the 0.10 exemption. In ``pre_post`` mode
+        the pre-gate has no side yet, so it allows ``trend_down`` through at
+        0.10 and the post gate applies the stricter long threshold if the LLM
+        proposes a BUY. In pre-only mode there is no post gate, so the normal
+        threshold is kept for every side.
         """
         normalized = action.upper() if action is not None else None
-        if self._state_regime(state) == "trend_down" and normalized in (None, "SELL"):
-            return min(self.tradeability_threshold, SHORT_TREND_DOWN_TRADEABILITY_THRESHOLD)
+        if self._state_regime(state) == "trend_down":
+            if normalized == "SELL":
+                return min(self.tradeability_threshold, SHORT_TREND_DOWN_TRADEABILITY_THRESHOLD)
+            # The pre-gate has no side. Only a mode that also runs the post
+            # gate may use the short exemption, because the post gate is what
+            # re-applies 0.50 to a BUY. Pre-only keeps 0.50 for every side.
+            if normalized is None and self.uses_post():
+                return min(self.tradeability_threshold, SHORT_TREND_DOWN_TRADEABILITY_THRESHOLD)
         return self.tradeability_threshold
 
     @staticmethod
