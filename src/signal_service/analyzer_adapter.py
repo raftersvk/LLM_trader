@@ -1881,15 +1881,20 @@ class PairAnalyzer:
         reasoning = draft.reasoning
         if veto_reason is not None:
             reasoning = f"{reasoning} [JEV veto: {veto_reason}]"[:8000]
-        setup, regime, htf_alignment = self._resolved_taxonomy(draft)
-        # The version bump follows the model-provided fields only: the snapshot
-        # always carries a regime/htf, and letting it bump every record would
-        # make strict 1.0/1.1 readers reject signals with no emitted taxonomy.
+        # The version bump follows the model-provided fields only. The snapshot
+        # always carries a regime/htf; if we resolved it before this check the
+        # snapshot alone would upgrade every record to 1.2. Do not even consult
+        # the snapshot when the model emitted no taxonomy.
         emitted_taxonomy = any(
             value is not None
             for value in (draft.setup, draft.regime, draft.htf_alignment)
         )
-        schema_version = "1.2" if emitted_taxonomy else "1.0"
+        if emitted_taxonomy:
+            setup, regime, htf_alignment = self._resolved_taxonomy(draft)
+            schema_version = "1.2"
+        else:
+            setup = regime = htf_alignment = None
+            schema_version = "1.0"
         jev_payload = draft.jev
         if not emitted_taxonomy and jev_payload:
             # The JEV confidence keys are v1.2-only. Keep a 1.0 payload in its

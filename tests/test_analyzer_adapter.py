@@ -2198,6 +2198,11 @@ async def test_no_model_taxonomy_keeps_the_signal_at_v10_even_with_a_snapshot():
         "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
     }
 
+    def _must_not_resolve(_draft):
+        raise AssertionError("snapshot taxonomy must not be consulted without model fields")
+
+    analyzer._resolved_taxonomy = _must_not_resolve  # type: ignore[assignment]
+
     signal = await analyzer.analyze()
 
     assert signal.schema_version == "1.0"
