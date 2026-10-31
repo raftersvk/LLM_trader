@@ -17,7 +17,7 @@ import pytest
 from src.analyzer.analysis_context import AnalysisContext
 from src.analyzer.prompts.prompt_builder import PromptBuilder
 from src.signal_service.jev_client import JevResponse
-from src.signal_service.analyzer_adapter import PairAnalyzer
+from src.signal_service.analyzer_adapter import ClosedCandleWindow, PairAnalyzer
 from src.signal_service.jev_gate import JevGate, build_state
 from src.signal_service.regime_snapshot import (
     build_regime_snapshot,
@@ -662,3 +662,142 @@ def test_adapter_treats_a_numpy_long_term_series_as_missing():
     assert snapshot["regime"] == "trend_up"
     assert snapshot["daily_trend"] is None
     assert snapshot["htf_alignment"] == "neutral"
+
+
+def _ms(moment: datetime) -> int:
+    """Milliseconds since epoch for a daily/weekly candle fixture."""
+    return int(moment.timestamp() * 1000)
+
+
+class _RecordingCalculator:
+    """Technical calculator stub recording the rows it recomputes from."""
+
+    def __init__(self) -> None:
+        self.daily_lengths: List[int] = []
+        self.weekly_lengths: List[int] = []
+
+    def get_long_term_indicators(self, rows: Any) -> Dict[str, Any]:
+        self.daily_lengths.append(len(rows))
+        return {
+            "daily_adx": 30.0,
+            "daily_plus_di": 10.0,
+            "daily_minus_di": 28.0,
+            "sma_values": {50: 90.0, 200: 100.0},
+            "macro_trend": {"trend_direction": "Bearish"},
+        }
+
+    def get_weekly_macro_indicators(self, rows: Any) -> Dict[str, Any]:
+        self.weekly_lengths.append(len(rows))
+        return {"weekly_macro_trend": {"trend_direction": "Bearish"}}
+
+
+def test_snapshot_truncates_daily_weekly_rows_and_recomputes_their_indicators():
+    """Daily/weekly inputs obey the same ex-ante clock as the 1h closes."""
+    calculator = _RecordingCalculator()
+    engine = SimpleNamespace(
+        technical_calculator=calculator,
+        prompt_builder=SimpleNamespace(regime_snapshot_provider=None),
+    )
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    as_of = BASE + timedelta(days=2, hours=1)
+    daily_rows = [
+        [_ms(BASE - timedelta(days=2)), 90.0, 91.0, 89.0, 90.0, 1.0],
+        [_ms(BASE - timedelta(days=1)), 90.0, 91.0, 89.0, 91.0, 1.0],
+        [_ms(BASE), 91.0, 92.0, 90.0, 92.0, 1.0],
+        [_ms(BASE + timedelta(days=1)), 92.0, 93.0, 91.0, 93.0, 1.0],
+        [_ms(BASE + timedelta(days=2)), 93.0, 94.0, 92.0, 94.0, 1.0],
+    ]
+    weekly_rows = [
+        [_ms(BASE - timedelta(days=14)), 80.0, 85.0, 79.0, 84.0, 10.0],
+        [_ms(BASE - timedelta(days=7)), 84.0, 88.0, 83.0, 87.0, 10.0],
+        [_ms(BASE), 87.0, 90.0, 86.0, 89.0, 10.0],
+    ]
+    context = SimpleNamespace(
+        technical_data=_trend_up_inputs()["technical_data"],
+        long_term_data={
+            "data": daily_rows,
+            "daily_adx": 99.0,
+            "daily_plus_di": 50.0,
+            "daily_minus_di": 1.0,
+            "macro_trend": {"trend_direction": "Bullish"},
+        },
+        weekly_macro_indicators={"weekly_macro_trend": {"trend_direction": "Bullish"}},
+        ohlcv_candles=[[0, 99.0, 106.0, 98.0, 105.0, 10.0]],
+        weekly_ohlcv=weekly_rows,
+    )
+
+    snapshot = analyzer._regime_snapshot_from_context(context, as_of)
+
+    assert snapshot is not None
+    assert calculator.daily_lengths == [4]
+    assert calculator.weekly_lengths == [2]
+    assert snapshot["daily_trend"] == "bearish"
+    assert snapshot["weekly_trend"] == "bearish"
+    # The snapshot must not mutate the engine-owned context.
+    assert len(context.long_term_data["data"]) == 5
+    assert len(context.weekly_ohlcv) == 3
+
+
+def test_snapshot_drops_stale_daily_fields_without_a_calculator():
+    """Without a recompute hook the truncated daily trend degrades to missing."""
+    engine = SimpleNamespace(prompt_builder=SimpleNamespace(regime_snapshot_provider=None))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    as_of = BASE + timedelta(days=2, hours=1)
+    context = SimpleNamespace(
+        technical_data=_trend_up_inputs()["technical_data"],
+        long_term_data={
+            "data": [
+                [_ms(BASE + timedelta(days=1)), 92.0, 93.0, 91.0, 93.0, 1.0],
+                [_ms(BASE + timedelta(days=2)), 93.0, 94.0, 92.0, 94.0, 1.0],
+            ],
+            "daily_adx": 99.0,
+            "daily_plus_di": 50.0,
+            "daily_minus_di": 1.0,
+            "macro_trend": {"trend_direction": "Bullish"},
+        },
+        weekly_macro_indicators=None,
+        ohlcv_candles=[[0, 99.0, 106.0, 98.0, 105.0, 10.0]],
+        weekly_ohlcv=None,
+    )
+
+    snapshot = analyzer._regime_snapshot_from_context(context, as_of)
+
+    assert snapshot is not None
+    assert snapshot["daily_trend"] is None
+
+
+@pytest.mark.asyncio
+async def test_closed_candle_window_truncates_daily_and_weekly_rows():
+    """The analysis window truncates raw daily/weekly rows before engine recompute."""
+    context = SimpleNamespace(
+        ohlcv_candles=[[_ms(BASE + timedelta(days=2)), 99.0, 106.0, 98.0, 105.0, 10.0]],
+        timestamps=[BASE + timedelta(days=2)],
+        current_price=105.0,
+        long_term_data={
+            "data": [
+                [_ms(BASE - timedelta(days=2)), 90.0, 91.0, 89.0, 90.0, 1.0],
+                [_ms(BASE - timedelta(days=1)), 90.0, 91.0, 89.0, 91.0, 1.0],
+                [_ms(BASE), 91.0, 92.0, 90.0, 92.0, 1.0],
+                [_ms(BASE + timedelta(days=1)), 92.0, 93.0, 91.0, 93.0, 1.0],
+                [_ms(BASE + timedelta(days=2)), 93.0, 94.0, 92.0, 94.0, 1.0],
+            ]
+        },
+        weekly_ohlcv=[
+            [_ms(BASE - timedelta(days=14)), 80.0, 85.0, 79.0, 84.0, 10.0],
+            [_ms(BASE - timedelta(days=7)), 84.0, 88.0, 83.0, 87.0, 10.0],
+            [_ms(BASE), 87.0, 90.0, 86.0, 89.0, 10.0],
+        ],
+    )
+
+    class _Collector:
+        async def collect_data(self, _context=None) -> Dict[str, Any]:
+            return {"success": True}
+
+    engine = SimpleNamespace(context=context, data_collector=_Collector())
+    window = ClosedCandleWindow(engine, "1h", BASE + timedelta(days=2))
+
+    with window:
+        await window._collect_and_truncate()
+
+    assert len(context.long_term_data["data"]) == 4
+    assert len(context.weekly_ohlcv) == 2
