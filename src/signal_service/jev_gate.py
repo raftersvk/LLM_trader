@@ -32,6 +32,11 @@ logger = logging.getLogger(__name__)
 ALLOWED_BIAS = frozenset({"long", "short", "none"})
 ALLOWED_REGIME = frozenset({"trend", "range", "high_vol", "low_vol"})
 DEFAULT_TRADEABILITY_THRESHOLD = 0.5
+#: Range regimes naturally produce a lower no-look-ahead tradeability score:
+#: mean-reversion entries are taken at the range edge, not on breakout momentum.
+#: The factor applies to the configured threshold unless an explicit range
+#: threshold is supplied to the gate.
+RANGE_TRADEABILITY_FACTOR = 0.8
 #: Default question set. v1 is the production wording and must stay the
 #: default so every existing run is byte-comparable.
 DEFAULT_QUESTION_SET = "v1"
@@ -192,6 +197,7 @@ def build_state(
     timestamps: Optional[Sequence[datetime]] = None,
     as_of: Optional[datetime] = None,
     calibration_context: bool = False,
+    regime_snapshot: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the JEV state from closed candles only.
 
@@ -205,6 +211,10 @@ def build_state(
         as_of: Reference time; defaults to the current UTC time.
         calibration_context: Add the optional v2 reference block computed from
             past closes only. ``False`` keeps the v1 state byte-comparable.
+        regime_snapshot: Optional deterministic regime snapshot. When omitted
+            the v1 state stays byte-comparable; when supplied its trend,
+            volatility, HTF and relative-strength fields are added for the
+            regime-aware gate. The state is not part of the public contract.
 
     Returns:
         A JSON-serializable state dict for JEV.
@@ -287,9 +297,25 @@ def build_state(
         },
         "recent_closes": [_round(value) for value in closes[-8:]],
     }
+    if regime_snapshot:
+        _apply_regime_snapshot(state, regime_snapshot)
     if calibration_context:
         state["calibration_context"] = _calibration_context(closes)
     return state
+
+
+def _apply_regime_snapshot(state: Dict[str, Any], snapshot: Dict[str, Any]) -> None:
+    """Add the deterministic regime fields to the JEV state (non-contractual)."""
+    state["adx"] = _round(snapshot.get("adx"))
+    state["choppiness"] = _round(snapshot.get("choppiness"))
+    state["htf_alignment"] = snapshot.get("htf_alignment")
+    state["extension_atr"] = _round(snapshot.get("extension_atr"))
+    state["rs_btc_7d"] = _round(snapshot.get("rs_btc_7d"))
+    state["rs_btc_30d"] = _round(snapshot.get("rs_btc_30d"))
+    state["deterministic_regime"] = snapshot.get("regime")
+    state["regime_confidence"] = _round(snapshot.get("confidence"))
+    if snapshot.get("allowed_setups") is not None:
+        state["allowed_setups"] = list(snapshot.get("allowed_setups") or [])
 
 
 # ------------------------------------------------------------------ questions
@@ -559,6 +585,7 @@ class JevGate:
         mode: Any = JevMode.OFF,
         tradeability_threshold: float = DEFAULT_TRADEABILITY_THRESHOLD,
         min_confidence: Optional[float] = None,
+        range_tradeability_threshold: Optional[float] = None,
     ) -> None:
         """Bind a client and mode.
 
@@ -566,14 +593,19 @@ class JevGate:
             client: JevClient instance; required for any mode except ``off``.
             mode: off|pre|post|pre_post.
             tradeability_threshold: noul probability needed to consider the
-                market tradeable.
+                market tradeable in a directional/unknown regime.
             min_confidence: Optional score threshold below which a non-HOLD
                 decision is vetoed.
+            range_tradeability_threshold: Optional explicit noul threshold for
+                ``range`` regimes. Defaults to a fraction of
+                ``tradeability_threshold`` because mean-reversion entries are
+                taken at range edges and naturally score a lower noul.
         """
         self.client = client
         self.mode = parse_mode(mode)
         self.tradeability_threshold = tradeability_threshold
         self.min_confidence = min_confidence
+        self.range_tradeability_threshold = range_tradeability_threshold
         self.last_signal: Optional[JevSignal] = None
         self.last_error: Optional[str] = None
 
@@ -590,7 +622,57 @@ class JevGate:
         """True when the mode runs the post-LLM gate."""
         return self.mode in (JevMode.POST, JevMode.PRE_POST)
 
-    async def _consult(self, state: Dict[str, Any]) -> GateResult:
+    @staticmethod
+    def _state_regime(state: Dict[str, Any]) -> Optional[str]:
+        """Return the deterministic regime carried by a JEV state, if any."""
+        snapshot = state.get("regime_snapshot")
+        value = None
+        if isinstance(snapshot, dict):
+            value = snapshot.get("regime")
+        if value is None:
+            value = state.get("deterministic_regime")
+        if value is None:
+            value = state.get("regime")
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        return text or None
+
+    def _effective_tradeability_threshold(self, state: Dict[str, Any]) -> float:
+        """Lower the noul threshold in a deterministic range regime."""
+        if self._state_regime(state) != "range":
+            return self.tradeability_threshold
+        if self.range_tradeability_threshold is not None:
+            return self.range_tradeability_threshold
+        return max(0.0, self.tradeability_threshold * RANGE_TRADEABILITY_FACTOR)
+
+    @staticmethod
+    def _state_setup(state: Dict[str, Any]) -> Optional[str]:
+        """Return the setup carried by a state when a caller supplies one."""
+        setup = state.get("setup")
+        if setup is None:
+            return None
+        text = str(setup).strip().lower()
+        return text or None
+
+    def _bias_conflict_vetoes(self, state: Dict[str, Any]) -> bool:
+        """Return whether a bias conflict may veto the decision.
+
+        A lagging directional bias must not block a structurally justified
+        trade in a clear regime: the conflict veto is kept only for an unclear
+        regime or for a momentum-continuation setup, where agreement between
+        the short-term bias and the entry is part of the thesis. This rule is
+        symmetric (BUY/short and SELL/long).
+        """
+        regime = self._state_regime(state)
+        if regime is None or regime == "unclear":
+            return True
+        setup = self._state_setup(state)
+        return bool(setup and setup.startswith("momentum_"))
+
+    async def _consult(
+        self, state: Dict[str, Any], tradeability_threshold: Optional[float] = None
+    ) -> GateResult:
         """Call JEV once and parse the answer set.
 
         Any JEV failure fails open: the gate is a filter and must not silently
@@ -606,7 +688,12 @@ class JevGate:
             )
         try:
             response = await self.client.ask(state, build_questions())
-            signal = parse_jev_signal(response, self.tradeability_threshold)
+            signal = parse_jev_signal(
+                response,
+                self.tradeability_threshold
+                if tradeability_threshold is None
+                else tradeability_threshold,
+            )
         except JevError as exc:
             self.last_error = str(exc)
             logger.warning("JEV unavailable, failing open: %s", exc)
@@ -636,7 +723,8 @@ class JevGate:
         """Decide whether the LLM should be called at all."""
         if not self.uses_pre():
             return GateResult(allowed=True, reason="JEV pre-gate disabled", consulted=False)
-        result = await self._consult(state)
+        threshold = self._effective_tradeability_threshold(state)
+        result = await self._consult(state, threshold)
         if not result.consulted or result.error is not None:
             return result
         signal = result.signal
@@ -648,7 +736,7 @@ class JevGate:
                 allowed=False,
                 reason=(
                     "JEV pre-gate: not tradeable "
-                    f"(noul={detail} < {self.tradeability_threshold})"
+                    f"(noul={detail} < {threshold})"
                 ),
                 consulted=True,
                 signal=signal,
@@ -673,7 +761,8 @@ class JevGate:
                 reason="HOLD exempt from JEV veto",
                 consulted=False,
             )
-        result = await self._consult(state)
+        threshold = self._effective_tradeability_threshold(state)
+        result = await self._consult(state, threshold)
         if not result.consulted or result.error is not None:
             return result
         signal = result.signal
@@ -685,22 +774,20 @@ class JevGate:
                 allowed=False,
                 reason=(
                     "JEV veto: not tradeable "
-                    f"(noul={detail} < {self.tradeability_threshold})"
+                    f"(noul={detail} < {threshold})"
                 ),
                 consulted=True,
                 signal=signal,
             )
-        if normalized_action == "BUY" and signal.bias == "short":
+        bias_conflict = (
+            (normalized_action == "BUY" and signal.bias == "short")
+            or (normalized_action == "SELL" and signal.bias == "long")
+        )
+        if bias_conflict and self._bias_conflict_vetoes(state):
+            side = "short" if normalized_action == "BUY" else "long"
             return GateResult(
                 allowed=False,
-                reason="JEV veto: short bias conflicts with BUY",
-                consulted=True,
-                signal=signal,
-            )
-        if normalized_action == "SELL" and signal.bias == "long":
-            return GateResult(
-                allowed=False,
-                reason="JEV veto: long bias conflicts with SELL",
+                reason=f"JEV veto: {side} bias conflicts with {normalized_action}",
                 consulted=True,
                 signal=signal,
             )

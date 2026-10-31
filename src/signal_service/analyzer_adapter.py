@@ -37,6 +37,10 @@ from src.signal_service.contract import (
     timeframe_seconds,
 )
 from src.signal_service.jev_gate import GateResult, JevGate, build_state
+from src.signal_service.regime_snapshot import (
+    build_regime_snapshot,
+    format_regime_snapshot_block,
+)
 from src.signal_service.storage import SignalStorage, write_heartbeat
 
 logger = logging.getLogger(__name__)
@@ -732,6 +736,7 @@ class PairAnalyzer:
         if candles is None or len(candles) == 0:
             return None
         timestamps = getattr(context, "timestamps", None)
+        snapshot = self._regime_snapshot_from_context(context)
         try:
             if timestamps is not None and len(timestamps) == len(candles):
                 return build_state(
@@ -740,16 +745,125 @@ class PairAnalyzer:
                     candles,
                     timestamps=[self._as_datetime(ts) for ts in timestamps],
                     as_of=as_of,
+                    regime_snapshot=snapshot,
                 )
             # No timestamps: be conservative and drop the last (possibly forming) candle.
             if len(candles) < 3:
                 return None
-            return build_state(self.symbol, self.timeframe, list(candles)[:-1])
+            return build_state(
+                self.symbol,
+                self.timeframe,
+                list(candles)[:-1],
+                regime_snapshot=snapshot,
+            )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # A state-building failure must never abort the analysis: the
             # documented JEV fail-open contract covers every failure mode.
             logger.warning("Cannot build JEV state for %s: %s", self.symbol, exc)
             return None
+
+    # ---------------------------------------------------------- regime snapshot
+    def _install_regime_snapshot_provider(self) -> None:
+        """Render the deterministic regime block from the prompt's live context.
+
+        The adapter computes the snapshot before the pre-gate for JEV, but the
+        prompt is built by the engine after its own data collection and
+        technical pass. A provider closure lets the prompt see that fresh
+        context instead of the previous cycle's indicators, without importing
+        the signal service into the analyzer layer.
+        """
+        builder = getattr(self.engine, "prompt_builder", None)
+        if builder is None:
+            return
+        builder.regime_snapshot_provider = lambda context: format_regime_snapshot_block(
+            self._regime_snapshot_from_context(context)
+        )
+
+    def _regime_snapshot_from_context(self, context: Any) -> Optional[Dict[str, Any]]:
+        """Build a regime snapshot from an AnalysisContext, failing soft."""
+        if context is None:
+            return None
+        try:
+            long_term_data = getattr(context, "long_term_data", None) or None
+            daily_rows = None
+            if isinstance(long_term_data, dict):
+                daily_rows = long_term_data.get("data")
+            btc = self._btc_close_series(context)
+            return build_regime_snapshot(
+                technical_data=getattr(context, "technical_data", None) or None,
+                long_term_data=long_term_data,
+                weekly_macro=getattr(context, "weekly_macro_indicators", None) or None,
+                closes_1h=self._close_series(getattr(context, "ohlcv_candles", None)),
+                closes_1d=self._close_series(daily_rows),
+                closes_1w=self._close_series(getattr(context, "weekly_ohlcv", None)),
+                btc_closes_1h=btc.get("1h"),
+                btc_closes_1d=btc.get("1d"),
+                btc_closes_1w=btc.get("1w"),
+                timeframe=self.timeframe,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # The snapshot is an advisory input: never abort an analysis for it.
+            logger.warning("Cannot build regime snapshot for %s: %s", self.symbol, exc)
+            return None
+
+    def _btc_close_series(self, context: Any) -> Dict[str, Optional[List[float]]]:
+        """Read optional BTC benchmark series already exposed by the runtime.
+
+        P0 does not fetch BTC data: relative strength is populated only when a
+        caller (replay fixture or a future shared benchmark) exposes the series
+        on the context or engine. Missing series yield ``None`` fields.
+        """
+        sources = (context, self.engine)
+        mapping = None
+        for source in sources:
+            candidate = getattr(source, "btc_closes", None)
+            if isinstance(candidate, dict):
+                mapping = candidate
+                break
+        result: Dict[str, Optional[List[float]]] = {}
+        for label in ("1h", "1d", "1w"):
+            series = None
+            for source in sources:
+                value = getattr(source, f"btc_closes_{label}", None)
+                if value is not None:
+                    series = self._close_series(value)
+                    break
+            if series is None and mapping is not None:
+                series = self._close_series(mapping.get(label))
+            result[label] = series
+        return result
+
+    @staticmethod
+    def _close_series(rows: Any) -> Optional[List[float]]:
+        """Extract a close series from OHLCV rows or an existing close list."""
+        if rows is None:
+            return None
+        try:
+            count = len(rows)
+        except TypeError:
+            return None
+        if count == 0:
+            return None
+        closes: List[float] = []
+        for row in rows:
+            try:
+                values = list(row)
+            except TypeError:
+                values = None
+            if values is None:
+                # A plain close series (numpy 1-D array or list of floats).
+                try:
+                    closes.append(float(row))
+                except (TypeError, ValueError):
+                    continue
+                continue
+            if len(values) < 5:
+                continue
+            try:
+                closes.append(float(values[-5:][3]))
+            except (TypeError, ValueError):
+                continue
+        return closes or None
 
     @staticmethod
     def _as_datetime(value: Any) -> datetime:
@@ -968,6 +1082,7 @@ class PairAnalyzer:
         """
         if json_mode is None:
             json_mode = self._json_format_enabled()
+        self._install_regime_snapshot_provider()
         return await self.engine.analyze_market(
             previous_response=None,
             previous_indicators=None,
