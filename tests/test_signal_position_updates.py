@@ -622,14 +622,20 @@ def test_unknown_config_market_label_rejected(tmp_path):
         build_client_from_config(str(p))
 
 
-def test_env_client_defaults_to_spot_market(monkeypatch):
+def test_env_client_requires_explicit_market(monkeypatch):
     from src.signal_service.position_sync import build_client_from_env
 
     monkeypatch.setenv("FREQTRADE_API_URL", "http://127.0.0.1:8080")
     monkeypatch.setenv("FREQTRADE_API_USER", "u")
     monkeypatch.setenv("FREQTRADE_API_PASSWORD", "p")
+
     monkeypatch.delenv("FREQTRADE_API_MARKET", raising=False)
-    assert build_client_from_env().market == "spot"
+    with pytest.raises(RuntimeError):
+        build_client_from_env()
+
+    monkeypatch.setenv("FREQTRADE_API_MARKET", "futures")
+    assert build_client_from_env().market == "futures"
+
     monkeypatch.setenv("FREQTRADE_API_MARKET", "margin")
     with pytest.raises(RuntimeError):
         build_client_from_env()

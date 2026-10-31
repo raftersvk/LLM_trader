@@ -238,10 +238,13 @@ def build_client_from_env() -> FreqtradeReadOnlyClient:
         raise RuntimeError(
             "FREQTRADE_API_USER and FREQTRADE_API_PASSWORD must be set in the environment"
         )
-    market = os.environ.get("FREQTRADE_API_MARKET", "spot").strip().lower()
+    # No silent default: a single-API env deployment could be futures, and
+    # mislabelling it "spot" would produce colliding spot:<id> keys.
+    market = os.environ.get("FREQTRADE_API_MARKET", "").strip().lower()
     if market not in VALID_MARKETS:
         raise RuntimeError(
-            f"FREQTRADE_API_MARKET must be spot|futures, got {market!r}"
+            "FREQTRADE_API_MARKET must be explicitly set to spot|futures "
+            f"for the env path, got {market!r}"
         )
     return FreqtradeReadOnlyClient(url, user, password, market=market)
 
