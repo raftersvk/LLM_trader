@@ -308,100 +308,59 @@ class _FakeClient:
 
 
 @pytest.mark.asyncio
-async def test_range_does_not_lower_the_noul_threshold():
-    """P0-B: lowering noul in range degraded the arm (-11.01 -> -15.73 R)."""
-    client = _FakeClient(_response(tradeable=0.45, bias="long"))
-    gate = JevGate(client=client, mode="pre")
-
-    in_range = await gate.check_pre({"symbol": SYMBOL, "deterministic_regime": "range"})
-
-    assert in_range.allowed is False
-    assert in_range.signal is not None and in_range.signal.tradeability is False
-
-
-@pytest.mark.asyncio
-async def test_trend_down_short_exemption_uses_noul_010():
-    """A trend_down short is admitted from 0.10; a long keeps the 0.50 floor."""
-    client = _FakeClient(_response(tradeable=0.12, bias="short"))
+@pytest.mark.parametrize("regime", ["trend_down", "range", "unclear", "high_vol", "low_vol"])
+async def test_short_is_accepted_on_short_bias_in_every_regime(regime):
+    """Bias-only policy: regime fields never gate a short that says short."""
+    client = _FakeClient(_response(tradeable=0.01, bias="short"))
     gate = JevGate(client=client, mode="post")
-    state = {"symbol": SYMBOL, "deterministic_regime": "trend_down"}
+    state = {
+        "symbol": SYMBOL,
+        "deterministic_regime": regime,
+        "setup": "rally_failure",
+        "no_trade": regime in ("unclear", "high_vol", "low_vol"),
+    }
 
-    short = await gate.check_post(state, "SELL")
-    long = await gate.check_post({**state, "setup": "trend_pullback"}, "BUY")
-
-    assert short.allowed is True
-    assert short.signal is not None and short.signal.tradeability is True
-    assert long.allowed is False
-    assert "not tradeable" in long.reason
-
-
-@pytest.mark.asyncio
-async def test_pre_only_mode_keeps_the_long_threshold_in_trend_down():
-    """Without a post gate there is no side, so pre-only must keep 0.50."""
-    client = _FakeClient(_response(tradeable=0.12, bias="short"))
-    gate = JevGate(client=client, mode="pre")
-
-    result = await gate.check_pre({"symbol": SYMBOL, "deterministic_regime": "trend_down"})
-
-    assert result.allowed is False
-    assert result.signal is not None and result.signal.tradeability is False
-
-
-@pytest.mark.asyncio
-async def test_pre_post_pre_gate_exempts_trend_down_for_the_post_gate():
-    client = _FakeClient(_response(tradeable=0.12, bias="short"))
-    gate = JevGate(client=client, mode="pre_post")
-    state = {"symbol": SYMBOL, "deterministic_regime": "trend_down"}
-
-    pre = await gate.check_pre(state)
-    post_short = await gate.check_post(state, "SELL")
-    post_long = await gate.check_post({**state, "setup": "trend_pullback"}, "BUY")
-
-    assert pre.allowed is True
-    assert post_short.allowed is True
-    assert post_long.allowed is False
-    assert "not tradeable" in post_long.reason
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("symbol", ["ARB/USDT", "ETH/USDT"])
-@pytest.mark.parametrize(
-    ("action", "bias"),
-    [("SELL", "long"), ("BUY", "short")],
-)
-async def test_clear_regime_does_not_veto_lagging_bias_conflict(symbol, action, bias):
-    gate = JevGate(client=_FakeClient(_response(tradeable=0.9, bias=bias)), mode="post")
-    state = {"symbol": symbol, "deterministic_regime": "trend_down", "setup": "rally_failure"}
-
-    result = await gate.check_post(state, action)
+    result = await gate.check_post(state, "SELL")
 
     assert result.allowed is True
-    assert "conflicts" not in result.reason
+    assert result.signal is not None and result.signal.bias == "short"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("setup", "action", "bias"),
-    [("momentum_short", "SELL", "long"), ("momentum_continuation", "BUY", "short")],
-)
-async def test_momentum_setup_keeps_bias_conflict_veto(setup, action, bias):
+@pytest.mark.parametrize("regime", ["trend_down", "range"])
+@pytest.mark.parametrize("bias", ["long", "none"])
+async def test_short_without_short_bias_is_vetoed_even_in_clear_regimes(regime, bias):
     gate = JevGate(client=_FakeClient(_response(tradeable=0.9, bias=bias)), mode="post")
-    state = {"symbol": SYMBOL, "deterministic_regime": "trend_down", "setup": setup}
+    state = {"symbol": SYMBOL, "deterministic_regime": regime, "setup": "rally_failure"}
 
-    result = await gate.check_post(state, action)
+    result = await gate.check_post(state, "SELL")
 
     assert result.allowed is False
-    assert "conflicts" in result.reason
+    assert "SELL requires short bias" in result.reason
 
 
 @pytest.mark.asyncio
-async def test_unclear_regime_keeps_bias_conflict_veto():
-    gate = JevGate(client=_FakeClient(_response(tradeable=0.9, bias="long")), mode="post")
+@pytest.mark.parametrize("bias", ["short", "long", "none"])
+@pytest.mark.parametrize("regime", ["trend_down", "unclear"])
+async def test_long_is_never_filtered_by_the_jev_bias(bias, regime):
+    gate = JevGate(client=_FakeClient(_response(tradeable=0.01, bias=bias)), mode="post")
+    state = {"symbol": SYMBOL, "deterministic_regime": regime, "setup": "momentum_continuation"}
 
-    result = await gate.check_post({"symbol": SYMBOL, "deterministic_regime": "unclear"}, "SELL")
+    result = await gate.check_post(state, "BUY")
 
-    assert result.allowed is False
-    assert "conflicts" in result.reason
+    assert result.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_noul_is_logged_not_enforced(caplog):
+    gate = JevGate(client=_FakeClient(_response(tradeable=0.0, bias="short")), mode="post")
+
+    with caplog.at_level("INFO"):
+        result = await gate.check_post({"symbol": SYMBOL, "deterministic_regime": "trend_down"}, "SELL")
+
+    assert result.allowed is True
+    assert "noul=0.000" in caplog.text
+    assert "advisory only" in caplog.text
 
 def test_adapter_installs_prompt_provider_using_the_prompt_context():
     """The prompt block must use the engine's fresh context, not a stale copy."""
@@ -559,6 +518,86 @@ async def test_refresh_recomputes_indicators_and_restores_daily_fields():
     assert state["last_close"] == pytest.approx(105.0)
     assert state["adx"] == pytest.approx(30.0)
     assert state["deterministic_regime"] == "trend_down"
+
+
+@pytest.mark.asyncio
+async def test_refresh_replaces_stale_indicators_with_fresh_values():
+    """A new cycle must never feed the previous cycle's ADX/ATR/daily trend."""
+    engine = _RefreshingEngine()
+    engine.context.technical_data = {
+        "adx": 99.0,
+        "plus_di": 50.0,
+        "minus_di": 1.0,
+        "atr_percent": 99.0,
+        "sma_20": 1.0,
+    }
+    engine.context.technical_history = {"atr_percent": [99.0, 99.0]}
+    engine.context.long_term_data = {
+        "data": [[0, 90.0, 91.0, 89.0, 90.0, 1.0]],
+        "daily_adx": 99.0,
+        "macro_trend": {"trend_direction": "Bullish"},
+    }
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    as_of = BASE + timedelta(hours=2)
+
+    await analyzer._refresh_context(as_of)
+    state = analyzer._jev_state(as_of)
+    snapshot = analyzer._regime_snapshot_from_context(engine.context, as_of)
+
+    assert state is not None
+    assert state["adx"] == pytest.approx(30.0)
+    assert state["deterministic_regime"] == "trend_down"
+    assert snapshot is not None and snapshot["daily_trend"] == "bearish"
+
+
+@pytest.mark.asyncio
+async def test_missing_recompute_degrades_to_unclear_instead_of_stale():
+    """Without a recompute hook the derived fields are cleared, not reused."""
+
+    class _NoRecomputeEngine:
+        def __init__(self) -> None:
+            self.context = SimpleNamespace(
+                ohlcv_candles=[
+                    [0, 98.0, 101.0, 97.0, 100.0, 10.0],
+                    [3_600_000, 100.0, 106.0, 99.0, 105.0, 10.0],
+                    [7_200_000, 105.0, 131.0, 104.0, 130.0, 10.0],
+                ],
+                timestamps=[BASE, BASE + timedelta(hours=1), BASE + timedelta(hours=2)],
+                current_price=130.0,
+                technical_data={"adx": 99.0, "atr_percent": 99.0, "sma_20": 1.0},
+                technical_history={"atr_percent": [99.0]},
+                long_term_data={
+                    "data": [[0, 90.0, 91.0, 89.0, 90.0, 1.0]],
+                    "daily_adx": 99.0,
+                    "macro_trend": {"trend_direction": "Bullish"},
+                },
+                weekly_macro_indicators={
+                    "weekly_macro_trend": {"trend_direction": "Bullish"}
+                },
+                weekly_ohlcv=[[0, 80.0, 81.0, 79.0, 80.0, 1.0]],
+            )
+            self.data_collector = self
+
+        async def collect_data(self, context: Any = None) -> Dict[str, Any]:
+            target = context or self.context
+            target.ohlcv_candles = list(self.context.ohlcv_candles)
+            target.timestamps = list(self.context.timestamps)
+            target.long_term_data = {"data": [[0, 90.0, 91.0, 89.0, 90.0, 1.0]]}
+            target.weekly_ohlcv = [[0, 80.0, 81.0, 79.0, 80.0, 1.0]]
+            return {"success": True}
+
+    engine = _NoRecomputeEngine()
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    as_of = BASE + timedelta(hours=2)
+
+    await analyzer._refresh_context(as_of)
+    state = analyzer._jev_state(as_of)
+
+    assert state is not None
+    assert state["last_close"] == pytest.approx(105.0)
+    assert state["adx"] is None
+    assert state["deterministic_regime"] == "unclear"
+    assert state["no_trade"] is True
 
 
 @pytest.mark.asyncio

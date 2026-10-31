@@ -252,19 +252,37 @@ async def test_jev_veto():
     assert approved.risk_approved is True
     assert approved.jev["model"] == "jev-1.13-free"
 
-    # JEV veto: tradeability=false -> risk_approved=false
+    # noul is advisory: tradeability=false must not veto a BUY.
     engine2 = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
     analyzer2 = PairAnalyzer(engine=engine2, symbol=SYMBOL)
-    inject_veto = analyzer2
-    original2 = inject_veto._extract_draft
+    original2 = analyzer2._extract_draft
 
-    def patched_veto(result, raw_response):
+    def patched_advisory(result, raw_response):
         draft = original2(result, raw_response)
-        draft.jev = {"model": "jev-1.13-free", "tradeability": False, "bias": "none"}
+        draft.jev = {"model": "jev-1.13-free", "tradeability": False, "bias": "short"}
         return draft
 
-    inject_veto._extract_draft = patched_veto  # type: ignore[assignment]
-    vetoed = await inject_veto.analyze()
+    analyzer2._extract_draft = patched_advisory  # type: ignore[assignment]
+    advisory = await analyzer2.analyze()
+    assert advisory.risk_approved is True
+
+    # Bias only, asymmetric short: a SELL with a long bias is vetoed.
+    raw_sell = (
+        '{"signal": "SELL", "confidence": "HIGH", "stop_loss": 69000.0, '
+        '"take_profit": 64000.0, "position_size": 5, "reasoning": "breakdown"}'
+    )
+    engine3 = FakeEngine(raw_response=raw_sell, result=dict(RESULT_META))
+    analyzer3 = PairAnalyzer(engine=engine3, symbol=SYMBOL)
+    original3 = analyzer3._extract_draft
+
+    def patched_sell(result, raw_response):
+        draft = original3(result, raw_response)
+        draft.jev = {"model": "jev-1.13-free", "tradeability": True, "bias": "long"}
+        return draft
+
+    analyzer3._extract_draft = patched_sell  # type: ignore[assignment]
+    vetoed = await analyzer3.analyze()
+    assert vetoed.action == "SELL"
     assert vetoed.risk_approved is False
 
 

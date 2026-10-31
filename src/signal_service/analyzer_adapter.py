@@ -466,9 +466,9 @@ class PairAnalyzer:
         # shared process-wide, so another pair's flags may currently be bound.
         self._apply_flags()
 
-        # JEV gate: `pre` only decides whether the LLM is called; `post` vetoes a
-        # non-HOLD decision. The phase-1 risk layer keeps flagging an explicit
-        # JEV bias conflict whenever a JEV payload is attached.
+        # JEV gate: `pre` only consults and logs; `post` applies the short-only
+        # bias veto. The risk layer applies the same asymmetric rule when a JEV
+        # payload is attached, so `pre`-only mode still filters shorts.
         as_of = self._analysis_as_of(candle_open_time)
         self._current_analysis_as_of = as_of
         # The prompt for a closed candle must describe that candle's close, not
@@ -687,9 +687,11 @@ class PairAnalyzer:
         Collection overwrites ``long_term_data`` with the raw daily payload and
         leaves the indicator cache from the previous cycle in place. The
         pre-gate must decide on the same closed candle the engine will analyse,
-        so this method refetches, truncates every series to ``as_of`` and then
-        reuses the engine's own technical/long-term computation. Best-effort:
-        any failure leaves the gate fail-open downstream.
+        so this method refetches, truncates every series to ``as_of``, clears
+        the previous cycle's derived indicators and then reuses the engine's
+        own technical/long-term computation. A missing recompute therefore
+        degrades the snapshot to "missing" instead of reusing stale values.
+        Best-effort: any failure leaves the gate fail-open downstream.
         """
         collector = getattr(self.engine, "data_collector", None)
         if collector is None:
@@ -721,10 +723,13 @@ class PairAnalyzer:
         """Rebuild indicators after a refresh, using the engine's computation.
 
         Reusing the engine methods keeps a single implementation of every
-        indicator and of the daily/weekly derived fields. When a lightweight
-        engine double does not expose them the snapshot simply degrades, as it
-        does for any missing input.
+        indicator and of the daily/weekly derived fields. The old derived
+        fields are dropped first so a partial or absent recompute produces a
+        missing snapshot (``unclear``) instead of a stale one. When a
+        lightweight engine double does not expose the engine methods the
+        snapshot simply degrades, as it does for any missing input.
         """
+        self._reset_derived_context(context)
         self._truncate_long_term_to_as_of(context, as_of)
         calculate = getattr(self.engine, "_calculate_technical_indicators", None)
         process_long_term = getattr(self.engine, "_process_long_term_data", None)
@@ -737,6 +742,25 @@ class PairAnalyzer:
             logger.warning(
                 "JEV pre-gate indicator refresh failed for %s: %s", self.symbol, exc
             )
+
+    @staticmethod
+    def _reset_derived_context(context: Any) -> None:
+        """Drop the previous cycle's derived indicators before recomputing.
+
+        ``technical_data``, ``technical_history`` and the daily/weekly fields
+        of ``long_term_data`` are all derived. Clearing them first means a
+        refresh that cannot recompute degrades to a missing snapshot instead of
+        feeding stale values into the regime block or the JEV state.
+        """
+        context.technical_data = {}
+        context.technical_history = {}
+        context.weekly_macro_indicators = None
+        long_term = getattr(context, "long_term_data", None)
+        if not isinstance(long_term, dict):
+            return
+        raw_keys = {"data", "is_new_token", "available_days", "is_complete"}
+        for key in [key for key in long_term if key not in raw_keys]:
+            long_term.pop(key, None)
 
     def _truncate_long_term_to_as_of(self, context: Any, as_of: datetime) -> None:
         """Drop daily/weekly rows that had not closed at ``as_of``."""
@@ -1461,12 +1485,15 @@ class PairAnalyzer:
         if confidence_float < self.min_confidence:
             return False, f"confidence below threshold ({self.min_confidence})"
         jev = draft.jev or {}
-        if jev.get("tradeability") is False:
-            return False, "JEV veto"
-        if draft.action == "BUY" and jev.get("bias") == "short":
-            return False, "JEV bias conflict"
-        if draft.action == "SELL" and jev.get("bias") == "long":
-            return False, "JEV bias conflict"
+        # Post-OOS JEV policy: bias only, asymmetric short. noul is advisory
+        # (logged by the gate) and never vetoes here. A BUY is never filtered
+        # by the JEV bias; a SELL is admitted only on an explicit short bias.
+        # A missing/unparseable bias fails open to avoid blocking on a partial
+        # JEV payload.
+        if draft.action == "SELL":
+            bias = jev.get("bias")
+            if bias is not None and bias != "short":
+                return False, "JEV bias conflict"
         return True, "ok"
 
     # ------------------------------------------------------------- signal build

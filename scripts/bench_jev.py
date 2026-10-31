@@ -543,11 +543,14 @@ async def run_mode(
                 action = "HOLD"
             else:
                 pre_signal = pre.signal
-                # Mirror the signal service risk layer: an explicit bias
-                # conflict marks the decision as non-tradeable.
-                if pre_signal is not None and (
-                    (action == "BUY" and pre_signal.bias == "short")
-                    or (action == "SELL" and pre_signal.bias == "long")
+                # Mirror the signal service risk layer: bias only, asymmetric
+                # short. A SELL needs an explicit short bias; a BUY is never
+                # filtered by the bias. noul is advisory and never gates.
+                if (
+                    pre_signal is not None
+                    and action == "SELL"
+                    and pre_signal.bias is not None
+                    and pre_signal.bias != "short"
                 ):
                     action = "HOLD"
         if action in ("BUY", "SELL") and mode in ("jev_post", "jev_pre_post"):

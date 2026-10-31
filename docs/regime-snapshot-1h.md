@@ -36,17 +36,22 @@ is computed only from the daily/weekly blocks available before the decision.
 block and expose no allowed setup family. Enforcing a hard gate on that flag is
 left to the gate policy, not to the snapshot.
 
-## JEV gate (P0-B)
+## JEV gate (post-OOS: bias only, asymmetric short)
 
-- The long noul threshold stays **0.50** everywhere. In particular, **range is
-  not lowered**: the P0-B arm degraded from -11.01 R to -15.73 R.
-- A short in a deterministic `trend_down` is admitted from **noul >= 0.10**.
-  In `pre_post` mode the pre-gate lets the state through at 0.10 and the
-  post-gate applies 0.10 to SELL and keeps 0.50 to BUY. In **pre-only** mode
-  there is no post-gate to re-apply 0.50, so the pre-gate keeps 0.50 for every
-  side.
-- A bias conflict vetoes only when the regime is `unclear` or the setup is
-  `momentum_*`, symmetrically for BUY/short and SELL/long.
+- The gate filters on **JEV bias only**. A **SELL** is admitted only when
+  `jev.bias == "short"`; a **BUY is never filtered by the JEV bias**.
+- `noul` is **logged only** (and kept in the advisory payload). There is no
+  noul threshold, no `trend_down` short exemption and no regime gate: those
+  three P0-B rules are retired.
+- A `none` or `long` bias vetoes a short. A missing/unparseable bias fails open
+  instead of blocking.
+- The pre-gate has no side yet, so it only consults and logs. In `pre` mode the
+  short-only rule is applied by the adapter risk layer once the LLM decision is
+  known; in `post`/`pre_post` the post-gate applies it.
+- The OOS decision behind this policy: short + short bias over 28 trades was
+  +14.05 R at 64.3 % WR (`rally_failure` 22 trades, +12.91 R at 68 % WR);
+  long + bias was -9.14 R and unstable; `noul >= 0.50` degraded the arm and the
+  global bias rule was a NO-GO. Only short-only survives as research.
 - The setup taxonomy and contract fields remain out of scope: P1-B only,
   optional fields.
 
@@ -69,4 +74,6 @@ TP.
 
 No positive configuration outside BEAMX on the 7-day sample: **NO-GO for live
 or 1h production**, and **OOS 30 days is required** before any performance
-claim. This module is a reproducible risk input, not a proven edge.
+claim. The post-OOS result above only supports **short-only research**; the
+global bias rule remains a NO-GO. This module is a reproducible risk input, not
+a proven edge.
