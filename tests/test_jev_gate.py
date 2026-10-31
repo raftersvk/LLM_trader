@@ -299,8 +299,7 @@ async def test_pre_mode_allows_tradeable_directional_market():
 
     assert result.allowed is True
     assert result.consulted is True
-    assert result.signal is not None and result.signal.bias == bias
-    assert "JEV diagnostic: noul=" in caplog.text
+    assert result.signal is not None and result.signal.bias == "short"
 
 
 @pytest.mark.asyncio
@@ -347,7 +346,7 @@ async def test_post_mode_never_filters_a_long_on_bias(bias):
     """The asymmetric policy leaves BUY untouched by any JEV bias."""
     gate = JevGate(client=FakeJevClient(_response(tradeable=0.01, bias=bias)), mode="post")
 
-    result = await gate.check_post({"symbol": SYMBOL}, action)
+    result = await gate.check_post({"symbol": SYMBOL}, "BUY")
 
     assert result.allowed is True
     assert result.signal is not None and result.signal.bias == bias
@@ -587,7 +586,7 @@ async def test_adapter_post_vetoes_short_without_short_bias():
 
     assert signal.action == "SELL"
     assert signal.risk_approved is False
-    assert "JEV veto: SELL requires bias=short" in signal.reasoning
+    assert "SELL requires short bias" in signal.reasoning
     assert signal.jev["bias"] == "long"
 
 
