@@ -316,7 +316,6 @@ async def test_short_is_accepted_on_short_bias_in_every_regime(regime):
     state = {
         "symbol": SYMBOL,
         "deterministic_regime": regime,
-        "setup": "rally_failure",
         "no_trade": regime in ("unclear", "high_vol", "low_vol"),
     }
 
@@ -331,7 +330,7 @@ async def test_short_is_accepted_on_short_bias_in_every_regime(regime):
 @pytest.mark.parametrize("bias", ["long", "none"])
 async def test_short_without_short_bias_is_vetoed_even_in_clear_regimes(regime, bias):
     gate = JevGate(client=_FakeClient(_response(tradeable=0.9, bias=bias)), mode="post")
-    state = {"symbol": SYMBOL, "deterministic_regime": regime, "setup": "rally_failure"}
+    state = {"symbol": SYMBOL, "deterministic_regime": regime}
 
     result = await gate.check_post(state, "SELL")
 
@@ -344,7 +343,7 @@ async def test_short_without_short_bias_is_vetoed_even_in_clear_regimes(regime, 
 @pytest.mark.parametrize("regime", ["trend_down", "unclear"])
 async def test_long_is_never_filtered_by_the_jev_bias(bias, regime):
     gate = JevGate(client=_FakeClient(_response(tradeable=0.01, bias=bias)), mode="post")
-    state = {"symbol": SYMBOL, "deterministic_regime": regime, "setup": "momentum_continuation"}
+    state = {"symbol": SYMBOL, "deterministic_regime": regime}
 
     result = await gate.check_post(state, "BUY")
 

@@ -52,8 +52,10 @@ left to the gate policy, not to the snapshot.
   +14.05 R at 64.3 % WR (`rally_failure` 22 trades, +12.91 R at 68 % WR);
   long + bias was -9.14 R and unstable; `noul >= 0.50` degraded the arm and the
   global bias rule was a NO-GO. Only short-only survives as research.
-- The setup taxonomy and contract fields remain out of scope: P1-B only,
-  optional fields.
+- No setup is wired into the JEV state in P0: `_jev_state` only carries the
+  regime fields, and the gate does not read `setup`. The former `momentum_*`
+  bias-conflict branch was removed together with the regime gate; the setup
+  taxonomy and contract fields remain P1-B only, optional fields.
 
 ## P1-A price-preserving exits (not implemented here)
 

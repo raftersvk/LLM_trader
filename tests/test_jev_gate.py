@@ -345,6 +345,20 @@ async def test_post_mode_never_filters_a_long_on_bias(bias):
 
 
 @pytest.mark.asyncio
+async def test_post_mode_ignores_a_setup_key_not_produced_by_the_pipeline():
+    """No setup is wired into the state in P0, so it cannot change the veto."""
+    short_gate = JevGate(client=FakeJevClient(_response(bias="long")), mode="post")
+    long_gate = JevGate(client=FakeJevClient(_response(bias="short")), mode="post")
+    state = {"symbol": SYMBOL, "setup": "momentum_short"}
+
+    short = await short_gate.check_post(state, "SELL")
+    long = await long_gate.check_post({**state, "setup": "momentum_continuation"}, "BUY")
+
+    assert short.allowed is False and "SELL requires short bias" in short.reason
+    assert long.allowed is True
+
+
+@pytest.mark.asyncio
 async def test_post_mode_logs_noul_but_never_vetoes_on_it(caplog):
     gate = JevGate(client=FakeJevClient(_response(tradeable=0.0, bias="long")), mode="post")
 
