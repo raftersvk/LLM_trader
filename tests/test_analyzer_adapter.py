@@ -2130,4 +2130,3 @@ async def test_deterministic_snapshot_overrides_the_reported_regime():
     # trend_pullback is not allowed in a range: drop it rather than trust it.
     assert signal.setup is None
     signal.validate()
-
