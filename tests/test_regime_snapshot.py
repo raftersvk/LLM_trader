@@ -252,6 +252,44 @@ def test_prompt_builder_injects_regime_block_only_when_configured():
     assert "regime=trend_up" in with_block
 
 
+def test_system_prompt_enables_the_1h_taxonomy_only_with_the_snapshot_provider():
+    """The live bot never installs the provider, so its shared prompt stays unchanged."""
+    template_manager = MagicMock()
+    template_manager.build_system_prompt.return_value = "BASE"
+    template_manager.build_analysis_steps.return_value = "STEPS"
+    template_manager.build_decision_rules.return_value = "RULES"
+    template_manager.build_response_template.return_value = "FORMAT"
+    builder = PromptBuilder(
+        timeframe="1h",
+        config=SimpleNamespace(MODEL_VERBOSITY="low"),
+        format_utils=MagicMock(),
+        template_manager=template_manager,
+        overview_formatter=MagicMock(),
+        long_term_formatter=MagicMock(),
+        technical_formatter=MagicMock(),
+        market_formatter=MagicMock(),
+    )
+    context = AnalysisContext(symbol=SYMBOL)
+
+    builder.build_system_prompt(SYMBOL, context)
+    assert template_manager.build_decision_rules.call_args.kwargs[
+        "regime_snapshot_available"
+    ] is False
+    assert template_manager.build_response_template.call_args.kwargs[
+        "regime_snapshot_available"
+    ] is False
+
+    builder.regime_snapshot_provider = lambda _context: ""
+    builder.build_system_prompt(SYMBOL, context)
+    assert template_manager.build_decision_rules.call_args.kwargs[
+        "regime_snapshot_available"
+    ] is True
+    assert template_manager.build_response_template.call_args.kwargs[
+        "regime_snapshot_available"
+    ] is True
+    assert template_manager.build_decision_rules.call_args.kwargs["timeframe"] == "1h"
+
+
 # ------------------------------------------------------------------- JEV state
 def test_build_state_carries_regime_fields_only_when_supplied():
     snapshot = build_regime_snapshot(**_trend_down_inputs(), timeframe="1h")

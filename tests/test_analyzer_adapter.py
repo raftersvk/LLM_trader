@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,7 @@ from src.signal_service.analyzer_adapter import (
     JSON_REPAIR_INSTRUCTION,
     JSON_REPAIR_SYSTEM,
     SIGNAL_OUTPUT_CONTRACT,
+    SIGNAL_TAXONOMY_OUTPUT_CONTRACT,
     PairAnalyzer,
     ReplayDataInjector,
     analyze_and_store,
@@ -284,6 +286,41 @@ async def test_jev_veto():
     vetoed = await analyzer3.analyze()
     assert vetoed.action == "SELL"
     assert vetoed.risk_approved is False
+
+
+@pytest.mark.asyncio
+async def test_v12_jev_keys_are_stripped_when_the_record_stays_v10():
+    """v1.2-only JEV keys must not leak into a 1.0/1.1 record shape."""
+    engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL)
+    original = analyzer._extract_draft
+
+    def patched(result, raw_response):
+        draft = original(result, raw_response)
+        draft.jev = {
+            "model": "jev-1.13-free",
+            "tradeability": True,
+            "bias": "long",
+            "regime": "trend",
+            "regime_confidence": 0.7,
+            "bias_confidence": 0.8,
+            "tradeability_probability": 0.6,
+            "confidence": 0.75,
+        }
+        return draft
+
+    analyzer._extract_draft = patched  # type: ignore[assignment]
+    signal = await analyzer.analyze()
+
+    assert signal.schema_version == "1.0"
+    assert set(signal.jev) == {"model", "tradeability", "bias", "regime"}
+    for key in (
+        "regime_confidence",
+        "bias_confidence",
+        "tradeability_probability",
+        "confidence",
+    ):
+        assert key not in signal.jev
 
 
 def test_deterministic_candle_alignment():
@@ -1025,6 +1062,26 @@ async def test_signal_output_contract_is_a_system_suffix_not_user_context():
     call = engine.calls[-1]
     assert call["system_prompt_suffix"] == SIGNAL_OUTPUT_CONTRACT
     assert call.get("additional_context") is None
+
+
+@pytest.mark.asyncio
+async def test_signal_output_contract_adds_taxonomy_only_on_signal_1h():
+    """A 4h signal-service run must not ask for 1h taxonomy labels."""
+    engine_1h = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine_1h.prompt_builder = SimpleNamespace(regime_snapshot_provider=None)
+    analyzer_1h = PairAnalyzer(engine=engine_1h, symbol=SYMBOL, timeframe="1h")
+
+    await analyzer_1h.analyze()
+    assert engine_1h.calls[-1]["system_prompt_suffix"] == (
+        f"{SIGNAL_OUTPUT_CONTRACT}\n{SIGNAL_TAXONOMY_OUTPUT_CONTRACT}"
+    )
+
+    engine_4h = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine_4h.prompt_builder = SimpleNamespace(regime_snapshot_provider=None)
+    analyzer_4h = PairAnalyzer(engine=engine_4h, symbol=SYMBOL, timeframe="4h")
+
+    await analyzer_4h.analyze()
+    assert engine_4h.calls[-1]["system_prompt_suffix"] == SIGNAL_OUTPUT_CONTRACT
 
 
 
@@ -2073,3 +2130,177 @@ async def test_repair_honours_the_json_format_opt_out():
     assert engine.calls[-1]["response_format"] is None
     assert engine.calls[-1]["json_object_output"] is False
     assert signal.reasoning == "repaired decision"
+
+
+RAW_TAXONOMY_BUY = (
+    '{"signal": "BUY", "confidence": "HIGH", "stop_loss": 67000.0, '
+    '"take_profit": 70000.0, "position_size": 5, "reasoning": "pullback", '
+    '"setup": "trend_pullback", "regime": "trend_up", "htf_alignment": "aligned"}'
+)
+
+
+@pytest.mark.asyncio
+async def test_taxonomy_is_emitted_from_the_decision_object():
+    engine = FakeEngine(raw_response=RAW_TAXONOMY_BUY, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": 31.0,
+        "regime": "trend_up",
+        "htf_alignment": "aligned",
+        "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.setup == "trend_pullback"
+    assert signal.regime == "trend_up"
+    assert signal.htf_alignment == "aligned"
+    assert signal.schema_version == "1.2"
+    payload = signal.to_dict()
+    assert payload["setup"] == "trend_pullback"
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_unknown_taxonomy_is_dropped_without_failing_the_signal():
+    raw = RAW_TAXONOMY_BUY.replace("trend_pullback", "vibes")
+    engine = FakeEngine(raw_response=raw, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": 31.0,
+        "regime": "trend_up",
+        "htf_alignment": "aligned",
+        "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.setup is None
+    assert signal.regime == "trend_up"
+    assert signal.schema_version == "1.2"
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_no_model_taxonomy_keeps_the_signal_at_v10_even_with_a_snapshot():
+    """A deterministic snapshot alone must not upgrade every production signal."""
+    engine = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": 31.0,
+        "regime": "trend_up",
+        "htf_alignment": "aligned",
+        "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
+    }
+
+    def _must_not_resolve(_draft):
+        raise AssertionError("snapshot taxonomy must not be consulted without model fields")
+
+    analyzer._resolved_taxonomy = _must_not_resolve  # type: ignore[assignment]
+
+    signal = await analyzer.analyze()
+
+    assert signal.schema_version == "1.0"
+    assert signal.setup is None
+    assert signal.regime is None
+    assert signal.htf_alignment is None
+    assert "setup" not in signal.to_dict()
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_htf_alignment_alone_is_a_valid_taxonomy_field():
+    """A lone htf echo is a v1.2 field and must not be discarded."""
+    raw = (
+        '{"signal": "BUY", "confidence": "HIGH", "stop_loss": 67000.0, '
+        '"take_profit": 70000.0, "position_size": 5, "reasoning": "breakout", '
+        '"htf_alignment": "neutral"}'
+    )
+    engine = FakeEngine(raw_response=raw, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": 31.0,
+        "regime": "trend_up",
+        "htf_alignment": "aligned",
+        "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.schema_version == "1.2"
+    assert signal.setup is None
+    assert signal.regime == "trend_up"
+    assert signal.htf_alignment == "aligned"
+    assert signal.to_dict()["htf_alignment"] == "aligned"
+    signal.validate()
+
+
+@pytest.mark.parametrize(("snapshot_regime", "allowed_setups"), [
+    ("high_vol", []),
+    ("low_vol", []),
+    ("range", ["range_fade_extreme", "range_mean_reversion"]),
+    ("unclear", []),
+])
+@pytest.mark.asyncio
+async def test_deterministic_snapshot_overrides_even_without_adx(
+    snapshot_regime, allowed_setups
+):
+    engine = FakeEngine(raw_response=RAW_TAXONOMY_BUY, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": None,
+        "regime": snapshot_regime,
+        "htf_alignment": "counter",
+        "allowed_setups": allowed_setups,
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.regime == snapshot_regime
+    assert signal.htf_alignment == "counter"
+    # trend_pullback is not allowed outside trend_up: drop it rather than trust it.
+    assert signal.setup is None
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_without_a_regime_does_not_drop_the_model_setup():
+    """A snapshot object with no regime must not enforce its empty allowed list."""
+    engine = FakeEngine(raw_response=RAW_TAXONOMY_BUY, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": None,
+        "regime": None,
+        "htf_alignment": None,
+        "allowed_setups": [],
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.regime == "trend_up"
+    assert signal.setup == "trend_pullback"
+    assert signal.schema_version == "1.2"
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_setup_is_none_on_a_non_entry_action():
+    raw = (
+        '{"signal": "HOLD", "confidence": "MEDIUM", "reasoning": "wait", '
+        '"setup": "trend_pullback", "regime": "trend_up", "htf_alignment": "aligned"}'
+    )
+    engine = FakeEngine(raw_response=raw, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": 31.0,
+        "regime": "trend_up",
+        "htf_alignment": "aligned",
+        "allowed_setups": ["trend_pullback", "breakout_retest", "momentum_continuation"],
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.action == "HOLD"
+    assert signal.setup == "none"
+    assert signal.schema_version == "1.2"
+    signal.validate()

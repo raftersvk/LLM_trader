@@ -456,6 +456,14 @@ class JevSignal:
             payload["bias"] = self.bias
         if self.regime is not None:
             payload["regime"] = self.regime
+        if self.regime_confidence is not None:
+            payload["regime_confidence"] = self.regime_confidence
+        if self.bias_confidence is not None:
+            payload["bias_confidence"] = self.bias_confidence
+        if self.tradeability_probability is not None:
+            payload["tradeability_probability"] = self.tradeability_probability
+        if self.confidence is not None:
+            payload["confidence"] = self.confidence
         return payload
 
 
