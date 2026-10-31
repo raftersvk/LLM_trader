@@ -17,8 +17,46 @@ from typing import Any, Dict, Literal, Optional
 
 SIGNAL_SCHEMA_VERSION = "1.0"
 #: Schema versions a reader must accept. 1.1 adds UPDATE/CLOSE position records
-#: on a separate channel; 1.0 entry records are unchanged.
-SIGNAL_SCHEMA_VERSIONS = frozenset({"1.0", "1.1"})
+#: on a separate channel; 1.0 entry records are unchanged. 1.2 adds the
+#: optional 1h taxonomy fields (setup/regime/htf_alignment) and optional JEV
+#: confidence numbers. Those fields are additive: a 1.0/1.1 record remains valid
+#: and a producer that does not emit them keeps writing the same shape.
+SIGNAL_SCHEMA_VERSIONS = frozenset({"1.0", "1.1", "1.2"})
+
+#: 1h setup taxonomy (P1-B). "none" means no actionable setup (HOLD/CLOSE).
+ALLOWED_SETUPS = frozenset({
+    "trend_pullback",
+    "breakout_retest",
+    "momentum_continuation",
+    "rally_failure",
+    "breakdown_retest",
+    "momentum_short",
+    "range_fade_extreme",
+    "range_mean_reversion",
+    "none",
+})
+
+#: Deterministic 1h regimes produced by ``regime_snapshot`` (P0-A).
+ALLOWED_REGIMES = frozenset({
+    "trend_up",
+    "trend_down",
+    "range",
+    "low_vol",
+    "high_vol",
+    "unclear",
+})
+
+#: Higher-timeframe agreement with the 1h regime direction.
+ALLOWED_HTF_ALIGNMENTS = frozenset({"aligned", "counter", "neutral"})
+
+#: Optional JEV confidence numbers (v1.2). ``tradeability_probability`` is the
+#: raw noul, accepted as an optional diagnostic (never a gate).
+JEV_CONFIDENCE_KEYS = frozenset({
+    "regime_confidence",
+    "bias_confidence",
+    "tradeability_probability",
+    "confidence",
+})
 
 #: Position-related actions (v1.1). They never enter a new position.
 POSITION_ACTIONS = frozenset({"UPDATE", "CLOSE"})
@@ -202,6 +240,11 @@ class Signal:
     latency_ms: Optional[int] = None
     raw_response_hash: Optional[str] = None
     jev: Optional[Dict[str, Any]] = field(default=None)
+    # v1.2 optional 1h taxonomy. Omitted when the producer cannot classify it;
+    # readers must treat a missing value as "unknown", never as a default setup.
+    setup: Optional[str] = None
+    regime: Optional[str] = None
+    htf_alignment: Optional[str] = None
     # v1.1 position-update fields (omitted on v1.0 entry records).
     # position_id is market-scoped: "<market>:<trade_id>" (spot|futures),
     # because the two Freqtrade databases have separate trade-id sequences.
@@ -267,11 +310,36 @@ class Signal:
         if self.action in POSITION_ACTIONS:
             self._validate_position_action()
 
+        for name, value, allowed in (
+            ("setup", self.setup, ALLOWED_SETUPS),
+            ("regime", self.regime, ALLOWED_REGIMES),
+            ("htf_alignment", self.htf_alignment, ALLOWED_HTF_ALIGNMENTS),
+        ):
+            if value is None:
+                continue
+            if not isinstance(value, str) or value not in allowed:
+                raise SignalValidationError(
+                    f"{name} must be one of {sorted(allowed)!r} or null, got {value!r}"
+                )
+
         if self.jev is not None:
             if not isinstance(self.jev, dict) or set(self.jev) - {
                 "model", "tradeability", "bias", "regime"
-            }:
+            } - JEV_CONFIDENCE_KEYS:
                 raise SignalValidationError("jev payload has unexpected keys")
+            for key in JEV_CONFIDENCE_KEYS:
+                if key not in self.jev:
+                    continue
+                value = self.jev[key]
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or not 0.0 <= value <= 1.0
+                ):
+                    raise SignalValidationError(
+                        f"jev.{key} must be a finite number in [0, 1]"
+                    )
 
     def _validate_position_action(self) -> None:
         """Validate the v1.1 UPDATE/CLOSE invariants."""
@@ -343,6 +411,9 @@ class Signal:
             ("latency_ms", self.latency_ms),
             ("raw_response_hash", self.raw_response_hash),
             ("jev", self.jev),
+            ("setup", self.setup),
+            ("regime", self.regime),
+            ("htf_alignment", self.htf_alignment),
             ("position_id", self.position_id),
             ("position_side", self.position_side),
             ("revision", self.revision),
@@ -373,6 +444,7 @@ class Signal:
             raise SignalValidationError(f"missing required fields: {missing}")
         allowed = required | {
             "prompt_version", "latency_ms", "raw_response_hash", "jev",
+            "setup", "regime", "htf_alignment",
             "position_id", "position_side", "revision", "based_on_entry",
             "close_reason", "source_price",
         }
@@ -402,6 +474,9 @@ class Signal:
             latency_ms=data.get("latency_ms"),
             raw_response_hash=data.get("raw_response_hash"),
             jev=data.get("jev"),
+            setup=data.get("setup"),
+            regime=data.get("regime"),
+            htf_alignment=data.get("htf_alignment"),
             position_id=data.get("position_id"),
             position_side=data.get("position_side"),
             revision=data.get("revision"),
@@ -429,3 +504,6 @@ class SignalDraft:
     latency_ms: Optional[int] = None
     raw_response_hash: Optional[str] = None
     jev: Optional[Dict[str, Any]] = None
+    setup: Optional[str] = None
+    regime: Optional[str] = None
+    htf_alignment: Optional[str] = None

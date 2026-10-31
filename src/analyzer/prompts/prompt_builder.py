@@ -624,6 +624,8 @@ class PromptBuilder:
             model_verbosity=eff_verbosity,
             dynamic_thresholds=dynamic_thresholds,
             has_risk_profile=bool(brain_context and "ACTIVE RISK PROFILE" in brain_context),
+            timeframe=self.timeframe,
+            regime_snapshot_available=self.regime_snapshot_provider is not None,
         )
 
         response_template = self.template_manager.build_response_template(
@@ -631,6 +633,8 @@ class PromptBuilder:
             model_verbosity=eff_verbosity,
             dynamic_thresholds=dynamic_thresholds,
             json_object_output=json_object_output,
+            timeframe=self.timeframe,
+            regime_snapshot_available=self.regime_snapshot_provider is not None,
         )
 
         # Opt-in, signal-service-only system suffix. Appended last so a strict

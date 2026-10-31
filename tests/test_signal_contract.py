@@ -4,8 +4,12 @@ import pytest
 
 from src.signal_service.contract import (
     ALLOWED_ACTIONS,
+    ALLOWED_HTF_ALIGNMENTS,
+    ALLOWED_REGIMES,
+    ALLOWED_SETUPS,
     CONFIDENCE_MAP,
     SIGNAL_SCHEMA_VERSION,
+    SIGNAL_SCHEMA_VERSIONS,
     Signal,
     SignalValidationError,
     build_decision_id,
@@ -226,6 +230,87 @@ def test_jev_payload_shape():
     assert round_trip(signal).jev == signal.jev
     with pytest.raises(SignalValidationError):
         Signal(**make_signal_kwargs(jev={"unexpected": 1})).validate()
+
+
+def test_v12_taxonomy_fields_round_trip():
+    """v1.2 adds an optional, additive 1h taxonomy to entry records."""
+    signal = Signal(**make_signal_kwargs(
+        schema_version="1.2",
+        setup="trend_pullback",
+        regime="trend_up",
+        htf_alignment="aligned",
+    ))
+    signal.validate()
+    payload = signal.to_dict()
+    assert payload["schema_version"] == "1.2"
+    assert payload["setup"] == "trend_pullback"
+    assert payload["regime"] == "trend_up"
+    assert payload["htf_alignment"] == "aligned"
+    assert round_trip(signal).to_dict() == payload
+
+
+def test_v10_and_v11_readers_keep_the_old_shape():
+    """A record without taxonomy stays byte-for-byte the v1.0/v1.1 shape."""
+    for version in ("1.0", "1.1"):
+        signal = Signal(**make_signal_kwargs(schema_version=version))
+        signal.validate()
+        payload = signal.to_dict()
+        assert "setup" not in payload
+        assert "regime" not in payload
+        assert "htf_alignment" not in payload
+        assert round_trip(signal).schema_version == version
+
+
+def test_v12_is_accepted_without_forcing_it():
+    assert "1.2" in SIGNAL_SCHEMA_VERSIONS
+    assert SIGNAL_SCHEMA_VERSION == "1.0"
+
+
+@pytest.mark.parametrize(("field", "bad"), [
+    ("setup", "trend"),
+    ("regime", "bull"),
+    ("htf_alignment", "up"),
+])
+def test_v12_taxonomy_rejects_unknown_values(field, bad):
+    with pytest.raises(SignalValidationError):
+        Signal(**make_signal_kwargs(**{field: bad})).validate()
+
+
+@pytest.mark.parametrize("bad", [1, ["trend_pullback"], {"setup": "trend_pullback"}, True])
+def test_v12_taxonomy_rejects_non_string_values_without_typeerror(bad):
+    """A non-string enum must be a SignalValidationError, not an unhashable TypeError."""
+    with pytest.raises(SignalValidationError):
+        Signal(**make_signal_kwargs(setup=bad)).validate()
+
+
+def test_v12_taxonomy_accepts_every_contract_value():
+    for setup in ALLOWED_SETUPS:
+        Signal(**make_signal_kwargs(setup=setup)).validate()
+    for regime in ALLOWED_REGIMES:
+        Signal(**make_signal_kwargs(regime=regime)).validate()
+    for alignment in ALLOWED_HTF_ALIGNMENTS:
+        Signal(**make_signal_kwargs(htf_alignment=alignment)).validate()
+
+
+def test_v12_jev_confidence_numbers_are_optional_and_bounded():
+    jev = {
+        "model": "jev-1.13-free",
+        "tradeability": True,
+        "bias": "long",
+        "regime": "trend",
+        "regime_confidence": 0.72,
+        "bias_confidence": 0.61,
+        "tradeability_probability": 0.83,
+        "confidence": 0.75,
+    }
+    signal = Signal(**make_signal_kwargs(jev=jev))
+    signal.validate()
+    assert round_trip(signal).jev == jev
+    for key in ("regime_confidence", "bias_confidence", "tradeability_probability", "confidence"):
+        with pytest.raises(SignalValidationError):
+            Signal(**make_signal_kwargs(jev={"model": "jev", key: 1.5})).validate()
+        with pytest.raises(SignalValidationError):
+            Signal(**make_signal_kwargs(jev={"model": "jev", key: True})).validate()
 
 def test_package_all_names_are_defined():
     """Every __all__ entry must exist, otherwise star-import raises AttributeError."""

@@ -28,6 +28,10 @@ from src.signal_service.position_policy import (
 )
 from src.signal_service.contract import (
     ALLOWED_ACTIONS,
+    ALLOWED_HTF_ALIGNMENTS,
+    ALLOWED_REGIMES,
+    ALLOWED_SETUPS,
+    JEV_CONFIDENCE_KEYS,
     Signal,
     SignalDraft,
     SignalValidationError,
@@ -179,6 +183,17 @@ SIGNAL_OUTPUT_CONTRACT = (
     "is mandatory on every cycle.\n"
 )
 
+#: 1h taxonomy addendum. Appended only when the signal target is 1h and the
+#: deterministic snapshot provider is installed, mirroring the template gating.
+SIGNAL_TAXONOMY_OUTPUT_CONTRACT = (
+    "- Optional 1h taxonomy keys inside \"analysis\": \"setup\" "
+    "(trend_pullback|breakout_retest|momentum_continuation|rally_failure|"
+    "breakdown_retest|momentum_short|range_fade_extreme|range_mean_reversion|none), "
+    "\"regime\" (trend_up|trend_down|range|low_vol|high_vol|unclear), "
+    "\"htf_alignment\" (aligned|counter|neutral). Omit a key or use null when "
+    "unknown; never invent a label outside these lists.\n"
+)
+
 #: One-shot repair instruction. Kept short so a repair reuses the original
 #: answer instead of paying for a second full market-analysis prompt.
 JSON_REPAIR_INSTRUCTION = (
@@ -190,7 +205,8 @@ JSON_REPAIR_INSTRUCTION = (
     "confidence must be an integer 0-100 or one of HIGH/MEDIUM/LOW, never MODERATE. "
     "For BUY: stop_loss < entry_price < take_profit. For SELL: "
     "take_profit < entry_price < stop_loss. symbol is required. Never return an "
-    "educational_analysis_only or analysis-only object."
+    "educational_analysis_only or analysis-only object. Keep optional setup/regime/"
+    "htf_alignment labels from the source answer only when they are in the allowed lists."
 )
 JSON_REPAIR_SYSTEM = (
     "You convert a trading analysis answer into the required signal JSON object. "
@@ -198,7 +214,8 @@ JSON_REPAIR_SYSTEM = (
     "analysis.confidence (integer 0-100 or HIGH/MEDIUM/LOW, never MODERATE), "
     "analysis.reasoning, analysis.symbol, and entry_price/stop_loss/take_profit/"
     "position_size. For BUY: stop_loss < entry_price < take_profit; for SELL: "
-    "take_profit < entry_price < stop_loss. Never answer analysis-only."
+    "take_profit < entry_price < stop_loss. Never answer analysis-only. Preserve "
+    "setup/regime/htf_alignment when present and valid."
 )
 #: Cap on the previous answer embedded in the repair prompt. The decision and
 #: narrative normally sit at the end, so keep the tail when truncating.
@@ -459,6 +476,10 @@ class PairAnalyzer:
         self.jev_gate = jev_gate
         self.json_response_format = json_response_format
         self._flags_applied = False
+        # P0-A snapshot reused by the prompt block and the emitted signal, so the
+        # same closed-candle inputs decide both the narrative and the contract.
+        self._last_regime_snapshot: Optional[Dict[str, Any]] = None
+        self._last_regime_snapshot_as_of: Optional[datetime] = None
 
     # ------------------------------------------------------------ ablation flags
     def _apply_flags(self) -> None:
@@ -909,6 +930,17 @@ class PairAnalyzer:
             self._regime_snapshot_from_context(context, as_of)
         )
 
+    def _regime_snapshot_available(self) -> bool:
+        """True when this engine can render the deterministic snapshot block."""
+        builder = getattr(self.engine, "prompt_builder", None)
+        return getattr(builder, "regime_snapshot_provider", None) is not None
+
+    def _signal_output_contract(self) -> str:
+        """Return the suffix for this target, with taxonomy only on signal 1h."""
+        if self.timeframe == "1h" and self._regime_snapshot_available():
+            return f"{SIGNAL_OUTPUT_CONTRACT}\n{SIGNAL_TAXONOMY_OUTPUT_CONTRACT}"
+        return SIGNAL_OUTPUT_CONTRACT
+
     def _regime_snapshot_from_context(
         self, context: Any, as_of: Optional[datetime] = None
     ) -> Optional[Dict[str, Any]]:
@@ -948,7 +980,7 @@ class PairAnalyzer:
                 as_of,
             )
             btc = self._btc_close_series(context)
-            return build_regime_snapshot(
+            snapshot = build_regime_snapshot(
                 technical_data=getattr(context, "technical_data", None) or None,
                 long_term_data=long_term_data,
                 weekly_macro=weekly_macro,
@@ -961,6 +993,9 @@ class PairAnalyzer:
                 atr_pct_median_90d=self._atr_pct_median(context),
                 timeframe=self.timeframe,
             )
+            self._last_regime_snapshot = snapshot
+            self._last_regime_snapshot_as_of = as_of
+            return snapshot
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # The snapshot is an advisory input: never abort an analysis for it.
             logger.warning("Cannot build regime snapshot for %s: %s", self.symbol, exc)
@@ -1028,6 +1063,17 @@ class PairAnalyzer:
                     "Cannot recompute weekly indicators for %s: %s", self.symbol, exc
                 )
         return truncated, None
+    def _current_regime_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Return this cycle's P0-A snapshot, reusing the prompt/JEV computation."""
+        as_of = getattr(self, "_current_analysis_as_of", None)
+        if (
+            self._last_regime_snapshot is not None
+            and self._last_regime_snapshot_as_of == as_of
+        ):
+            return self._last_regime_snapshot
+        return self._regime_snapshot_from_context(
+            getattr(self.engine, "context", None), as_of
+        )
 
     def _closed_rows(
         self,
@@ -1349,7 +1395,7 @@ class PairAnalyzer:
             performance_context="",
             brain_service=None,
             dynamic_thresholds=None,
-            system_prompt_suffix=SIGNAL_OUTPUT_CONTRACT,
+            system_prompt_suffix=self._signal_output_contract(),
             response_format={"type": "json_object"} if json_mode else None,
             json_object_output=json_mode,
         )
@@ -1426,6 +1472,53 @@ class PairAnalyzer:
                 parsed = {**parsed, **nested}
                 break
         return _normalize_extraction_payload(parsed)
+
+    @staticmethod
+    def _taxonomy_value(value: Any, allowed: frozenset[str]) -> Optional[str]:
+        """Normalize one optional taxonomy label; unknown values fail soft."""
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in allowed:
+                return normalized
+        return None
+
+    def _taxonomy_from_response(
+        self, result: Dict[str, Any], raw_response: str
+    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        """Read optional setup/regime/htf_alignment from the LLM decision object.
+
+        The values are advisory: an unknown label is dropped rather than
+        invalidating the whole signal. ``regime`` is overridden later by the
+        deterministic P0-A snapshot when one is available.
+        """
+        payload: Any = None
+        if isinstance(result, dict):
+            nested = result.get("analysis")
+            if isinstance(nested, dict):
+                payload = nested
+            elif any(key in result for key in ("setup", "regime", "htf_alignment")):
+                payload = result
+        if payload is None and raw_response:
+            parsed: Any = None
+            parser = self._unified_parser()
+            parse_json_object = getattr(parser, "parse_json_object", None)
+            if callable(parse_json_object):
+                parsed = parse_json_object(raw_response)
+            if not isinstance(parsed, dict):
+                try:
+                    parsed = json.loads(raw_response)
+                except (TypeError, ValueError):
+                    parsed = None
+            if isinstance(parsed, dict):
+                nested = parsed.get("analysis")
+                payload = nested if isinstance(nested, dict) else parsed
+        if not isinstance(payload, dict):
+            return None, None, None
+        return (
+            self._taxonomy_value(payload.get("setup"), ALLOWED_SETUPS),
+            self._taxonomy_value(payload.get("regime"), ALLOWED_REGIMES),
+            self._taxonomy_value(payload.get("htf_alignment"), ALLOWED_HTF_ALIGNMENTS),
+        )
 
     def _is_analysis_only_response(self, raw_response: str) -> bool:
         """Return True when the reply is explicitly flagged analysis-only.
@@ -1526,6 +1619,8 @@ class PairAnalyzer:
             # HOLD so a position action can never open a new trade.
             signal = "HOLD"
 
+        setup, regime, htf_alignment = self._taxonomy_from_response(result, raw_response)
+
         return SignalDraft(
             action=signal,
             confidence_raw=confidence,
@@ -1538,6 +1633,9 @@ class PairAnalyzer:
             prompt_version=PROMPT_VERSION,
             latency_ms=None,
             raw_response_hash=raw_hash,
+            setup=setup,
+            regime=regime,
+            htf_alignment=htf_alignment,
         )
 
     # ------------------------------------------------------------------ timing
@@ -1714,6 +1812,40 @@ class PairAnalyzer:
         signal.validate()
         return signal
 
+    def _resolved_taxonomy(
+        self, draft: SignalDraft
+    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        """Prefer the deterministic P0-A regime over the LLM's self-report.
+
+        P0-A computes the 1h regime from closed candles; the prompt shows that
+        label and the model echoes it. The contract must carry the computed
+        value, not a second opinion, and a setup outside the regime's allowed
+        families is dropped rather than trusted.
+        """
+        setup = draft.setup
+        regime = draft.regime
+        htf_alignment = draft.htf_alignment
+        # Only records where the model actually emitted a taxonomy field become
+        # v1.2. htf_alignment is a taxonomy field too: a lone htf echo must be
+        # kept and may then take the snapshot's overrides. A snapshot alone must
+        # not upgrade every production signal, which would break strict
+        # 1.0/1.1 readers for no emitted taxonomy.
+        if setup is None and regime is None and htf_alignment is None:
+            return None, None, None
+        if draft.action not in ("BUY", "SELL") and setup is not None:
+            setup = "none"
+        snapshot = self._current_regime_snapshot()
+        snapshot_regime = snapshot.get("regime") if snapshot else None
+        if snapshot_regime:
+            # Gate on the snapshot carrying a regime, not on ADX: high_vol,
+            # low_vol, range and unclear can all be classified without ADX.
+            regime = snapshot_regime
+            htf_alignment = snapshot.get("htf_alignment") or htf_alignment
+            allowed = set(snapshot.get("allowed_setups") or ())
+            if setup not in (None, "none") and setup not in allowed:
+                setup = None
+        return setup, regime, htf_alignment
+
     def _build_signal(
         self,
         draft: SignalDraft,
@@ -1750,8 +1882,31 @@ class PairAnalyzer:
         reasoning = draft.reasoning
         if veto_reason is not None:
             reasoning = f"{reasoning} [JEV veto: {veto_reason}]"[:8000]
+        # The version bump follows the model-provided fields only. The snapshot
+        # always carries a regime/htf; if we resolved it before this check the
+        # snapshot alone would upgrade every record to 1.2. Do not even consult
+        # the snapshot when the model emitted no taxonomy.
+        emitted_taxonomy = any(
+            value is not None
+            for value in (draft.setup, draft.regime, draft.htf_alignment)
+        )
+        if emitted_taxonomy:
+            setup, regime, htf_alignment = self._resolved_taxonomy(draft)
+            schema_version = "1.2"
+        else:
+            setup = regime = htf_alignment = None
+            schema_version = "1.0"
+        jev_payload = draft.jev
+        if not emitted_taxonomy and jev_payload:
+            # The JEV confidence keys are v1.2-only. Keep a 1.0 payload in its
+            # legacy shape instead of mixing new keys into an old record.
+            jev_payload = {
+                key: value
+                for key, value in jev_payload.items()
+                if key not in JEV_CONFIDENCE_KEYS
+            } or None
         signal = Signal(
-            schema_version="1.0",
+            schema_version=schema_version,
             decision_id=build_decision_id(self.symbol, self.timeframe, open_at),
             source="llm_trader",
             symbol=self.symbol,
@@ -1772,7 +1927,10 @@ class PairAnalyzer:
             prompt_version=draft.prompt_version,
             latency_ms=None,
             raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
-            jev=draft.jev,
+            jev=jev_payload,
+            setup=setup,
+            regime=regime,
+            htf_alignment=htf_alignment,
         )
         signal.validate()
         return signal

@@ -211,6 +211,7 @@ SNAPSHOT_KEYS = {
     "reduce_only",
     "leverage",
 }
+SNAPSHOT_KEYS_1H = SNAPSHOT_KEYS | {"setup", "regime", "htf_alignment"}
 NARRATIVE_PRESENT = LOW_LABELS + MEDIUM_LABELS + HIGH_LABELS
 
 
@@ -227,16 +228,24 @@ def render(
     has_chart_analysis: bool = False,
     dynamic_thresholds: dict[str, Any] | None = None,
     json_object_output: bool = False,
+    regime_snapshot_available: bool = False,
 ) -> str:
     """Compose the full prompt PromptBuilder emits: base, rules, steps, format."""
     return "\n\n".join([
         manager.build_system_prompt(symbol, timeframe, dynamic_thresholds=dynamic_thresholds),
-        manager.build_decision_rules(has_chart_analysis, dynamic_thresholds=dynamic_thresholds),
+        manager.build_decision_rules(
+            has_chart_analysis,
+            dynamic_thresholds=dynamic_thresholds,
+            timeframe=timeframe,
+            regime_snapshot_available=regime_snapshot_available,
+        ),
         manager.build_analysis_steps(symbol, has_chart_analysis=has_chart_analysis),
         manager.build_response_template(
             has_chart_analysis,
             dynamic_thresholds=dynamic_thresholds,
             json_object_output=json_object_output,
+            timeframe=timeframe,
+            regime_snapshot_available=regime_snapshot_available,
         ),
     ])
 
@@ -605,6 +614,77 @@ def test_decision_rules_render_one_line_per_rule():
         "Never tighten SL below the profile multiple",
         "system-enforced minimum — the only hard gate",
     ])
+
+
+def test_decision_rules_contain_the_complete_1h_setup_taxonomy():
+    """P1-B pins every enum value and the ex-ante/no-look-ahead rule."""
+    rules = make_manager().build_decision_rules(
+        timeframe="1h", regime_snapshot_available=True
+    )
+    assert_fragments(rules, [
+        "=== Setup Taxonomy (1h) ===",
+        "trend_pullback",
+        "breakout_retest",
+        "momentum_continuation",
+        "rally_failure",
+        "breakdown_retest",
+        "momentum_short",
+        "range_fade_extreme",
+        "range_mean_reversion",
+        "none",
+        "trend_up",
+        "trend_down",
+        "range",
+        "low_vol",
+        "high_vol",
+        "unclear",
+        "aligned",
+        "counter",
+        "neutral",
+        "REGIME SNAPSHOT block supplied in Trading Context is authoritative",
+        "do not recompute ADX/choppiness/ATR or refetch candles",
+        "never infer a regime from a future candle or from the week's realized return",
+        "latest closed 1h candle",
+    ])
+
+
+@pytest.mark.parametrize(("timeframe", "snapshot_available"), [
+    ("4h", True),
+    ("1d", True),
+    ("15m", True),
+    (None, True),
+    ("1h", False),
+])
+def test_setup_taxonomy_is_not_injected_outside_the_signal_1h_path(
+    timeframe, snapshot_available
+):
+    """The shared live template must not gain 1h logic or refer to a missing block."""
+    rules = make_manager().build_decision_rules(
+        timeframe=timeframe, regime_snapshot_available=snapshot_available
+    )
+    template = make_manager().build_response_template(
+        timeframe=timeframe, regime_snapshot_available=snapshot_available
+    )
+    assert "=== Setup Taxonomy" not in rules
+    assert "trend_pullback" not in rules
+    assert '"setup": "none"' not in template
+    assert '"regime": "unclear"' not in template
+
+
+def test_taxonomy_keys_only_enter_the_signal_1h_json_example():
+    template_1h = make_manager().build_response_template(
+        timeframe="1h", regime_snapshot_available=True
+    )
+    template_4h = make_manager().build_response_template(
+        timeframe="4h", regime_snapshot_available=True
+    )
+    for key in ('"setup": "none"', '"regime": "unclear"', '"htf_alignment": "neutral"'):
+        assert key in template_1h
+        assert key not in template_4h
+    example = json.loads(
+        re.search(r"```json\s*(.*?)\s*```", template_1h, re.DOTALL | re.IGNORECASE).group(1)
+    )
+    assert set(example["analysis"]) == SNAPSHOT_KEYS_1H
 
 
 def test_breakout_doctrine_forbids_staged_entries():
