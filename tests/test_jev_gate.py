@@ -529,26 +529,25 @@ async def test_adapter_off_mode_unchanged_and_no_call():
 
 
 @pytest.mark.asyncio
-async def test_adapter_pre_mode_consults_without_blocking_the_llm():
-    """noul is advisory: a low noul must not skip the LLM call."""
+async def test_adapter_pre_logs_noul_without_blocking(caplog):
     client = FakeJevClient(_response(tradeable=0.2))
     analyzer = _analyzer(JevGate(client=client, mode="pre"))
 
-    signal = await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
+    with caplog.at_level("INFO", logger="src.signal_service.jev_gate"):
+        signal = await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
 
     assert analyzer.engine.calls == 1
     assert signal.action == "BUY"
     assert signal.risk_approved is True
+    # No model taxonomy: stay 1.0, and keep the JEV payload in its legacy shape.
+    assert signal.schema_version == "1.0"
     assert signal.jev == {
         "model": "jev-1.13",
         "tradeability": False,
         "bias": "long",
         "regime": "trend",
-        "tradeability_probability": 0.2,
-        "bias_confidence": 0.8,
-        "regime_confidence": 0.7,
-        "confidence": 0.75,
     }
+    assert "JEV diagnostic: noul=" in caplog.text
 
 
 @pytest.mark.asyncio

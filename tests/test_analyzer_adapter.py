@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,7 @@ from src.signal_service.analyzer_adapter import (
     JSON_REPAIR_INSTRUCTION,
     JSON_REPAIR_SYSTEM,
     SIGNAL_OUTPUT_CONTRACT,
+    SIGNAL_TAXONOMY_OUTPUT_CONTRACT,
     PairAnalyzer,
     ReplayDataInjector,
     analyze_and_store,
@@ -257,7 +259,8 @@ async def test_noul_and_short_bias_do_not_veto_a_long():
 
     assert approved.risk_approved is True
     assert approved.jev["model"] == "jev-1.13-free"
-    assert approved.jev["tradeability_probability"] == 0.0
+    assert approved.schema_version == "1.0"
+    assert "tradeability_probability" not in approved.jev
 
     # noul is advisory: tradeability=false must not veto a BUY.
     engine2 = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
@@ -1064,6 +1067,26 @@ async def test_signal_output_contract_is_a_system_suffix_not_user_context():
     call = engine.calls[-1]
     assert call["system_prompt_suffix"] == SIGNAL_OUTPUT_CONTRACT
     assert call.get("additional_context") is None
+
+
+@pytest.mark.asyncio
+async def test_signal_output_contract_adds_taxonomy_only_on_signal_1h():
+    """A 4h signal-service run must not ask for 1h taxonomy labels."""
+    engine_1h = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine_1h.prompt_builder = SimpleNamespace(regime_snapshot_provider=None)
+    analyzer_1h = PairAnalyzer(engine=engine_1h, symbol=SYMBOL, timeframe="1h")
+
+    await analyzer_1h.analyze()
+    assert engine_1h.calls[-1]["system_prompt_suffix"] == (
+        f"{SIGNAL_OUTPUT_CONTRACT}\n{SIGNAL_TAXONOMY_OUTPUT_CONTRACT}"
+    )
+
+    engine_4h = FakeEngine(raw_response=RAW_BUY, result=dict(RESULT_META))
+    engine_4h.prompt_builder = SimpleNamespace(regime_snapshot_provider=None)
+    analyzer_4h = PairAnalyzer(engine=engine_4h, symbol=SYMBOL, timeframe="4h")
+
+    await analyzer_4h.analyze()
+    assert engine_4h.calls[-1]["system_prompt_suffix"] == SIGNAL_OUTPUT_CONTRACT
 
 
 
@@ -2186,12 +2209,12 @@ async def test_no_model_taxonomy_keeps_the_signal_at_v10_even_with_a_snapshot():
 
 
 @pytest.mark.asyncio
-async def test_htf_alignment_alone_does_not_bump_to_v12():
-    """v1.2 requires a model-emitted setup/regime, not a lone htf echo."""
+async def test_htf_alignment_alone_is_a_valid_taxonomy_field():
+    """A lone htf echo is a v1.2 field and must not be discarded."""
     raw = (
         '{"signal": "BUY", "confidence": "HIGH", "stop_loss": 67000.0, '
         '"take_profit": 70000.0, "position_size": 5, "reasoning": "breakout", '
-        '"htf_alignment": "aligned"}'
+        '"htf_alignment": "neutral"}'
     )
     engine = FakeEngine(raw_response=raw, result=dict(RESULT_META))
     analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
@@ -2204,11 +2227,11 @@ async def test_htf_alignment_alone_does_not_bump_to_v12():
 
     signal = await analyzer.analyze()
 
-    assert signal.schema_version == "1.0"
+    assert signal.schema_version == "1.2"
     assert signal.setup is None
-    assert signal.regime is None
-    assert signal.htf_alignment is None
-    assert "htf_alignment" not in signal.to_dict()
+    assert signal.regime == "trend_up"
+    assert signal.htf_alignment == "aligned"
+    assert signal.to_dict()["htf_alignment"] == "aligned"
     signal.validate()
 
 

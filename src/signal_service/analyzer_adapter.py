@@ -31,6 +31,7 @@ from src.signal_service.contract import (
     ALLOWED_HTF_ALIGNMENTS,
     ALLOWED_REGIMES,
     ALLOWED_SETUPS,
+    JEV_CONFIDENCE_KEYS,
     Signal,
     SignalDraft,
     SignalValidationError,
@@ -172,12 +173,6 @@ SIGNAL_OUTPUT_CONTRACT = (
     '"position_size": <0.0-1.0>, "reasoning": "<why>", "symbol": "<pair>"}}.\n'
     "- signal MUST be exactly one of BUY, SELL or HOLD. Never emit CLOSE, UPDATE or "
     "any other verb.\n"
-    "- Optional 1h taxonomy keys inside \"analysis\": \"setup\" "
-    "(trend_pullback|breakout_retest|momentum_continuation|rally_failure|"
-    "breakdown_retest|momentum_short|range_fade_extreme|range_mean_reversion|none), "
-    "\"regime\" (trend_up|trend_down|range|low_vol|high_vol|unclear), "
-    "\"htf_alignment\" (aligned|counter|neutral). Omit a key or use null when "
-    "unknown; never invent a label outside these lists.\n"
     "- confidence MUST be an integer from 0 to 100, or one of the labels HIGH, MEDIUM, "
     "LOW. Never emit MODERATE, \"moderate\", \"neutral\" or any other word.\n"
     "- For BUY: stop_loss < entry_price < take_profit. For SELL: "
@@ -186,6 +181,17 @@ SIGNAL_OUTPUT_CONTRACT = (
     "\"analysis_only\" or any analysis-only envelope, and never replace the decision "
     "object with a narrative report or a \"final_synthesis\". The decision object above "
     "is mandatory on every cycle.\n"
+)
+
+#: 1h taxonomy addendum. Appended only when the signal target is 1h and the
+#: deterministic snapshot provider is installed, mirroring the template gating.
+SIGNAL_TAXONOMY_OUTPUT_CONTRACT = (
+    "- Optional 1h taxonomy keys inside \"analysis\": \"setup\" "
+    "(trend_pullback|breakout_retest|momentum_continuation|rally_failure|"
+    "breakdown_retest|momentum_short|range_fade_extreme|range_mean_reversion|none), "
+    "\"regime\" (trend_up|trend_down|range|low_vol|high_vol|unclear), "
+    "\"htf_alignment\" (aligned|counter|neutral). Omit a key or use null when "
+    "unknown; never invent a label outside these lists.\n"
 )
 
 #: One-shot repair instruction. Kept short so a repair reuses the original
@@ -924,6 +930,17 @@ class PairAnalyzer:
             self._regime_snapshot_from_context(context, as_of)
         )
 
+    def _regime_snapshot_available(self) -> bool:
+        """True when this engine can render the deterministic snapshot block."""
+        builder = getattr(self.engine, "prompt_builder", None)
+        return getattr(builder, "regime_snapshot_provider", None) is not None
+
+    def _signal_output_contract(self) -> str:
+        """Return the suffix for this target, with taxonomy only on signal 1h."""
+        if self.timeframe == "1h" and self._regime_snapshot_available():
+            return f"{SIGNAL_OUTPUT_CONTRACT}\n{SIGNAL_TAXONOMY_OUTPUT_CONTRACT}"
+        return SIGNAL_OUTPUT_CONTRACT
+
     def _regime_snapshot_from_context(
         self, context: Any, as_of: Optional[datetime] = None
     ) -> Optional[Dict[str, Any]]:
@@ -1378,7 +1395,7 @@ class PairAnalyzer:
             performance_context="",
             brain_service=None,
             dynamic_thresholds=None,
-            system_prompt_suffix=SIGNAL_OUTPUT_CONTRACT,
+            system_prompt_suffix=self._signal_output_contract(),
             response_format={"type": "json_object"} if json_mode else None,
             json_object_output=json_mode,
         )
@@ -1812,7 +1829,7 @@ class PairAnalyzer:
         # Only records where the model actually emitted a taxonomy field become
         # v1.2. A snapshot alone must not upgrade every production signal, which
         # would break strict 1.0/1.1 readers for no emitted taxonomy.
-        if setup is None and regime is None:
+        if setup is None and regime is None and htf_alignment is None:
             return None, None, None
         if draft.action not in ("BUY", "SELL") and setup is not None:
             setup = "none"
@@ -1868,8 +1885,20 @@ class PairAnalyzer:
         # The version bump follows the model-provided fields only: the snapshot
         # always carries a regime/htf, and letting it bump every record would
         # make strict 1.0/1.1 readers reject signals with no emitted taxonomy.
-        emitted_taxonomy = draft.setup is not None or draft.regime is not None
+        emitted_taxonomy = any(
+            value is not None
+            for value in (draft.setup, draft.regime, draft.htf_alignment)
+        )
         schema_version = "1.2" if emitted_taxonomy else "1.0"
+        jev_payload = draft.jev
+        if not emitted_taxonomy and jev_payload:
+            # The JEV confidence keys are v1.2-only. Keep a 1.0 payload in its
+            # legacy shape instead of mixing new keys into an old record.
+            jev_payload = {
+                key: value
+                for key, value in jev_payload.items()
+                if key not in JEV_CONFIDENCE_KEYS
+            } or None
         signal = Signal(
             schema_version=schema_version,
             decision_id=build_decision_id(self.symbol, self.timeframe, open_at),
@@ -1892,7 +1921,7 @@ class PairAnalyzer:
             prompt_version=draft.prompt_version,
             latency_ms=None,
             raw_response_hash=hash_raw_response(raw_response) if raw_response else None,
-            jev=draft.jev,
+            jev=jev_payload,
             setup=setup,
             regime=regime,
             htf_alignment=htf_alignment,

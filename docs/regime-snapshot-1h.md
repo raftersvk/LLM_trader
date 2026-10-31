@@ -71,9 +71,12 @@ P1-B makes the taxonomy explicit end to end, additively:
 - The decision JSON asks for `setup`, `regime`, `htf_alignment` only when the
   prompt target is 1h **and** the signal-service snapshot provider is installed;
   the shared 4h/live template is unchanged and never refers to a missing block.
-  The adapter emits `1.2` only when the model actually emitted `setup` or
-  `regime`; a deterministic snapshot alone never upgrades a production signal.
-  It prefers the snapshot's `regime`/`htf_alignment` whenever the snapshot
+  The adapter emits `1.2` only when the model actually emitted `setup`,
+  `regime` or `htf_alignment`; a deterministic snapshot alone never upgrades a
+  production signal. When the record stays `1.0`, the v1.2-only JEV confidence
+  keys are stripped from the payload so its shape remains legacy-compatible.
+  The signal-output suffix asks for the same labels only on that 1h/provider
+  path. It prefers the snapshot's `regime`/`htf_alignment` whenever the snapshot
   carries a regime (high_vol, low_vol, range and unclear can be classified with
   `adx=None`) and drops a `setup` outside that regime's allowed families, so the
   model cannot relabel the computed regime. A snapshot object without a regime
