@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
+import pytest
 
 from src.signal_service.contract import Signal
 from src.signal_service.replay_positions import (
@@ -299,10 +300,11 @@ def test_replay_market_scopes_update_ids(tmp_path):
         tmp_path, analyzer, candles, _ts(0, 4), end_hours=8, market="futures",
     )
     assert stats.updates == 1
-    assert analyzer.calls[0]["position_id"] == "replay:futures:entry-1"
+    assert analyzer.calls[0]["position_id"] == "futures:replay:entry-1"
     # based_on_entry stays the real entry id so update/entry linkage still works.
     assert analyzer.calls[0]["based_on_entry"] == "entry-1"
-    assert not analyzer.calls[0]["position_id"].startswith(("spot:", "futures:"))
+    # Not a real trade id: C's helper treats it as synthetic and aliases it.
+    assert _c_is_real_trade_position_id(analyzer.calls[0]["position_id"]) is False
 
 
 def test_replay_rerun_reapplies_deduplicated_updates(tmp_path):
@@ -461,8 +463,6 @@ def test_replay_positions_command_reports_stats(tmp_path, monkeypatch, capsys):
 
 
 def test_replay_positions_command_requires_existing_entries(tmp_path, monkeypatch):
-    import pytest
-
     from src.signal_service import __main__ as cli
 
     engine = _HoldEngine()
@@ -483,3 +483,150 @@ def test_replay_positions_command_requires_existing_entries(tmp_path, monkeypatc
     ])
     with pytest.raises(ValueError, match="entry signals not found"):
         asyncio.run(cli._replay_positions_command(args))
+
+
+class _CtxEchoAnalyzer:
+    """Build the UPDATE exactly like the adapter: ids come from UpdateContext."""
+
+    def __init__(self, action="UPDATE", sl=100.0, tp=115.0, close_reason=None):
+        self.action = action
+        self.sl = sl
+        self.tp = tp
+        self.close_reason = close_reason
+        self.calls = []
+
+    def position_metrics(self, snapshot, as_of=None):
+        return {"current_price": snapshot.current_price}
+
+    async def analyze(self, candle_open_time=None, position_context="", update_context=None):
+        self.calls.append(update_context)
+        return Signal(
+            schema_version="1.1",
+            decision_id=f"{update_context.based_on_entry}-u{update_context.revision}",
+            source="llm_trader",
+            symbol=SYMBOL,
+            timeframe="4h",
+            candle_open_time=candle_open_time,
+            candle_close_time="2026-10-01T08:00:00Z",
+            created_at="2026-10-01T08:00:00Z",
+            expires_at="2026-10-01T12:00:00Z",
+            action=self.action,
+            confidence=0.0,
+            risk_approved=self.action == "UPDATE",
+            sl=self.sl if self.action == "UPDATE" else None,
+            tp=self.tp if self.action == "UPDATE" else None,
+            position_size_pct=0.0,
+            reasoning="manage",
+            model="m",
+            provider="p",
+            position_id=update_context.position_id,
+            position_side=update_context.position_side,
+            revision=update_context.revision,
+            based_on_entry=update_context.based_on_entry,
+            close_reason=self.close_reason,
+            source_price=update_context.current_price,
+        )
+
+
+def _c_is_real_trade_position_id(position_id):
+    """Mirror of C's helper (trading-stack 5d3b9aa) for the format contract."""
+    base = position_id
+    label, separator, remainder = position_id.partition(":")
+    if separator and label in ("spot", "futures"):
+        base = remainder
+    return base.isdigit()
+
+
+def _c_entry_alias(row):
+    """Mirror of C's alias rule: synthetic ids expose ``entry:<based_on_entry>``."""
+    if not row.get("based_on_entry"):
+        return None
+    if _c_is_real_trade_position_id(str(row["position_id"])):
+        return None
+    return f"entry:{row['based_on_entry']}"
+
+
+def _read_updates(storage):
+    import json
+
+    return [json.loads(line) for line in open(storage.path).read().splitlines() if line.strip()]
+
+
+def test_replay_emits_ids_that_c_entry_alias_can_attach(tmp_path):
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 100.0, 101.0, 99.0, 100.5),
+    ]
+    analyzer = _CtxEchoAnalyzer()
+    stats, storage = _run(
+        tmp_path, analyzer, candles, _ts(0, 4), end_hours=8, market="spot",
+    )
+    assert stats.updates == 1
+    row = _read_updates(storage)[0]
+    assert row["position_id"] == "spot:replay:entry-1"
+    assert row["based_on_entry"] == "entry-1"
+    assert _c_is_real_trade_position_id(row["position_id"]) is False
+    assert _c_entry_alias(row) == "entry:entry-1"
+
+
+def test_replay_unscoped_ids_also_expose_the_entry_alias(tmp_path):
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 100.0, 101.0, 99.0, 100.5),
+    ]
+    analyzer = _CtxEchoAnalyzer(action="CLOSE", close_reason="llm_close")
+    stats, storage = _run(tmp_path, analyzer, candles, _ts(0, 4), end_hours=8)
+    assert stats.closes == 1
+    row = _read_updates(storage)[0]
+    assert row["position_id"] == "replay:entry-1"
+    assert _c_entry_alias(row) == "entry:entry-1"
+
+
+def _locate_c_signal_logic():
+    """Find C's signal_logic module, or None. Override with SIGNAL_LOGIC_PATH."""
+    candidates = []
+    env = os.environ.get("SIGNAL_LOGIC_PATH")
+    if env:
+        candidates.append(env)
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    candidates.append(os.path.join(
+        root, "..", "trading-stack", "freqtrade", "user_data", "strategies", "signal_logic.py",
+    ))
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            try:
+                source = open(candidate, encoding="utf-8").read()
+            except OSError:
+                continue
+            if "_is_real_trade_position_id" in source and "entry:" in source:
+                return candidate
+    return None
+
+
+C_SIGNAL_LOGIC = _locate_c_signal_logic()
+
+
+@pytest.mark.skipif(
+    C_SIGNAL_LOGIC is None,
+    reason="C's signal_logic with the entry alias is not available",
+)
+def test_replay_update_is_indexed_by_c_real_alias_function(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("c_signal_logic", C_SIGNAL_LOGIC)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    candles = [
+        _candle(0, 100.0, 100.5, 99.5, 100.0),
+        _candle(4, 100.0, 101.0, 99.0, 100.5),
+    ]
+    analyzer = _CtxEchoAnalyzer()
+    _, storage = _run(tmp_path, analyzer, candles, _ts(0, 4), end_hours=8, market="futures")
+    row = _read_updates(storage)[0]
+
+    assert row["position_id"] == "futures:replay:entry-1"
+    assert module._is_real_trade_position_id(row["position_id"]) is False
+    index = module.index_updates([row])
+    assert "entry:entry-1" in index
+    assert [u["revision"] for u in index["entry:entry-1"]] == [1]

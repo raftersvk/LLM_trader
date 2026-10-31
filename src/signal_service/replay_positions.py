@@ -15,12 +15,14 @@ exchange call is involved here.
 Identifiers are namespaced with ``replay:`` so they can never collide with the
 market-scoped live ids written by ``position_sync`` (``spot:<trade_id>`` /
 ``futures:<trade_id>``). When the caller knows which market it replays, pass
-``market`` and the position id becomes ``replay:<market>:<entry>``.
-``based_on_entry`` stays the real entry decision id so the consumer's
-``update_matches_entry`` linkage keeps working. The update ``decision_id`` is
+``market`` and the position id becomes ``replay:<entry>`` or
+``<market>:replay:<entry>``; the consumer's entry alias
+(``entry:<based_on_entry>``) then attaches these updates to the backtest trade
+whose ``enter_tag`` is the entry decision id. ``based_on_entry`` therefore stays
+the real entry decision id. The update ``decision_id`` is
 ``<based_on_entry>-u<revision>``; a spot and a futures replay of the same pair
-must therefore write to separate ``--output`` directories to avoid
-deduplicating each other.
+must still write to separate ``--output`` directories to avoid deduplicating
+each other.
 """
 
 from __future__ import annotations
@@ -278,9 +280,10 @@ async def replay_positions_for_pair(
 
             # Market-scoped position id: never collide with the live
             # ``spot:``/``futures:`` ids. ``based_on_entry`` stays the real entry
-            # decision id so the consumer's update/entry linkage keeps working.
+            # decision id so the consumer's ``entry:<based_on_entry>`` alias
+            # keeps linking the update to the backtest trade.
             scoped_position_id = (
-                f"replay:{market}:{position.enter_tag}" if market
+                f"{market}:replay:{position.enter_tag}" if market
                 else f"replay:{position.enter_tag}"
             )
             snapshot = position.snapshot(symbol, close)
