@@ -175,6 +175,34 @@ def test_missing_inputs_degrade_to_unclear():
     assert snapshot["allowed_setups"] == []
 
 
+def test_high_vol_snapshot_is_no_trade():
+    snapshot = build_regime_snapshot(
+        technical_data={"adx": 15.0, "choppiness": 45.0, "atr_percent": 5.0},
+        closes_1h=[100.0, 101.0, 99.0, 100.0, 102.0],
+    )
+
+    assert snapshot["regime"] == "high_vol"
+    assert snapshot["no_trade"] is True
+    assert snapshot["allowed_setups"] == []
+
+
+def test_low_vol_snapshot_is_no_trade():
+    snapshot = build_regime_snapshot(
+        technical_data={
+            "adx": 18.0,
+            "choppiness": 60.0,
+            "atr_percent": 0.5,
+            "sma_20": 100.0,
+        },
+        closes_1h=[100.0, 100.1, 100.0, 100.1, 100.0],
+        atr_pct_median_90d=2.0,
+    )
+
+    assert snapshot["regime"] == "low_vol"
+    assert snapshot["no_trade"] is True
+    assert snapshot["allowed_setups"] == []
+
+
 # -------------------------------------------------------------- prompt block
 def _prompt_builder() -> PromptBuilder:
     builder = PromptBuilder(
@@ -554,3 +582,23 @@ async def test_post_gate_state_matches_the_analysed_candle():
     assert pre_state["adx"] == post_state["adx"] == pytest.approx(30.0)
     assert pre_state["candles_used"] == post_state["candles_used"] == 2
     assert pre_state["deterministic_regime"] == post_state["deterministic_regime"] == "trend_down"
+
+
+def test_adapter_treats_raw_long_term_rows_as_missing():
+    """A raw daily payload must not break the snapshot (daily trend stays None)."""
+    engine = SimpleNamespace(prompt_builder=SimpleNamespace(regime_snapshot_provider=None))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    context = SimpleNamespace(
+        technical_data=_trend_up_inputs()["technical_data"],
+        long_term_data=[[0, 90.0, 91.0, 89.0, 90.0, 1.0]],
+        weekly_macro_indicators=None,
+        ohlcv_candles=[[0, 99.0, 106.0, 98.0, 105.0, 10.0]],
+        weekly_ohlcv=None,
+    )
+
+    snapshot = analyzer._regime_snapshot_from_context(context)
+
+    assert snapshot is not None
+    assert snapshot["regime"] == "trend_up"
+    assert snapshot["daily_trend"] is None
+    assert snapshot["htf_alignment"] == "neutral"

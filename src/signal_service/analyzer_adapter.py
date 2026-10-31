@@ -865,9 +865,12 @@ class PairAnalyzer:
             return None
         try:
             long_term_data = getattr(context, "long_term_data", None) or None
-            daily_rows = None
-            if isinstance(long_term_data, dict):
-                daily_rows = long_term_data.get("data")
+            # A collector can leave raw rows (or a list) here; only the
+            # indicator mapping carries daily direction, so anything else is
+            # treated as missing instead of crashing the whole snapshot.
+            if not isinstance(long_term_data, dict):
+                long_term_data = None
+            daily_rows = long_term_data.get("data") if long_term_data else None
             candles = self._closed_rows(
                 getattr(context, "ohlcv_candles", None),
                 getattr(context, "timestamps", None),
