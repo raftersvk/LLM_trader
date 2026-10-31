@@ -10,8 +10,8 @@ Open Interest and no external call.
   `no_trade`, `htf_alignment`, `extension_atr`, `rs_btc_7d/30d` (when a BTC
   close series is already exposed) and the allowed setup families.
 - The prompt receives one compact `REGIME SNAPSHOT` block.
-- JEV receives the same fields inside its state. The JEV payload and the
-  signal contract are unchanged.
+- JEV receives the same fields inside its state. P0-A left the JEV payload and
+  the signal contract unchanged; P1-B adds them as optional v1.2 fields (below).
 
 ## Ex-ante rule
 
@@ -56,6 +56,26 @@ left to the gate policy, not to the snapshot.
   regime fields, and the gate does not read `setup`. The former `momentum_*`
   bias-conflict branch was removed together with the regime gate; the setup
   taxonomy and contract fields remain P1-B only, optional fields.
+
+## P1-B contract and taxonomy (v1.2)
+
+P1-B makes the taxonomy explicit end to end, additively:
+
+- `signal.schema.json` accepts `schema_version` `1.2` and optional top-level
+  `setup`, `regime`, `htf_alignment`. `jev` optionally accepts
+  `regime_confidence`, `bias_confidence`, `tradeability_probability`,
+  `confidence` (all in `[0, 1]`).
+- `contract.py` validates the same enums. `1.0` and `1.1` records without the
+  new keys remain valid; a producer that emits no taxonomy still writes `1.0`.
+- The decision JSON now asks for `setup`, `regime`, `htf_alignment`. The adapter
+  emits `1.2` only when at least one is present. It prefers the deterministic
+  snapshot's `regime`/`htf_alignment` and drops a `setup` outside that regime's
+  allowed families, so the model cannot relabel the computed regime.
+- The Decision Rules system prompt lists all nine setups, the six regimes and
+  the three alignments, with the regime -> allowed-family mapping. It states
+  that the supplied `REGIME SNAPSHOT` is authoritative, that indicators must not
+  be recomputed or refetched, and that only the latest closed 1h candle may be
+  used (no future candle, no retrospective week return).
 
 ## P1-A price-preserving exits (not implemented here)
 

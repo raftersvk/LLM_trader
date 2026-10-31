@@ -2073,3 +2073,61 @@ async def test_repair_honours_the_json_format_opt_out():
     assert engine.calls[-1]["response_format"] is None
     assert engine.calls[-1]["json_object_output"] is False
     assert signal.reasoning == "repaired decision"
+
+
+RAW_TAXONOMY_BUY = (
+    '{"signal": "BUY", "confidence": "HIGH", "stop_loss": 67000.0, '
+    '"take_profit": 70000.0, "position_size": 5, "reasoning": "pullback", '
+    '"setup": "trend_pullback", "regime": "trend_up", "htf_alignment": "aligned"}'
+)
+
+
+@pytest.mark.asyncio
+async def test_taxonomy_is_emitted_from_the_decision_object():
+    engine = FakeEngine(raw_response=RAW_TAXONOMY_BUY, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze()
+
+    assert signal.setup == "trend_pullback"
+    assert signal.regime == "trend_up"
+    assert signal.htf_alignment == "aligned"
+    assert signal.schema_version == "1.2"
+    payload = signal.to_dict()
+    assert payload["setup"] == "trend_pullback"
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_unknown_taxonomy_is_dropped_without_failing_the_signal():
+    raw = RAW_TAXONOMY_BUY.replace("trend_pullback", "vibes")
+    engine = FakeEngine(raw_response=raw, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+
+    signal = await analyzer.analyze()
+
+    assert signal.setup is None
+    assert signal.regime == "trend_up"
+    assert signal.schema_version == "1.2"
+    signal.validate()
+
+
+@pytest.mark.asyncio
+async def test_deterministic_snapshot_overrides_the_reported_regime():
+    engine = FakeEngine(raw_response=RAW_TAXONOMY_BUY, result=dict(RESULT_META))
+    analyzer = PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h")
+    analyzer._current_regime_snapshot = lambda: {  # pylint: disable=protected-access
+        "adx": 31.0,
+        "regime": "range",
+        "htf_alignment": "counter",
+        "allowed_setups": ["range_fade_extreme", "range_mean_reversion"],
+    }
+
+    signal = await analyzer.analyze()
+
+    assert signal.regime == "range"
+    assert signal.htf_alignment == "counter"
+    # trend_pullback is not allowed in a range: drop it rather than trust it.
+    assert signal.setup is None
+    signal.validate()
+

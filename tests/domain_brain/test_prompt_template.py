@@ -200,6 +200,9 @@ SNAPSHOT_KEYS = {
     "stop_loss",
     "take_profit",
     "position_size",
+    "setup",
+    "regime",
+    "htf_alignment",
     "reasoning",
     "key_levels",
     "trend",
@@ -607,6 +610,36 @@ def test_decision_rules_render_one_line_per_rule():
     ])
 
 
+def test_decision_rules_contain_the_complete_1h_setup_taxonomy():
+    """P1-B pins every enum value and the ex-ante/no-look-ahead rule."""
+    rules = make_manager().build_decision_rules()
+    assert_fragments(rules, [
+        "=== Setup Taxonomy (1h) ===",
+        "trend_pullback",
+        "breakout_retest",
+        "momentum_continuation",
+        "rally_failure",
+        "breakdown_retest",
+        "momentum_short",
+        "range_fade_extreme",
+        "range_mean_reversion",
+        "none",
+        "trend_up",
+        "trend_down",
+        "range",
+        "low_vol",
+        "high_vol",
+        "unclear",
+        "aligned",
+        "counter",
+        "neutral",
+        "REGIME SNAPSHOT block supplied in Trading Context is authoritative",
+        "do not recompute ADX/choppiness/ATR or refetch candles",
+        "never infer a regime from a future candle or from the week's realized return",
+        "latest closed 1h candle",
+    ])
+
+
 def test_breakout_doctrine_forbids_staged_entries():
     """Closed candles drive the decision; current price is only the execution reference."""
     rules = make_manager().build_decision_rules(dynamic_thresholds={})
@@ -794,6 +827,9 @@ def test_response_template_json_example_is_parser_safe():
     assert analysis["take_profit"] is None
     assert analysis["risk_reward_ratio"] is None
     assert analysis["order_type"] is None
+    assert analysis["setup"] == "none"
+    assert analysis["regime"] == "unclear"
+    assert analysis["htf_alignment"] == "neutral"
     assert set(analysis["confluence_factors"]) == {
         "trend_alignment",
         "momentum_strength",

@@ -716,6 +716,26 @@ class TemplateManager:
             "(see SL Tightening Policy in position context)"
         )
 
+        setup_taxonomy = """=== Setup Taxonomy (1h) ===
+The REGIME SNAPSHOT block supplied in Trading Context is authoritative. Use its regime, htf and allowed_setups values as given; do not recompute ADX/choppiness/ATR or refetch candles, and never infer a regime from a future candle or from the week's realized return (no look-ahead).
+Regime -> allowed setups:
+- trend_up: trend_pullback, breakout_retest, momentum_continuation (long only).
+- trend_down: rally_failure, breakdown_retest, momentum_short (short; on spot these are no-trade because it cannot short).
+- range: range_fade_extreme, range_mean_reversion.
+- low_vol, high_vol, unclear: none — HOLD (tradeable=no). Do not invent a setup for these regimes.
+Setup definitions (classify on the latest closed 1h candle):
+- trend_pullback: long, orderly pullback to SMA20/structure support in an uptrend with a rejection close; invalidated below the pullback low.
+- breakout_retest: long, break of a 20-bar high/range then a held retest of the broken level; invalidated back below that level.
+- momentum_continuation: long, higher-high/higher-low continuation without >2 ATR extension from SMA20; invalidated by a lower low.
+- rally_failure: short, rally into SMA20/resistance rejected with a lower high in a downtrend; invalidated above the swing high.
+- breakdown_retest: short, support break then a rejected retest of the broken level; invalidated back above it.
+- momentum_short: short, lower-high/lower-low continuation without >2 ATR extension; invalidated by a higher high.
+- range_fade_extreme: fade a wick beyond the range boundary that closes back inside; invalidated beyond the boundary.
+- range_mean_reversion: return toward mid/VWAP after an excursion; invalidated by a break of the range.
+- none: no actionable setup (HOLD/CLOSE/UPDATE, or tradeable=no).
+htf_alignment (daily/weekly vs the 1h regime): aligned = same direction; counter = opposite; neutral = no clear higher-timeframe trend. A counter setup needs exceptional confluence and reduced size; a neutral one needs explicit confirmation.
+This is a 1h decision: the execution layer applies the 1h ATR-scaled bracket, so propose structural levels and do not carry over 4h exit distances. Emit setup, regime and htf_alignment in the decision JSON using exactly these labels; omit them only when unknown, and never emit a label outside these lists."""
+
         chart_validation_guidance = ""
         if has_chart_analysis:
             chart_validation_guidance = (
@@ -736,6 +756,8 @@ ADX >= {adx_strong}: strong trend
 Choppiness > 61.8 = ranging, < 38.2 = trending, 38-62 = transitional
 
 Override with exceptional conviction ({conf_weak + 1}+ confluences). State reasoning.
+
+{setup_taxonomy}
 
 SIGNALS:
 {entry_rr_rule}
@@ -991,6 +1013,9 @@ create additional signals. End with a brief risk disclaimer before the final thr
         "stop_loss": null,
         "take_profit": null,
         "position_size": 0.0,
+        "setup": "none",
+        "regime": "unclear",
+        "htf_alignment": "neutral",
         "reasoning": "{_reasoning_guidance}",
         "key_levels": {{"support": [64032.54, 63370.50], "resistance": [64478.17, 64961.17]}},
         "trend": {{"direction": "NEUTRAL", "strength_4h": 20, "strength_daily": 15, "timeframe_alignment": "DIVERGENT"}},
