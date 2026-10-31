@@ -612,6 +612,7 @@ class TemplateManager:
         dynamic_thresholds: dict[str, Any] | None = None,
         has_risk_profile: bool = False,
         timeframe: str | None = None,
+        regime_snapshot_available: bool = False,
     ) -> str:
         """Build the Decision Rules section: all trading decision logic, sizing, and risk rules.
 
@@ -718,7 +719,7 @@ class TemplateManager:
         )
 
         setup_taxonomy = ""
-        if timeframe == "1h":
+        if timeframe == "1h" and regime_snapshot_available:
             setup_taxonomy = """=== Setup Taxonomy (1h) ===
 The REGIME SNAPSHOT block supplied in Trading Context is authoritative. Use its regime, htf and allowed_setups values as given; do not recompute ADX/choppiness/ATR or refetch candles, and never infer a regime from a future candle or from the week's realized return (no look-ahead).
 Regime -> allowed setups:
@@ -907,7 +908,8 @@ create additional signals. End with a brief risk disclaimer before the final thr
                                 model_verbosity: str | None = None,
                                 dynamic_thresholds: dict[str, Any] | None = None,
                                 json_object_output: bool = False,
-                                timeframe: str | None = None) -> str:
+                                timeframe: str | None = None,
+                                regime_snapshot_available: bool = False) -> str:
         """Build the response format template: output structure, JSON schema, field rules.
 
         Decision logic (R/R gates, position sizing, SL/TP rules, macro conflict) lives in
@@ -1003,10 +1005,11 @@ create additional signals. End with a brief risk disclaimer before the final thr
         provider = self.config.PROVIDER.strip().lower()
         is_json_object_output = json_object_output or provider in ("deepseek", "all")
 
-        # The 1h taxonomy is opt-in by timeframe: the same template serves the
-        # 4h live bot, whose output contract must not gain these keys.
+        # The 1h taxonomy is opt-in by timeframe and only on the signal-service
+        # path that installs the deterministic snapshot provider. The shared
+        # 4h/live template must not gain these keys or refer to a missing block.
         taxonomy_fields = ""
-        if timeframe == "1h":
+        if timeframe == "1h" and regime_snapshot_available:
             taxonomy_fields = (
                 '        "setup": "none",\n'
                 '        "regime": "unclear",\n'

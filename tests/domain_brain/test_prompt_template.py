@@ -228,6 +228,7 @@ def render(
     has_chart_analysis: bool = False,
     dynamic_thresholds: dict[str, Any] | None = None,
     json_object_output: bool = False,
+    regime_snapshot_available: bool = False,
 ) -> str:
     """Compose the full prompt PromptBuilder emits: base, rules, steps, format."""
     return "\n\n".join([
@@ -236,6 +237,7 @@ def render(
             has_chart_analysis,
             dynamic_thresholds=dynamic_thresholds,
             timeframe=timeframe,
+            regime_snapshot_available=regime_snapshot_available,
         ),
         manager.build_analysis_steps(symbol, has_chart_analysis=has_chart_analysis),
         manager.build_response_template(
@@ -243,6 +245,7 @@ def render(
             dynamic_thresholds=dynamic_thresholds,
             json_object_output=json_object_output,
             timeframe=timeframe,
+            regime_snapshot_available=regime_snapshot_available,
         ),
     ])
 
@@ -615,7 +618,9 @@ def test_decision_rules_render_one_line_per_rule():
 
 def test_decision_rules_contain_the_complete_1h_setup_taxonomy():
     """P1-B pins every enum value and the ex-ante/no-look-ahead rule."""
-    rules = make_manager().build_decision_rules(timeframe="1h")
+    rules = make_manager().build_decision_rules(
+        timeframe="1h", regime_snapshot_available=True
+    )
     assert_fragments(rules, [
         "=== Setup Taxonomy (1h) ===",
         "trend_pullback",
@@ -643,23 +648,43 @@ def test_decision_rules_contain_the_complete_1h_setup_taxonomy():
     ])
 
 
-@pytest.mark.parametrize("timeframe", ["4h", "1d", "15m", None])
-def test_setup_taxonomy_is_not_injected_outside_the_1h_target(timeframe):
-    """The shared template also serves the 4h live bot: keep its prompt unchanged."""
-    rules = make_manager().build_decision_rules(timeframe=timeframe)
-    template = make_manager().build_response_template(timeframe=timeframe)
+@pytest.mark.parametrize(("timeframe", "snapshot_available"), [
+    ("4h", True),
+    ("1d", True),
+    ("15m", True),
+    (None, True),
+    ("1h", False),
+])
+def test_setup_taxonomy_is_not_injected_outside_the_signal_1h_path(
+    timeframe, snapshot_available
+):
+    """The shared live template must not gain 1h logic or refer to a missing block."""
+    rules = make_manager().build_decision_rules(
+        timeframe=timeframe, regime_snapshot_available=snapshot_available
+    )
+    template = make_manager().build_response_template(
+        timeframe=timeframe, regime_snapshot_available=snapshot_available
+    )
     assert "=== Setup Taxonomy" not in rules
     assert "trend_pullback" not in rules
     assert '"setup": "none"' not in template
     assert '"regime": "unclear"' not in template
 
 
-def test_taxonomy_keys_only_enter_the_1h_json_example():
-    template_1h = make_manager().build_response_template(timeframe="1h")
-    template_4h = make_manager().build_response_template(timeframe="4h")
+def test_taxonomy_keys_only_enter_the_signal_1h_json_example():
+    template_1h = make_manager().build_response_template(
+        timeframe="1h", regime_snapshot_available=True
+    )
+    template_4h = make_manager().build_response_template(
+        timeframe="4h", regime_snapshot_available=True
+    )
     for key in ('"setup": "none"', '"regime": "unclear"', '"htf_alignment": "neutral"'):
         assert key in template_1h
         assert key not in template_4h
+    example = json.loads(
+        re.search(r"```json\s*(.*?)\s*```", template_1h, re.DOTALL | re.IGNORECASE).group(1)
+    )
+    assert set(example["analysis"]) == SNAPSHOT_KEYS_1H
 
 
 def test_breakout_doctrine_forbids_staged_entries():
@@ -931,7 +956,7 @@ def test_signal_json_mode_prompt_is_json_only_for_litellm():
         re.search(r"```json\s*(.*?)\s*```", prompt, re.DOTALL | re.IGNORECASE).group(1)
     )
     assert set(example) == {"narrative", "analysis"}
-    assert set(example["analysis"]) == SNAPSHOT_KEYS_1H
+    assert set(example["analysis"]) == SNAPSHOT_KEYS
 
     prose_prompt = render(manager)
     assert "Output: 13 plain-text numbered lines + JSON." in prose_prompt

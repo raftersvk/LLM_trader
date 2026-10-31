@@ -68,15 +68,17 @@ P1-B makes the taxonomy explicit end to end, additively:
 - `contract.py` validates the same enums. `1.0` and `1.1` records without the
   new keys remain valid; a producer that emits no taxonomy still writes `1.0`.
 - The decision JSON asks for `setup`, `regime`, `htf_alignment` only when the
-  prompt target is 1h; the shared 4h/live template is unchanged. The adapter
-  emits `1.2` only when the model actually emitted `setup` or `regime`; a
-  deterministic snapshot alone never upgrades a production signal. It prefers
-  the snapshot's `regime`/`htf_alignment` (even when ADX is missing) and drops a
-  `setup` outside that regime's allowed families, so the model cannot relabel
-  the computed regime.
+  prompt target is 1h **and** the signal-service snapshot provider is installed;
+  the shared 4h/live template is unchanged and never refers to a missing block.
+  The adapter emits `1.2` only when the model actually emitted `setup` or
+  `regime`; a deterministic snapshot alone never upgrades a production signal.
+  It prefers the snapshot's `regime`/`htf_alignment` (even when ADX is missing)
+  and drops a `setup` outside that regime's allowed families, so the model
+  cannot relabel the computed regime.
 - The Decision Rules system prompt lists all nine setups, the six regimes and
   the three alignments, with the regime -> allowed-family mapping, and only for
-  a 1h target. It states that the supplied `REGIME SNAPSHOT` is authoritative,
+  a 1h target on the signal-service path that installs the snapshot provider.
+  It states that the supplied `REGIME SNAPSHOT` is authoritative,
   that indicators must not be recomputed or refetched, and that only the latest
   closed 1h candle may be used (no future candle, no retrospective week return).
 
