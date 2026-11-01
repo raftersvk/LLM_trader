@@ -182,8 +182,8 @@ class SetupDefinition:
             raise TaxonomyConfigError(
                 f"setups.{name} has unknown keys: {', '.join(sorted(map(str, unknown)))}"
             )
-        if base is None and set(cls._FIELDS) - set(data):
-            missing = ", ".join(sorted(set(cls._FIELDS) - set(data)))  # type: ignore[attr-defined]
+        if base is None and set(cls._REQUIRED_FIELDS) - set(data):
+            missing = ", ".join(sorted(set(cls._REQUIRED_FIELDS) - set(data)))
             raise TaxonomyConfigError(f"setups.{name} is missing keys: {missing}")
 
         side = _string(

@@ -19,6 +19,7 @@ from src.config.regime_taxonomy import (
     NO_TRADE_REGIMES,
     REGIMES,
     RegimeThresholds,
+    SetupDefinition,
     TaxonomyConfigError,
     default_taxonomy_config,
     load_taxonomy_config,
@@ -569,6 +570,30 @@ def test_setup_bracket_and_trailing_fields_are_optional():
     assert "tp_atr" not in rendered
     assert "trail_atr" not in rendered
     assert "be_at_r" not in rendered
+
+
+def test_optional_setup_fields_may_be_absent_without_a_base():
+    """Required fields alone are enough; optional bracket/trailing fields stay None.
+
+    Built-in names inherit their base, but a definition validated without one
+    must not be rejected for omitting ``sl_atr``/``tp_atr``/``trail_atr``/``be_at_r``.
+    """
+    setup = SetupDefinition.from_mapping(
+        "breakout_retest",
+        {
+            "side": "long",
+            "description": "Custom retest.",
+            "entry": "Retest.",
+            "invalidation": "Break.",
+            "regimes": ["trend_up"],
+            "max_hold_bars": 24,
+        },
+    )
+
+    assert setup.sl_atr is None
+    assert setup.tp_atr is None
+    assert setup.trail_atr is None
+    assert setup.be_at_r is None
 
 
 def test_custom_description_is_rendered_from_the_config():
