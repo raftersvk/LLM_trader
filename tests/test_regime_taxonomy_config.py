@@ -135,10 +135,12 @@ setups:
     trail_atr: 0.5
     be_at_r: 1.0
 pair_overrides:
-  BTC/USDT:
-    regime_thresholds:
-      adx_trend: 40.0
-      adx_weak: 30.0
+  BTC/USDT:USDT:
+    sl_atr: 3.0
+    tp_atr: 5.5
+    max_hold_bars: 12
+    trail_atr: 0.5
+    be_at_r: 1.0
 jev:
   bias_short_only: false
   log_decisions: true
@@ -157,18 +159,11 @@ jev:
     assert setup.description == "custom pullback description"
     assert setup.sl_atr == 2.0
     assert setup.max_hold_bars == 16
-    assert config.pair_overrides["BTC/USDT"].regime_thresholds.adx_trend == 40.0
+    assert config.pair_overrides["BTC/USDT:USDT"]["sl_atr"] == 3.0
+    assert config.pair_override("BTC/USDT")["tp_atr"] == 5.5
     assert config.jev.bias_short_only is False
     assert config.jev.log_decisions is True
     assert config.jev.log_path == "/tmp/jev_decisions.jsonl"
-
-
-def test_example_config_matches_the_built_in_defaults():
-    path = Path(__file__).resolve().parents[1] / "config" / "regime_taxonomy.example.yaml"
-
-    example = load_taxonomy_config(str(path))
-
-    assert example.as_dict() == default_taxonomy_config().as_dict()
 
 
 def test_json_document_is_accepted_as_fallback(tmp_path):
@@ -206,6 +201,8 @@ def test_json_document_is_accepted_as_fallback(tmp_path):
         ("version: '1.0'\nenabled_timeframes: []\n", "at least one timeframe"),
         ("version: '1.0'\nsetups:\n  trend_pullback:\n    side: sideways\n", "side must be one of"),
         ("version: '1.0'\njev:\n  bias_short_only: maybe\n", "must be a boolean"),
+        ("version: '1.0'\npair_overrides:\n  BTC/USDT:\n    sideways: 1\n", "unknown keys"),
+        ("version: '1.0'\npair_overrides:\n  BTC/USDT:\n    sl_atr: nope\n", "must be a number"),
         ("version: '1.0'\nunexpected_section: true\n", "unknown keys"),
         ("regime_thresholds: [not-a-mapping\n", "invalid YAML"),
         ("", "empty"),
@@ -221,6 +218,232 @@ def test_invalid_configs_raise_clear_errors(tmp_path, document, needle):
 def test_non_mapping_document_is_rejected():
     with pytest.raises(TaxonomyConfigError, match="must be a mapping"):
         parse_taxonomy_config(["not", "a", "mapping"])
+
+
+# Canonical W3 document (trading-stack PR #15). Embedded so CI does not need the
+# sibling checkout; the installed file is also checked below when present.
+CANONICAL_TAXONOMY_YAML = """\
+# Canonical regime / setup taxonomy shared by LLM_trader and Freqtrade.
+#
+# LLM_trader reads this file to build its 1h regime snapshot and prompt
+# taxonomy. SignalStrategy reads the same file for setup exits and pair
+# overrides, falling back to the legacy config-futures.json tables when this
+# file or a key is absent. Do not add or remove fields without updating both
+# sides and docs/futures-mode.md.
+version: 1
+
+# The 1h decision timeframe is enabled. 4h stays off until it is validated.
+enabled_timeframes:
+  - 1h
+
+# Deterministic regime snapshot thresholds (mirror
+# LLM_trader/src/signal_service/regime_snapshot.py).
+regime_thresholds:
+  adx_trend: 25.0
+  adx_weak: 20.0
+  range_choppiness: 61.8
+  high_vol_atr_multiple: 2.5
+  high_vol_atr_pct_floor: 3.0
+  low_vol_atr_multiple: 0.55
+  low_vol_choppiness: 55.0
+
+# Setups allowed per regime. The regime snapshot is authoritative; an empty
+# list means HOLD (no actionable setup).
+regime_setups:
+  trend_up:
+    - trend_pullback
+    - breakout_retest
+    - momentum_continuation
+  trend_down:
+    - rally_failure
+    - breakdown_retest
+    - momentum_short
+  range:
+    - range_fade_extreme
+    - range_mean_reversion
+  low_vol: []
+  high_vol: []
+  unclear: []
+
+# Per-setup defaults. Multipliers are expressed in 1h ATR (price-preserving
+# P0-B scaling), max_hold_bars in 1h bars. trail_atr / be_at_r stay opt-in.
+setups:
+  trend_pullback:
+    side: long
+    description: >-
+      Orderly pullback to SMA20/structure support in an uptrend with a
+      rejection close.
+    entry: Pullback into SMA20/support with a rejection close.
+    invalidation: Close below the pullback low.
+    regimes:
+      - trend_up
+    sl_atr: 2.5
+    tp_atr: 4.8
+    max_hold_bars: 24
+    trail_atr: 0.0
+    be_at_r: 0.0
+  breakout_retest:
+    side: long
+    description: >-
+      Break of a 20-bar high/range then a held retest of the broken level.
+    entry: Held retest of the broken 20-bar high/range level.
+    invalidation: Close back below the broken level.
+    regimes:
+      - trend_up
+    sl_atr: 2.5
+    tp_atr: 4.8
+    max_hold_bars: 24
+    trail_atr: 0.0
+    be_at_r: 0.0
+  momentum_continuation:
+    side: long
+    description: >-
+      Higher-high/higher-low continuation without more than 2 ATR extension
+      from SMA20.
+    entry: Continuation after a higher high and higher low.
+    invalidation: Lower low.
+    regimes:
+      - trend_up
+    sl_atr: 2.5
+    tp_atr: 4.0
+    max_hold_bars: 12
+    trail_atr: 0.0
+    be_at_r: 0.0
+  rally_failure:
+    side: short
+    description: >-
+      Rally into SMA20/resistance rejected with a lower high in a downtrend.
+    entry: Rejection at SMA20/resistance with a lower high.
+    invalidation: Close above the swing high.
+    regimes:
+      - trend_down
+    sl_atr: 2.5
+    tp_atr: 4.5
+    max_hold_bars: 24
+    trail_atr: 0.0
+    be_at_r: 0.0
+  breakdown_retest:
+    side: short
+    description: >-
+      Support break then a rejected retest of the broken level.
+    entry: Rejected retest of the broken support level.
+    invalidation: Close back above the broken level.
+    regimes:
+      - trend_down
+    sl_atr: 2.5
+    tp_atr: 4.5
+    max_hold_bars: 24
+    trail_atr: 0.0
+    be_at_r: 0.0
+  momentum_short:
+    side: short
+    description: >-
+      Lower-high/lower-low continuation without more than 2 ATR extension.
+    entry: Continuation after a lower high and lower low.
+    invalidation: Higher high.
+    regimes:
+      - trend_down
+    sl_atr: 2.5
+    tp_atr: 4.5
+    max_hold_bars: 12
+    trail_atr: 0.0
+    be_at_r: 0.0
+  range_fade_extreme:
+    side: both
+    description: >-
+      Fade a wick beyond the range boundary that closes back inside.
+    entry: Wick beyond the range boundary closing back inside.
+    invalidation: Close beyond the range boundary.
+    regimes:
+      - range
+    sl_atr: 2.0
+    tp_atr: 4.5
+    max_hold_bars: 12
+    trail_atr: 0.0
+    be_at_r: 0.0
+  range_mean_reversion:
+    side: both
+    description: >-
+      Return toward mid/VWAP after an excursion.
+    entry: Excursion away from mid/VWAP with a reversal close.
+    invalidation: Break of the range.
+    regimes:
+      - range
+    sl_atr: 2.0
+    tp_atr: 4.5
+    max_hold_bars: 12
+    trail_atr: 0.0
+    be_at_r: 0.0
+
+# Exchange-pair overrides. Keys may be the Freqtrade pair (BTC/USDT:USDT) or
+# the signal-contract symbol (BTC/USDT). Accepted fields: sl_atr, tp_atr,
+# max_hold_bars, max_hold_hours, max_stake, leverage, trail_atr, be_at_r,
+# trail_after_r. Empty by default: setups above are the only override source.
+pair_overrides: {}
+
+# JEV gate settings consumed by LLM_trader; mirrored here so both sides read the
+# same canonical file. The strategy does not act on these fields.
+jev:
+  bias_short_only: false
+  log_decisions: true
+  log_path: runtime/logs/jev_decisions.jsonl
+"""
+
+CANONICAL_TAXONOMY_PATH = Path(
+    "/home/djelinux/TradingBots/trading-stack/freqtrade/user_data/regime_taxonomy.yaml"
+)
+
+
+def test_w3_canonical_document_parses_and_renders(tmp_path):
+    config = load_taxonomy_config(_write(tmp_path / "regime_taxonomy.yaml", CANONICAL_TAXONOMY_YAML))
+
+    assert config.version == "1"
+    assert config.enabled_timeframes == ("1h",)
+    assert config.regime_thresholds.as_dict() == {
+        "adx_trend": 25.0,
+        "adx_weak": 20.0,
+        "range_choppiness": 61.8,
+        "high_vol_atr_pct_floor": 3.0,
+        "high_vol_atr_multiple": 2.5,
+        "low_vol_atr_multiple": 0.55,
+        "low_vol_choppiness": 55.0,
+    }
+    assert config.allowed_setups("trend_up") == tuple(DEFAULT_TREND_SETUPS)
+    assert config.allowed_setups("low_vol") == ()
+    assert config.allowed_setups("high_vol") == ()
+    assert config.allowed_setups("unclear") == ()
+    assert config.pair_overrides == {}
+
+    setup = config.setups["trend_pullback"]
+    assert setup.tp_atr == 4.8
+    assert setup.description == (
+        "Orderly pullback to SMA20/structure support in an uptrend with a rejection close."
+    )
+    assert setup.invalidation == "Close below the pullback low."
+    assert config.setups["momentum_short"].tp_atr == 4.5
+    assert config.setups["range_fade_extreme"].tp_atr == 4.5
+    assert config.jev.bias_short_only is False
+    assert config.jev.log_decisions is True
+    assert config.jev.log_path == "runtime/logs/jev_decisions.jsonl"
+
+    block = render_setup_taxonomy(config, "1h")
+    assert "Orderly pullback to SMA20/structure support" in block
+    assert "Close below the pullback low." in block
+    assert "Higher-high/higher-low continuation" in block
+    assert render_setup_taxonomy(config, "4h") == ""
+
+
+@pytest.mark.skipif(
+    not CANONICAL_TAXONOMY_PATH.exists(),
+    reason="canonical trading-stack checkout is not installed",
+)
+def test_installed_canonical_file_matches_the_w3_schema():
+    config = load_taxonomy_config(str(CANONICAL_TAXONOMY_PATH))
+
+    assert config.version == "1"
+    assert config.enabled_timeframes == ("1h",)
+    assert set(config.setups) == set(DEFAULT_SETUPS)
+    assert config.jev.log_path.endswith("jev_decisions.jsonl")
 
 
 # ------------------------------------------------------------------ thresholds
@@ -251,54 +474,29 @@ def test_snapshot_allowed_setups_come_from_the_config():
     assert snapshot["allowed_setups"] == ["momentum_continuation"]
 
 
-def test_pair_overrides_apply_only_to_the_matching_symbol():
+def test_pair_overrides_are_flat_execution_fields_for_the_freqtrade_side():
     config = parse_taxonomy_config(
         {
             "pair_overrides": {
-                "BTC/USDT": {"regime_thresholds": {"adx_trend": 50.0, "adx_weak": 35.0}},
+                "BTC/USDT:USDT": {
+                    "sl_atr": 3.0,
+                    "tp_atr": 5.5,
+                    "max_hold_bars": 12,
+                    "max_hold_hours": 6,
+                    "max_stake": 30.0,
+                    "leverage": 2,
+                    "trail_atr": 0.5,
+                    "be_at_r": 1.0,
+                    "trail_after_r": 1.5,
+                }
             }
         }
     )
 
-    btc = build_regime_snapshot(
-        **_trend_up_inputs(), timeframe="1h", symbol="BTC/USDT", taxonomy_config=config
-    )
-    eth = build_regime_snapshot(
-        **_trend_up_inputs(), timeframe="1h", symbol="ETH/USDT", taxonomy_config=config
-    )
-
-    assert eth["regime"] == "trend_up"
-    assert eth["allowed_setups"] == DEFAULT_TREND_SETUPS
-    assert btc["regime"] == "range"
-
-
-def test_partial_pair_override_keeps_other_regime_families():
-    config = parse_taxonomy_config(
-        {"pair_overrides": {"BTC/USDT": {"regime_setups": {"trend_up": []}}}}
-    )
-
-    effective = config.for_symbol("BTC/USDT")
-
-    assert effective.allowed_setups("trend_up") == ()
-    assert effective.allowed_setups("trend_down") == (
-        "rally_failure",
-        "breakdown_retest",
-        "momentum_short",
-    )
-
-
-def test_compact_pair_override_key_matches_the_slash_symbol():
-    config = parse_taxonomy_config(
-        {"pair_overrides": {"BTCUSDT": {"regime_setups": {"trend_up": []}}}}
-    )
-
-    snapshot = build_regime_snapshot(
-        **_trend_up_inputs(), timeframe="1h", symbol="BTC/USDT", taxonomy_config=config
-    )
-
-    assert snapshot["regime"] == "trend_up"
-    assert snapshot["allowed_setups"] == []
-    assert snapshot["no_trade"] is True
+    assert config.pair_override("BTC/USDT:USDT")["leverage"] == 2
+    assert config.pair_override("BTC/USDT")["sl_atr"] == 3.0
+    assert config.pair_override("BTCUSDT")["max_hold_bars"] == 12
+    assert config.pair_override("ETH/USDT") == {}
 
 
 # ------------------------------------------------------------------- taxonomy

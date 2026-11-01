@@ -1005,7 +1005,6 @@ class PairAnalyzer:
                 btc_closes_1w=btc.get("1w"),
                 atr_pct_median_90d=self._atr_pct_median(context),
                 timeframe=self.timeframe,
-                symbol=self.symbol,
                 taxonomy_config=self.taxonomy_config,
             )
             self._last_regime_snapshot = snapshot

@@ -242,18 +242,16 @@ def build_regime_snapshot(
     btc_closes_1w: Sequence[float] | None = None,
     atr_pct_median_90d: float | None = None,
     timeframe: str = "1h",
-    symbol: str | None = None,
     taxonomy_config: RegimeTaxonomyConfig | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic regime snapshot from already-collected data.
 
     Missing inputs degrade to ``None`` fields; they never raise. A snapshot is
     always returned, even when every input is missing (``regime=unclear``).
-    Thresholds and allowed setups come from the taxonomy config, with optional
-    per-pair overrides selected by ``symbol``. A disabled timeframe exposes no
-    allowed setup and is marked no-trade.
+    Thresholds and allowed setups come from the taxonomy config. A disabled
+    timeframe exposes no allowed setup and is marked no-trade.
     """
-    config = (taxonomy_config or get_taxonomy_config()).for_symbol(symbol)
+    config = taxonomy_config or get_taxonomy_config()
     thresholds = config.regime_thresholds
     technical = technical_data or {}
     adx = _finite(technical.get("adx"))

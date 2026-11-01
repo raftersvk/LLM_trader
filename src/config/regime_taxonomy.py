@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, ClassVar, Mapping
 
@@ -41,6 +41,18 @@ REGIMES: tuple[str, ...] = (
 )
 NO_TRADE_REGIMES: tuple[str, ...] = ("low_vol", "high_vol", "unclear")
 ALLOWED_SIDES: tuple[str, ...] = ("long", "short", "both")
+#: Flat per-pair execution fields shared with the Freqtrade strategy (W3).
+PAIR_OVERRIDE_FIELDS: frozenset[str] = frozenset({
+    "sl_atr",
+    "tp_atr",
+    "max_hold_bars",
+    "max_hold_hours",
+    "max_stake",
+    "leverage",
+    "trail_atr",
+    "be_at_r",
+    "trail_after_r",
+})
 
 DEFAULT_ENABLED_TIMEFRAMES: tuple[str, ...] = ("1h",)
 DEFAULT_JEV_LOG_PATH = os.path.join(
@@ -271,14 +283,6 @@ class JevSettings:
 
 
 @dataclass(frozen=True)
-class PairOverride:
-    """Per-pair overrides: thresholds and/or allowed setup families."""
-
-    regime_thresholds: RegimeThresholds | None = None
-    regime_setups: Mapping[str, tuple[str, ...]] | None = None
-
-
-@dataclass(frozen=True)
 class RegimeTaxonomyConfig:
     """Validated taxonomy document used by the snapshot, prompt and JEV gate."""
 
@@ -287,7 +291,7 @@ class RegimeTaxonomyConfig:
     regime_thresholds: RegimeThresholds = field(default_factory=RegimeThresholds)
     regime_setups: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     setups: Mapping[str, SetupDefinition] = field(default_factory=dict)
-    pair_overrides: Mapping[str, PairOverride] = field(default_factory=dict)
+    pair_overrides: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
     jev: JevSettings = field(default_factory=JevSettings)
     source_path: str | None = None
 
@@ -299,29 +303,21 @@ class RegimeTaxonomyConfig:
         """Allowed setup families for a regime (empty when no-trade)."""
         return tuple(self.regime_setups.get(regime, ()))
 
-    def for_symbol(self, symbol: str | None) -> "RegimeTaxonomyConfig":
-        """Return the effective config with this pair's overrides applied."""
+    def pair_override(self, symbol: str | None) -> Mapping[str, float]:
+        """Return the flat execution overrides for a signal symbol/pair.
+
+        W3 writes these per-pair fields for the Freqtrade strategy; the regime
+        snapshot does not consume them. Both ``BTC/USDT:USDT`` and ``BTC/USDT``
+        keys resolve to the same signal symbol.
+        """
         if not symbol:
-            return self
-        override = self.pair_overrides.get(symbol)
-        if override is None:
-            # Accept the compact BTCUSDT form as well as BTC/USDT.
-            compact = symbol.replace("/", "").upper()
-            for key, candidate in self.pair_overrides.items():
-                if key.replace("/", "").upper() == compact:
-                    override = candidate
-                    break
-        if override is None:
-            return self
-        thresholds = override.regime_thresholds or self.regime_thresholds
-        regime_setups = dict(self.regime_setups)
-        if override.regime_setups:
-            regime_setups.update(override.regime_setups)
-        return replace(
-            self,
-            regime_thresholds=thresholds,
-            regime_setups=regime_setups,
-        )
+            return {}
+        compact = symbol.replace("/", "").split(":", 1)[0].upper()
+        for key, value in self.pair_overrides.items():
+            key_symbol = key.split(":", 1)[0]
+            if key_symbol == symbol or key_symbol.replace("/", "").upper() == compact:
+                return value
+        return {}
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON/YAML-compatible representation of the document."""
@@ -332,18 +328,7 @@ class RegimeTaxonomyConfig:
             "regime_setups": {key: list(value) for key, value in self.regime_setups.items()},
             "setups": {name: setup.as_dict() for name, setup in self.setups.items()},
             "pair_overrides": {
-                pair: {
-                    "regime_thresholds": (
-                        override.regime_thresholds.as_dict()
-                        if override.regime_thresholds
-                        else None
-                    ),
-                    "regime_setups": (
-                        {key: list(value) for key, value in override.regime_setups.items()}
-                        if override.regime_setups
-                        else None
-                    ),
-                }
+                pair: dict(override)
                 for pair, override in self.pair_overrides.items()
             },
             "jev": {
@@ -558,17 +543,9 @@ def _parse_regime_setups(
     base: Mapping[str, tuple[str, ...]],
     setups: Mapping[str, SetupDefinition],
     label: str = "regime_setups",
-    complete: bool = True,
 ) -> dict[str, tuple[str, ...]]:
-    """Parse the regime -> allowed setups mapping.
-
-    ``complete`` fills every regime from ``base`` (the root section); a pair
-    override passes False so only the regimes named by the override are
-    returned and the others keep their effective value.
-    """
+    """Parse the regime -> allowed setups mapping."""
     if data is None:
-        if not complete:
-            return {}
         return {regime: tuple(base.get(regime, ())) for regime in REGIMES}
     if not isinstance(data, Mapping):
         raise TaxonomyConfigError(f"{label} must be a mapping")
@@ -577,11 +554,7 @@ def _parse_regime_setups(
         raise TaxonomyConfigError(
             f"{label} has unknown regimes: {', '.join(map(str, unknown))}"
         )
-    result = (
-        {regime: tuple(base.get(regime, ())) for regime in REGIMES}
-        if complete
-        else {}
-    )
+    result = {regime: tuple(base.get(regime, ())) for regime in REGIMES}
     for regime, names in data.items():
         allowed = _string_tuple(names, f"{label}.{regime}")
         missing = [name for name in allowed if name not in setups]
@@ -593,50 +566,36 @@ def _parse_regime_setups(
     return result
 
 
-def _parse_pair_overrides(
-    data: Any,
-    thresholds: RegimeThresholds,
-    setups: Mapping[str, SetupDefinition],
-) -> dict[str, PairOverride]:
-    """Parse per-pair threshold/setup overrides."""
+def _parse_pair_overrides(data: Any) -> dict[str, dict[str, float]]:
+    """Parse the W3 flat per-pair execution overrides."""
     if data is None:
         return {}
     if not isinstance(data, Mapping):
         raise TaxonomyConfigError("pair_overrides must be a mapping")
-    overrides: dict[str, PairOverride] = {}
+    overrides: dict[str, dict[str, float]] = {}
     for pair, raw in data.items():
         pair_name = _string(pair, "pair_overrides key")
         if raw is None:
-            overrides[pair_name] = PairOverride()
+            overrides[pair_name] = {}
             continue
         if not isinstance(raw, Mapping):
             raise TaxonomyConfigError(f"pair_overrides.{pair_name} must be a mapping")
-        unknown = set(raw) - {"regime_thresholds", "regime_setups"}
+        unknown = set(raw) - PAIR_OVERRIDE_FIELDS
         if unknown:
             raise TaxonomyConfigError(
                 f"pair_overrides.{pair_name} has unknown keys: "
                 f"{', '.join(sorted(map(str, unknown)))}"
             )
-        override_thresholds = None
-        if raw.get("regime_thresholds") is not None:
-            override_thresholds = RegimeThresholds.from_mapping(
-                raw["regime_thresholds"],
-                thresholds,
-                f"pair_overrides.{pair_name}.regime_thresholds",
+        values: dict[str, float] = {}
+        for field_name, value in raw.items():
+            allow_zero = field_name in ("trail_atr", "be_at_r")
+            values[field_name] = _number(
+                value,
+                f"pair_overrides.{pair_name}.{field_name}",
+                minimum=0.0,
+                allow_zero=allow_zero,
             )
-        override_setups = None
-        if raw.get("regime_setups") is not None:
-            override_setups = _parse_regime_setups(
-                raw["regime_setups"],
-                {},
-                setups,
-                f"pair_overrides.{pair_name}.regime_setups",
-                complete=False,
-            )
-        overrides[pair_name] = PairOverride(
-            regime_thresholds=override_thresholds,
-            regime_setups=override_setups,
-        )
+        overrides[pair_name] = values
     return overrides
 
 
@@ -675,7 +634,7 @@ def parse_taxonomy_config(
     thresholds = RegimeThresholds.from_mapping(document.get("regime_thresholds"))
     setups = _parse_setups(document.get("setups"), DEFAULT_SETUPS)
     regime_setups = _parse_regime_setups(document.get("regime_setups"), DEFAULT_REGIME_SETUPS, setups)
-    pair_overrides = _parse_pair_overrides(document.get("pair_overrides"), thresholds, setups)
+    pair_overrides = _parse_pair_overrides(document.get("pair_overrides"))
     jev = JevSettings.from_mapping(document.get("jev"))
 
     return RegimeTaxonomyConfig(
@@ -766,6 +725,30 @@ def get_taxonomy_config(path: str | None = None) -> RegimeTaxonomyConfig:
 
 
 # --------------------------------------------------------------------- rendering
+def _sentence(text: str) -> str:
+    """Strip and ensure one terminal period on a narrative field."""
+    value = text.strip()
+    if value and value[-1] not in ".!?":
+        value += "."
+    return value
+
+
+def _setup_line(setup: SetupDefinition) -> str:
+    """Render one setup line for both schema styles.
+
+    The canonical W3 file uses standalone capitalized sentences; the built-in
+    fallback keeps the original lowercase fragment style. Supporting both
+    avoids rewriting either source.
+    """
+    description = setup.description.strip()
+    invalidation = _sentence(setup.invalidation)
+    if description[:1].isupper():
+        prefix = f"{setup.side} — " if setup.side in ("long", "short") else ""
+        return f"- {setup.name}: {prefix}{_sentence(description)} {invalidation}".rstrip()
+    prefix = f"{setup.side}, " if setup.side in ("long", "short") else ""
+    return f"- {setup.name}: {prefix}{description}; {invalidation}"
+
+
 def _side_annotation(setups: list[SetupDefinition]) -> str:
     """Describe the sides of an allowed family list for the prompt."""
     sides = {setup.side for setup in setups}
@@ -819,11 +802,7 @@ def render_setup_taxonomy(config: RegimeTaxonomyConfig, timeframe: str | None) -
             if name in rendered:
                 continue
             rendered.add(name)
-            setup = config.setups[name]
-            prefix = f"{setup.side}, " if setup.side in ("long", "short") else ""
-            lines.append(
-                f"- {name}: {prefix}{setup.description}; {setup.invalidation}."
-            )
+            lines.append(_setup_line(config.setups[name]))
     lines.append(
         "- none: no actionable setup (HOLD/CLOSE/UPDATE, or tradeable=no)."
     )

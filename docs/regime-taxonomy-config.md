@@ -17,9 +17,11 @@ step: the built-in defaults reproduce the shipped behaviour byte for byte.
 | 2 | `$TAXONOMY_CONFIG_PATH` (legacy alias: `$REGIME_TAXONOMY_CONFIG`) |
 | 3 | `/home/djelinux/TradingBots/trading-stack/freqtrade/user_data/regime_taxonomy.yaml` |
 
-`config/regime_taxonomy.example.yaml` mirrors the built-in defaults and is the
-recommended starting point. YAML is canonical; the loader also accepts JSON
-(a `.json` path, or a JSON document when PyYAML is unavailable).
+The canonical document is owned by the trading-stack repository
+(`freqtrade/user_data/regime_taxonomy.yaml`, PR #15). This repository must not
+ship a second canonical YAML: the loader reads that single file. YAML is
+canonical; the loader also accepts JSON (a `.json` path, or a JSON document
+when PyYAML is unavailable).
 
 Loader semantics:
 
@@ -37,7 +39,7 @@ and `regime_setups` entries that reference an undefined setup.
 ## Schema
 
 ```yaml
-version: "1.0"
+version: 1
 enabled_timeframes: [1h]        # 4h stays off until P1-A exit validation
 
 regime_thresholds:
@@ -70,12 +72,17 @@ setups:                         # one definition per setup family
     trail_atr: 0.0              # 0 = no trail by default
     be_at_r: 0.0                # 0 = no break-even move by default
 
-pair_overrides:                 # optional, keyed by "BTC/USDT" or "BTCUSDT"
-  BTC/USDT:
-    regime_thresholds:
-      adx_trend: 30.0
-    regime_setups:
-      trend_up: [trend_pullback]
+pair_overrides: {}              # optional flat execution overrides (W3 schema)
+# BTC/USDT:USDT:
+#   sl_atr: 3.0
+#   tp_atr: 5.5
+#   max_hold_bars: 12
+#   max_hold_hours: 6
+#   max_stake: 30.0
+#   leverage: 2
+#   trail_atr: 0.5
+#   be_at_r: 1.0
+#   trail_after_r: 1.5
 
 jev:
   bias_short_only: true         # post-OOS asymmetric short rule
@@ -99,8 +106,11 @@ jev:
   `description`/`invalidation` are rendered into the prompt taxonomy;
   `entry` and the numeric bracket fields are carried for downstream exit
   wiring and are not yet enforced by the execution layer.
-- `pair_overrides`: optional per-symbol overrides of `regime_thresholds`
-  and/or `regime_setups`. The compact `BTCUSDT` key also matches `BTC/USDT`.
+- `pair_overrides`: optional flat per-pair execution overrides using the W3
+  field set (`sl_atr`, `tp_atr`, `max_hold_bars`, `max_hold_hours`,
+  `max_stake`, `leverage`, `trail_atr`, `be_at_r`, `trail_after_r`). These are
+  consumed by the Freqtrade strategy, not by the regime snapshot. Both
+  `BTC/USDT:USDT` and `BTC/USDT` keys resolve to the signal symbol.
 - `jev`: `bias_short_only` keeps the shipped post-OOS rule when `true`;
   `log_decisions` appends one JSON record per JEV consultation to `log_path`.
 
@@ -109,8 +119,7 @@ jev:
 - `src/config/regime_taxonomy.py`: schema, validation, loader, defaults and
   the taxonomy renderer.
 - `src/signal_service/regime_snapshot.py`: thresholds and `allowed_setups`
-  come from the effective config (`symbol` selects pair overrides); a
-  disabled timeframe is no-trade.
+  come from the config; a disabled timeframe is no-trade.
 - `src/analyzer/prompts/template_manager.py`: the setup taxonomy block and the
   optional JSON taxonomy fields are generated from the config and gated by
   `enabled_timeframes`.
@@ -122,6 +131,7 @@ jev:
 ## Tests
 
 `tests/test_regime_taxonomy_config.py` covers absent/valid/invalid documents,
-threshold overrides, pair overrides, rendered descriptions, 1h enabled, 4h
-disabled and the JEV policy flags. The example file is asserted to match the
-built-in defaults so the two cannot drift.
+threshold overrides, the W3 flat pair overrides, rendered descriptions, 1h
+enabled, 4h disabled and the JEV policy flags. It embeds the W3 canonical
+document for CI and additionally validates the installed canonical file when
+the sibling trading-stack checkout is present.
