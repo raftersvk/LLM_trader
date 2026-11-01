@@ -1127,6 +1127,33 @@ def test_taxonomy_output_contract_follows_the_enabled_timeframes_gate():
     assert "Optional 1h taxonomy keys" not in contract
 
 
+def test_taxonomy_output_contract_with_only_4h_enabled_never_says_1h():
+    """The suffix must follow the same enabled set as the prompt template."""
+    config = parse_taxonomy_config({"enabled_timeframes": ["4h"]})
+    engine = SimpleNamespace(
+        prompt_builder=SimpleNamespace(regime_snapshot_provider=lambda _context: "")
+    )
+    analyzer_4h = PairAnalyzer(
+        engine=engine,
+        symbol=SYMBOL,
+        timeframe="4h",
+        taxonomy_config=config,
+    )
+    analyzer_1h = PairAnalyzer(
+        engine=engine,
+        symbol=SYMBOL,
+        timeframe="1h",
+        taxonomy_config=config,
+    )
+
+    contract_4h = analyzer_4h._signal_output_contract()
+    assert "Optional 4h taxonomy keys" in contract_4h
+    assert "Optional 1h taxonomy keys" not in contract_4h
+
+    # 1h is disabled by this config, so its suffix must stay taxonomy-free.
+    assert analyzer_1h._signal_output_contract() == SIGNAL_OUTPUT_CONTRACT
+
+
 @pytest.mark.asyncio
 async def test_invalid_response_reports_real_model_not_unspecified():
     """A parsed response that reports 'unspecified' must use the configured model."""
