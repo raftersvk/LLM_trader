@@ -946,14 +946,15 @@ class PairAnalyzer:
             return None
 
     # ---------------------------------------------------------- regime snapshot
-    def _install_regime_snapshot_provider(self, as_of: Optional[datetime] = None) -> None:
+    def _install_regime_snapshot_provider(self) -> None:
         """Render the deterministic regime block from the prompt's live context.
 
         The adapter computes the snapshot before the pre-gate for JEV, but the
         prompt is built by the engine after its own data collection and
-        technical pass. A provider closure lets the prompt see that fresh
-        context instead of the previous cycle's indicators, without importing
-        the signal service into the analyzer layer.
+        technical pass. The provider reuses ``_current_regime_snapshot()`` so
+        the rendered block and the position's ``regime_match`` always come from
+        the same snapshot for this cycle, instead of two independent calls that
+        could disagree.
         """
         builder = getattr(self.engine, "prompt_builder", None)
         if builder is None:
@@ -963,7 +964,22 @@ class PairAnalyzer:
             if template_manager is not None:
                 template_manager.taxonomy_config = self.taxonomy_config
         builder.regime_snapshot_provider = lambda context: format_regime_snapshot_block(
-            self._regime_snapshot_from_context(context, as_of)
+            self._regime_snapshot_for_prompt(context)
+        )
+
+    def _regime_snapshot_for_prompt(self, context: Any) -> Optional[Dict[str, Any]]:
+        """Return this cycle's snapshot, falling back to the prompt context.
+
+        A snapshot already computed for this cycle (position path or JEV
+        pre-gate) is reused so the rendered block and the position comparison
+        cannot disagree. When no snapshot exists yet, it is derived from the
+        context the prompt builder just passed in.
+        """
+        snapshot = self._current_regime_snapshot()
+        if snapshot is not None:
+            return snapshot
+        return self._regime_snapshot_from_context(
+            context, getattr(self, "_current_analysis_as_of", None)
         )
 
     def _regime_snapshot_available(self) -> bool:
@@ -1477,7 +1493,7 @@ class PairAnalyzer:
         """
         if json_mode is None:
             json_mode = self._json_format_enabled()
-        self._install_regime_snapshot_provider(getattr(self, "_current_analysis_as_of", None))
+        self._install_regime_snapshot_provider()
         return await self.engine.analyze_market(
             previous_response=None,
             previous_indicators=None,

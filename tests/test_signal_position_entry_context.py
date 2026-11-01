@@ -361,8 +361,9 @@ class _PromptBuilder:
 class _RefreshEngine(_FakeEngine):
     """Engine whose context starts one candle old and is refreshed on collect."""
 
-    def __init__(self, raw):
+    def __init__(self, raw, mutate_regime=False):
         super().__init__(raw)
+        self.mutate_regime = mutate_regime
         self.context = self._Ctx()
         # Start the cycle one candle behind: only the 09:00 candle exists.
         self.context.ohlcv_candles = [CANDLES[0]]
@@ -388,6 +389,11 @@ class _RefreshEngine(_FakeEngine):
 
     async def analyze_market(self, **kwargs):
         self.calls.append(kwargs)
+        if self.mutate_regime:
+            # Simulate fresh collection changing the indicators after the
+            # position comparison was built: the provider must still render
+            # the snapshot cached for this cycle, not a second opinion.
+            self.context.technical_data = {"adx": 10.0, "choppiness": 70.0}
         provider = self.prompt_builder.regime_snapshot_provider
         snapshot_block = provider(self.context) if provider else ""
         self.prompt = kwargs.get("position_context", "")
@@ -434,6 +440,24 @@ def test_current_regime_is_rendered_only_by_the_snapshot_block():
     # ``entry_regime=`` is not a word-boundary ``regime=``: the only current
     # regime label is the one in the deterministic snapshot block.
     assert len(re.findall(r"\bregime=", prompt)) == 1
+
+
+def test_regime_match_and_snapshot_use_the_same_cached_snapshot():
+    raw = json.dumps({"signal": "UPDATE", "confidence": "HIGH", "stop_loss": 68000.0,
+                      "reasoning": "tighten"})
+    engine = _RefreshEngine(raw, mutate_regime=True)
+    signal = asyncio.run(
+        PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h").analyze(
+            candle_open_time="2026-10-30T10:00:00Z", update_context=_ctx()
+        )
+    )
+    assert signal.action == "UPDATE"
+    prompt = engine.prompt
+    # A second recompute after the comparison would now say "range"; the
+    # cached cycle snapshot keeps the rendered block and regime_match aligned.
+    assert len(re.findall(r"\bregime=trend_up", prompt)) == 1
+    assert "regime=range" not in prompt
+    assert "regime_match=yes" in prompt
 
 
 # ------------------------------------------------------------------ service
