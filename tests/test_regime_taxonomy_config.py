@@ -734,5 +734,9 @@ jev:
     result = await gate.check_post({"symbol": "BTC/USDT"}, "SELL")
 
     assert result.allowed is True
-    assert (tmp_path / "decisions.jsonl").read_text(encoding="utf-8").strip()
+    # The gate no longer writes the audit file itself: the per-analysis record
+    # is produced by DecisionAuditLog, which also logs gate-disabled runs.
+    assert config.jev.log_decisions is True
+    assert config.jev.log_path == str(tmp_path / "decisions.jsonl")
+    assert not (tmp_path / "decisions.jsonl").exists()
 

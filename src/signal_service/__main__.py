@@ -40,6 +40,7 @@ from src.config.regime_taxonomy import (
     load_taxonomy_config,
 )
 from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
+from src.signal_service.audit_log import DecisionAuditLog
 from src.signal_service.contract import (
     SignalValidationError,
     iso_z,
@@ -256,6 +257,9 @@ async def _run_command(args: argparse.Namespace) -> None:
 
     taxonomy = load_taxonomy_config(args.taxonomy_config)
     jev_gate = _build_jev_gate(args.jev_mode, taxonomy)
+    # The audit log is independent of the gate mode: with log_decisions on it
+    # records every analysis, including runs where JEV is off or not consulted.
+    decision_log = DecisionAuditLog.from_config(taxonomy)
 
     def analyzer_factory(symbol: str) -> PairAnalyzer:
         return PairAnalyzer(
@@ -267,6 +271,7 @@ async def _run_command(args: argparse.Namespace) -> None:
             jev_gate=jev_gate,
             taxonomy_config=taxonomy,
             bias_short_only=taxonomy.jev.bias_short_only,
+            decision_log=decision_log,
         )
 
     service = SignalService(
@@ -440,6 +445,7 @@ async def _replay_command(args: argparse.Namespace) -> None:
         jev_gate=_build_jev_gate(args.jev_mode, taxonomy),
         taxonomy_config=taxonomy,
         bias_short_only=taxonomy.jev.bias_short_only,
+        decision_log=DecisionAuditLog.from_config(taxonomy),
     )
     storage = SignalStorage(signal_file_path(args.output, symbol, args.timeframe))
 
