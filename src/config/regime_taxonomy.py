@@ -55,9 +55,7 @@ PAIR_OVERRIDE_FIELDS: frozenset[str] = frozenset({
 })
 
 DEFAULT_ENABLED_TIMEFRAMES: tuple[str, ...] = ("1h",)
-DEFAULT_JEV_LOG_PATH = os.path.join(
-    os.path.dirname(DEFAULT_TAXONOMY_CONFIG_PATH), "jev_decisions.jsonl"
-)
+DEFAULT_JEV_LOG_PATH = "runtime/logs/jev_decisions.jsonl"
 
 
 class TaxonomyConfigError(ValueError):
@@ -140,11 +138,11 @@ class SetupDefinition:
     entry: str
     invalidation: str
     regimes: tuple[str, ...]
-    sl_atr: float
-    tp_atr: float
     max_hold_bars: int
-    trail_atr: float
-    be_at_r: float
+    sl_atr: float | None = None
+    tp_atr: float | None = None
+    trail_atr: float | None = None
+    be_at_r: float | None = None
 
     _FIELDS: ClassVar[tuple[str, ...]] = (
         "side",
@@ -152,11 +150,19 @@ class SetupDefinition:
         "entry",
         "invalidation",
         "regimes",
+        "max_hold_bars",
         "sl_atr",
         "tp_atr",
-        "max_hold_bars",
         "trail_atr",
         "be_at_r",
+    )
+    _REQUIRED_FIELDS: ClassVar[tuple[str, ...]] = (
+        "side",
+        "description",
+        "entry",
+        "invalidation",
+        "regimes",
+        "max_hold_bars",
     )
 
     @classmethod
@@ -204,50 +210,52 @@ class SetupDefinition:
                 f"setups.{name}.invalidation",
             ),
             regimes=regimes,
-            sl_atr=_number(
-                data.get("sl_atr", base.sl_atr if base else None),
-                f"setups.{name}.sl_atr",
-                minimum=0.0,
-                allow_zero=False,
-            ),
-            tp_atr=_number(
-                data.get("tp_atr", base.tp_atr if base else None),
-                f"setups.{name}.tp_atr",
-                minimum=0.0,
-                allow_zero=False,
-            ),
             max_hold_bars=_positive_int(
                 data.get("max_hold_bars", base.max_hold_bars if base else None),
                 f"setups.{name}.max_hold_bars",
             ),
-            trail_atr=_number(
-                data.get("trail_atr", base.trail_atr if base else 0.0),
+            sl_atr=_optional_number(
+                data.get("sl_atr", base.sl_atr if base else None),
+                f"setups.{name}.sl_atr",
+                allow_zero=False,
+            ),
+            tp_atr=_optional_number(
+                data.get("tp_atr", base.tp_atr if base else None),
+                f"setups.{name}.tp_atr",
+                allow_zero=False,
+            ),
+            trail_atr=_optional_number(
+                data.get("trail_atr", base.trail_atr if base else None),
                 f"setups.{name}.trail_atr",
-                minimum=0.0,
                 allow_zero=True,
             ),
-            be_at_r=_number(
-                data.get("be_at_r", base.be_at_r if base else 0.0),
+            be_at_r=_optional_number(
+                data.get("be_at_r", base.be_at_r if base else None),
                 f"setups.{name}.be_at_r",
-                minimum=0.0,
                 allow_zero=True,
             ),
         )
 
     def as_dict(self) -> dict[str, Any]:
-        """Return the setup as a JSON/YAML-compatible mapping."""
-        return {
+        """Return the setup as a JSON/YAML-compatible mapping.
+
+        Optional fields that are absent from the source stay absent, so a
+        setup without ``sl_atr``/``tp_atr`` keeps the signal's absolute levels
+        and an omitted ``trail_atr``/``be_at_r`` does not shadow legacy config.
+        """
+        data: dict[str, Any] = {
             "side": self.side,
             "description": self.description,
             "entry": self.entry,
             "invalidation": self.invalidation,
             "regimes": list(self.regimes),
-            "sl_atr": self.sl_atr,
-            "tp_atr": self.tp_atr,
             "max_hold_bars": self.max_hold_bars,
-            "trail_atr": self.trail_atr,
-            "be_at_r": self.be_at_r,
         }
+        for name in ("sl_atr", "tp_atr", "trail_atr", "be_at_r"):
+            value = getattr(self, name)
+            if value is not None:
+                data[name] = value
+        return data
 
 
 @dataclass(frozen=True)
@@ -255,7 +263,7 @@ class JevSettings:
     """JEV gate policy that belongs to the taxonomy document."""
 
     bias_short_only: bool = True
-    log_decisions: bool = False
+    log_decisions: bool = True
     log_path: str = DEFAULT_JEV_LOG_PATH
 
     @classmethod
@@ -286,7 +294,7 @@ class JevSettings:
 class RegimeTaxonomyConfig:
     """Validated taxonomy document used by the snapshot, prompt and JEV gate."""
 
-    version: str = "1.0"
+    version: str = "1"
     enabled_timeframes: tuple[str, ...] = DEFAULT_ENABLED_TIMEFRAMES
     regime_thresholds: RegimeThresholds = field(default_factory=RegimeThresholds)
     regime_setups: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
@@ -344,25 +352,26 @@ def _default_setup(
     name: str,
     side: str,
     description: str,
+    entry: str,
     invalidation: str,
     regimes: tuple[str, ...],
-    sl_atr: float,
-    tp_atr: float,
     max_hold_bars: int,
-    trail_atr: float = 0.0,
-    be_at_r: float = 0.0,
+    sl_atr: float | None = None,
+    tp_atr: float | None = None,
+    trail_atr: float | None = None,
+    be_at_r: float | None = None,
 ) -> SetupDefinition:
-    """Build one built-in setup definition (entry mirrors description)."""
+    """Build one built-in setup definition (mirrors the W3 canonical file)."""
     return SetupDefinition(
         name=name,
         side=side,
         description=description,
-        entry=description,
+        entry=entry,
         invalidation=invalidation,
         regimes=regimes,
+        max_hold_bars=max_hold_bars,
         sl_atr=sl_atr,
         tp_atr=tp_atr,
-        max_hold_bars=max_hold_bars,
         trail_atr=trail_atr,
         be_at_r=be_at_r,
     )
@@ -372,82 +381,84 @@ DEFAULT_SETUPS: Mapping[str, SetupDefinition] = {
     "trend_pullback": _default_setup(
         "trend_pullback",
         "long",
-        "orderly pullback to SMA20/structure support in an uptrend with a rejection close",
-        "invalidated below the pullback low",
+        "Orderly pullback to SMA20/structure support in an uptrend with a rejection close.",
+        "Pullback into SMA20/support with a rejection close.",
+        "Close below the pullback low.",
         ("trend_up",),
-        2.5,
-        4.5,
         24,
+        sl_atr=2.5,
+        tp_atr=4.8,
     ),
     "breakout_retest": _default_setup(
         "breakout_retest",
         "long",
-        "break of a 20-bar high/range then a held retest of the broken level",
-        "invalidated back below that level",
+        "Break of a 20-bar high/range then a held retest of the broken level.",
+        "Held retest of the broken 20-bar high/range level.",
+        "Close back below the broken level.",
         ("trend_up",),
-        2.5,
-        4.5,
         24,
     ),
     "momentum_continuation": _default_setup(
         "momentum_continuation",
         "long",
-        "higher-high/higher-low continuation without >2 ATR extension from SMA20",
-        "invalidated by a lower low",
+        "Higher-high/higher-low continuation without more than 2 ATR extension from SMA20.",
+        "Continuation after a higher high and higher low.",
+        "Lower low.",
         ("trend_up",),
-        2.5,
-        4.0,
         12,
+        sl_atr=2.5,
+        tp_atr=4.0,
     ),
     "rally_failure": _default_setup(
         "rally_failure",
         "short",
-        "rally into SMA20/resistance rejected with a lower high in a downtrend",
-        "invalidated above the swing high",
+        "Rally into SMA20/resistance rejected with a lower high in a downtrend.",
+        "Rejection at SMA20/resistance with a lower high.",
+        "Close above the swing high.",
         ("trend_down",),
-        2.5,
-        4.5,
         24,
     ),
     "breakdown_retest": _default_setup(
         "breakdown_retest",
         "short",
-        "support break then a rejected retest of the broken level",
-        "invalidated back above it",
+        "Support break then a rejected retest of the broken level.",
+        "Rejected retest of the broken support level.",
+        "Close back above the broken level.",
         ("trend_down",),
-        2.5,
-        4.5,
         24,
     ),
     "momentum_short": _default_setup(
         "momentum_short",
         "short",
-        "lower-high/lower-low continuation without >2 ATR extension",
-        "invalidated by a higher high",
+        "Lower-high/lower-low continuation without more than 2 ATR extension.",
+        "Continuation after a lower high and lower low.",
+        "Higher high.",
         ("trend_down",),
-        2.5,
-        4.0,
         12,
+        sl_atr=2.5,
+        tp_atr=4.5,
     ),
     "range_fade_extreme": _default_setup(
         "range_fade_extreme",
         "both",
-        "fade a wick beyond the range boundary that closes back inside",
-        "invalidated beyond the boundary",
+        "Fade a wick beyond the range boundary that closes back inside.",
+        "Wick beyond the range boundary closing back inside.",
+        "Close beyond the range boundary.",
         ("range",),
-        2.0,
-        2.5,
-        10,
+        12,
+        sl_atr=2.0,
+        tp_atr=4.5,
     ),
     "range_mean_reversion": _default_setup(
         "range_mean_reversion",
         "both",
-        "return toward mid/VWAP after an excursion",
-        "invalidated by a break of the range",
+        "Return toward mid/VWAP after an excursion.",
+        "Excursion away from mid/VWAP with a reversal close.",
+        "Break of the range.",
         ("range",),
-        2.0,
-        2.5,
-        10,
+        12,
+        sl_atr=2.0,
+        tp_atr=4.5,
     ),
 }
 
@@ -480,6 +491,17 @@ def _number(
         if not allow_zero and number <= minimum:
             raise TaxonomyConfigError(f"{label} must be > {minimum}")
     return number
+
+
+def _optional_number(
+    value: Any,
+    label: str,
+    allow_zero: bool,
+) -> float | None:
+    """Validate an optional number; ``None``/absence stays ``None``."""
+    if value is None:
+        return None
+    return _number(value, label, minimum=0.0, allow_zero=allow_zero)
 
 
 def _positive_int(value: Any, label: str) -> int:
@@ -642,7 +664,7 @@ def parse_taxonomy_config(
             f"taxonomy document has unknown keys: {', '.join(sorted(map(str, unknown)))}"
         )
 
-    version_raw = document.get("version", "1.0")
+    version_raw = document.get("version", "1")
     version = str(version_raw).strip() if isinstance(version_raw, (str, int, float)) else ""
     if not version:
         raise TaxonomyConfigError("version must be a non-empty string or number")

@@ -6,8 +6,9 @@ lists and thresholds that used to be hard-coded in
 `src/signal_service/regime_snapshot.py` and
 `src/analyzer/prompts/template_manager.py`.
 
-No signal contract, LLM prompt contract or live-bot behaviour changes in this
-step: the built-in defaults reproduce the shipped behaviour byte for byte.
+No signal contract schema change. The built-in defaults mirror the canonical
+document, so an absent file behaves exactly like the deployed policy; the live
+bot's non-taxonomy prompt path is unchanged.
 
 ## Location and overriding
 
@@ -18,10 +19,10 @@ step: the built-in defaults reproduce the shipped behaviour byte for byte.
 | 3 | `/home/djelinux/TradingBots/trading-stack/freqtrade/user_data/regime_taxonomy.yaml` |
 
 The canonical document is owned by the trading-stack repository
-(`freqtrade/user_data/regime_taxonomy.yaml`, PR #15). This repository must not
-ship a second canonical YAML: the loader reads that single file. YAML is
-canonical; the loader also accepts JSON (a `.json` path, or a JSON document
-when PyYAML is unavailable).
+(`freqtrade/user_data/regime_taxonomy.yaml`, PR #15 head `fa1c67f`, sha256
+`5035922df4f976f520993fbd85406c78234051c4d7f5fee7046b6a03e9124ca7`). This repository must not ship a second canonical YAML: the
+loader reads that single file. YAML is canonical; the loader also accepts JSON
+(a `.json` path, or a JSON document when PyYAML is unavailable).
 
 Loader semantics:
 
@@ -62,15 +63,15 @@ regime_setups:                  # allowed setup families per regime
 setups:                         # one definition per setup family
   trend_pullback:
     side: long                  # long | short | both
-    description: orderly pullback to SMA20/structure support in an uptrend with a rejection close
-    entry: orderly pullback to SMA20/structure support in an uptrend with a rejection close
-    invalidation: invalidated below the pullback low
+    description: Orderly pullback to SMA20/structure support in an uptrend with a rejection close.
+    entry: Pullback into SMA20/support with a rejection close.
+    invalidation: Close below the pullback low.
     regimes: [trend_up]
-    sl_atr: 2.5
-    tp_atr: 4.5
+    sl_atr: 2.5                 # optional; omit to keep the signal's absolute SL
+    tp_atr: 4.8                 # optional; omit to keep the signal's absolute TP
     max_hold_bars: 24
-    trail_atr: 0.0              # 0 = no trail by default
-    be_at_r: 0.0                # 0 = no break-even move by default
+    # trail_atr / be_at_r omitted on purpose: a value would shadow the legacy
+    # per-setup trailing config instead of letting it apply.
 
 pair_overrides: {}              # optional flat execution overrides (W3 schema)
 # BTC/USDT:USDT:
@@ -85,7 +86,7 @@ pair_overrides: {}              # optional flat execution overrides (W3 schema)
 #   trail_after_r: 1.5
 
 jev:
-  bias_short_only: false        # W3 canonical: short veto disabled
+  bias_short_only: true         # W3 canonical: shorts only (P0-B default)
   log_decisions: true           # append JSONL audit records
   log_path: runtime/logs/jev_decisions.jsonl
 ```
@@ -105,18 +106,21 @@ jev:
   `regimes`, `sl_atr`, `tp_atr`, `max_hold_bars`, `trail_atr`, `be_at_r`.
   `description`/`invalidation` are rendered into the prompt taxonomy;
   `entry` and the numeric bracket fields are carried for downstream exit
-  wiring and are not yet enforced by the execution layer. Setup names are
-  restricted to `ALLOWED_SETUPS` in the signal contract, so the YAML can never
-  announce a setup the contract cannot carry.
+  wiring and are not yet enforced by the execution layer. `sl_atr` and
+  `tp_atr` are optional: when omitted, the signal's absolute SL/TP is kept.
+  `trail_atr` and `be_at_r` are optional and must stay absent unless a value is
+  explicitly wanted, because a value would shadow legacy trailing config.
+  Setup names are restricted to `ALLOWED_SETUPS` in the signal contract, so the
+  YAML can never announce a setup the contract cannot carry.
 - `pair_overrides`: optional flat per-pair execution overrides using the W3
   field set (`sl_atr`, `tp_atr`, `max_hold_bars`, `max_hold_hours`,
   `max_stake`, `leverage`, `trail_atr`, `be_at_r`, `trail_after_r`). These are
   consumed by the Freqtrade strategy, not by the regime snapshot. Both
   `BTC/USDT:USDT` and `BTC/USDT` keys resolve to the signal symbol.
-- `jev`: the W3 canonical file sets `bias_short_only: false` and
-  `log_decisions: true`. `bias_short_only: true` keeps the shipped post-OOS
-  short veto (the built-in fallback value when no file is present);
-  `log_decisions` appends one JSON record per JEV consultation to `log_path`.
+- `jev`: the W3 canonical file sets `bias_short_only: true` (shorts only,
+  P0-B default) and `log_decisions: true`; set `bias_short_only: false` to
+  disable the post-OOS short veto. `log_decisions` appends one JSON record per
+  JEV consultation to `log_path`.
 
 ## Wiring
 
@@ -141,6 +145,6 @@ jev:
 
 `tests/test_regime_taxonomy_config.py` covers absent/valid/invalid documents,
 threshold overrides, the W3 flat pair overrides, rendered descriptions, 1h
-enabled, 4h disabled and the JEV policy flags. It embeds the W3 canonical
-document for CI and additionally validates the installed canonical file when
-the sibling trading-stack checkout is present.
+enabled, 4h disabled and the JEV policy flags. It embeds the current W3
+canonical document byte for byte and pins its source ref (`fa1c67f`) and
+sha256 (`5035922df4f976f520993fbd85406c78234051c4d7f5fee7046b6a03e9124ca7`), so a stale copy cannot silently return.

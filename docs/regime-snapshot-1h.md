@@ -50,8 +50,8 @@ left to the gate policy, not to the snapshot.
 ## JEV gate (post-OOS: bias only, asymmetric short)
 
 The policy below is toggled by `jev.bias_short_only` in the external taxonomy
-document. The W3 canonical file sets it to **false** (veto disabled); the
-built-in fallback keeps **true**, which is the policy described here.
+document. The W3 canonical file sets it to **true** (shorts only), matching the
+policy described here; set it to `false` to disable the short veto.
 
 - The gate filters on **JEV bias only**. A **SELL** is admitted only when
   `jev.bias == "short"`; a **BUY is never filtered by the JEV bias**.

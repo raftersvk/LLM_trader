@@ -7,7 +7,7 @@ used by the regime snapshot, the rendered taxonomy and the 1h/4h gate.
 
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
 from typing import Any
 
 import pytest
@@ -67,7 +67,7 @@ def test_absent_config_returns_the_current_defaults(tmp_path):
     config = load_taxonomy_config(str(tmp_path / "missing.yaml"))
 
     assert config.source_path is None
-    assert config.version == "1.0"
+    assert config.version == "1"
     assert config.enabled_timeframes == ("1h",)
     assert config.regime_thresholds == RegimeThresholds()
     assert config.regime_thresholds.as_dict() == {
@@ -83,7 +83,8 @@ def test_absent_config_returns_the_current_defaults(tmp_path):
     for regime in NO_TRADE_REGIMES:
         assert config.allowed_setups(regime) == ()
     assert config.jev.bias_short_only is True
-    assert config.jev.log_decisions is False
+    assert config.jev.log_decisions is True
+    assert config.jev.log_path == "runtime/logs/jev_decisions.jsonl"
 
 
 def test_default_path_is_canonical_and_env_overrides_it(tmp_path, monkeypatch):
@@ -249,8 +250,11 @@ def test_setup_names_must_exist_in_the_signal_contract_enum():
         )
 
 
-# Canonical W3 document (trading-stack PR #15). Embedded so CI does not need the
-# sibling checkout; the installed file is also checked below when present.
+# Canonical W3 document: trading-stack PR #15 head fa1c67f. Embedded byte for
+# byte (comments included) so the test can pin the exact source revision and
+# remain runnable in CI without the sibling checkout.
+CANONICAL_TAXONOMY_REF = "fa1c67f"
+CANONICAL_TAXONOMY_SHA256 = "5035922df4f976f520993fbd85406c78234051c4d7f5fee7046b6a03e9124ca7"
 CANONICAL_TAXONOMY_YAML = """\
 # Canonical regime / setup taxonomy shared by LLM_trader and Freqtrade.
 #
@@ -295,7 +299,11 @@ regime_setups:
   unclear: []
 
 # Per-setup defaults. Multipliers are expressed in 1h ATR (price-preserving
-# P0-B scaling), max_hold_bars in 1h bars. trail_atr / be_at_r stay opt-in.
+# P0-B scaling), max_hold_bars in 1h bars. A setup without sl_atr/tp_atr keeps
+# the signal's absolute SL/TP, matching the legacy config-futures.json table
+# (which has no family for breakout_retest, rally_failure or
+# breakdown_retest). trail_atr / be_at_r stay opt-in: omit them so a legacy
+# per-setup trailing config is not shadowed.
 setups:
   trend_pullback:
     side: long
@@ -309,8 +317,6 @@ setups:
     sl_atr: 2.5
     tp_atr: 4.8
     max_hold_bars: 24
-    trail_atr: 0.0
-    be_at_r: 0.0
   breakout_retest:
     side: long
     description: >-
@@ -319,11 +325,7 @@ setups:
     invalidation: Close back below the broken level.
     regimes:
       - trend_up
-    sl_atr: 2.5
-    tp_atr: 4.8
     max_hold_bars: 24
-    trail_atr: 0.0
-    be_at_r: 0.0
   momentum_continuation:
     side: long
     description: >-
@@ -336,8 +338,6 @@ setups:
     sl_atr: 2.5
     tp_atr: 4.0
     max_hold_bars: 12
-    trail_atr: 0.0
-    be_at_r: 0.0
   rally_failure:
     side: short
     description: >-
@@ -346,11 +346,7 @@ setups:
     invalidation: Close above the swing high.
     regimes:
       - trend_down
-    sl_atr: 2.5
-    tp_atr: 4.5
     max_hold_bars: 24
-    trail_atr: 0.0
-    be_at_r: 0.0
   breakdown_retest:
     side: short
     description: >-
@@ -359,11 +355,7 @@ setups:
     invalidation: Close back above the broken level.
     regimes:
       - trend_down
-    sl_atr: 2.5
-    tp_atr: 4.5
     max_hold_bars: 24
-    trail_atr: 0.0
-    be_at_r: 0.0
   momentum_short:
     side: short
     description: >-
@@ -375,8 +367,6 @@ setups:
     sl_atr: 2.5
     tp_atr: 4.5
     max_hold_bars: 12
-    trail_atr: 0.0
-    be_at_r: 0.0
   range_fade_extreme:
     side: both
     description: >-
@@ -388,8 +378,6 @@ setups:
     sl_atr: 2.0
     tp_atr: 4.5
     max_hold_bars: 12
-    trail_atr: 0.0
-    be_at_r: 0.0
   range_mean_reversion:
     side: both
     description: >-
@@ -401,8 +389,6 @@ setups:
     sl_atr: 2.0
     tp_atr: 4.5
     max_hold_bars: 12
-    trail_atr: 0.0
-    be_at_r: 0.0
 
 # Exchange-pair overrides. Keys may be the Freqtrade pair (BTC/USDT:USDT) or
 # the signal-contract symbol (BTC/USDT). Accepted fields: sl_atr, tp_atr,
@@ -413,14 +399,18 @@ pair_overrides: {}
 # JEV gate settings consumed by LLM_trader; mirrored here so both sides read the
 # same canonical file. The strategy does not act on these fields.
 jev:
-  bias_short_only: false
+  # P0-B default: shorts only. Set explicitly to false to re-enable longs.
+  bias_short_only: true
   log_decisions: true
   log_path: runtime/logs/jev_decisions.jsonl
 """
 
-CANONICAL_TAXONOMY_PATH = Path(
-    "/home/djelinux/TradingBots/trading-stack/freqtrade/user_data/regime_taxonomy.yaml"
-)
+
+def test_embedded_canonical_document_is_pinned_by_sha():
+    digest = hashlib.sha256(CANONICAL_TAXONOMY_YAML.encode("utf-8")).hexdigest()
+
+    assert digest == CANONICAL_TAXONOMY_SHA256
+    assert CANONICAL_TAXONOMY_REF == "fa1c67f"
 
 
 def test_w3_canonical_document_parses_and_renders(tmp_path):
@@ -444,6 +434,7 @@ def test_w3_canonical_document_parses_and_renders(tmp_path):
     assert config.pair_overrides == {}
 
     setup = config.setups["trend_pullback"]
+    assert setup.sl_atr == 2.5
     assert setup.tp_atr == 4.8
     assert setup.description == (
         "Orderly pullback to SMA20/structure support in an uptrend with a rejection close."
@@ -451,7 +442,17 @@ def test_w3_canonical_document_parses_and_renders(tmp_path):
     assert setup.invalidation == "Close below the pullback low."
     assert config.setups["momentum_short"].tp_atr == 4.5
     assert config.setups["range_fade_extreme"].tp_atr == 4.5
-    assert config.jev.bias_short_only is False
+
+    # Current canonical omissions: these keep the signal's absolute SL/TP.
+    for name in ("breakout_retest", "rally_failure", "breakdown_retest"):
+        assert config.setups[name].sl_atr is None, name
+        assert config.setups[name].tp_atr is None, name
+    # No setup shadows legacy trail/BE config.
+    for name, definition in config.setups.items():
+        assert definition.trail_atr is None, name
+        assert definition.be_at_r is None, name
+
+    assert config.jev.bias_short_only is True
     assert config.jev.log_decisions is True
     assert config.jev.log_path == "runtime/logs/jev_decisions.jsonl"
 
@@ -462,20 +463,12 @@ def test_w3_canonical_document_parses_and_renders(tmp_path):
     assert render_setup_taxonomy(config, "4h") == ""
 
 
-@pytest.mark.skipif(
-    not CANONICAL_TAXONOMY_PATH.exists(),
-    reason="canonical trading-stack checkout is not installed",
-)
-def test_installed_canonical_file_matches_the_w3_schema():
-    config = load_taxonomy_config(str(CANONICAL_TAXONOMY_PATH))
+def test_built_in_defaults_equal_the_canonical_document(tmp_path):
+    canonical = load_taxonomy_config(
+        _write(tmp_path / "regime_taxonomy.yaml", CANONICAL_TAXONOMY_YAML)
+    )
 
-    assert config.version == "1"
-    assert config.enabled_timeframes == ("1h",)
-    assert set(config.setups) == set(DEFAULT_SETUPS)
-    from src.signal_service.contract import ALLOWED_SETUPS
-
-    assert set(config.setups) <= (ALLOWED_SETUPS - {"none"})
-    assert config.jev.log_path.endswith("jev_decisions.jsonl")
+    assert default_taxonomy_config().as_dict() == canonical.as_dict()
 
 
 # ------------------------------------------------------------------ thresholds
@@ -543,7 +536,39 @@ def test_default_taxonomy_renders_the_current_prompt_text():
     assert "- low_vol, high_vol, unclear: none — HOLD (tradeable=no)." in block
     for setup in DEFAULT_SETUPS.values():
         assert setup.description in block
+    assert "- trend_pullback: long — Orderly pullback" in block
+    assert "- range_fade_extreme: Fade a wick beyond the range boundary" in block
     assert "- none: no actionable setup" in block
+
+
+def test_setup_bracket_and_trailing_fields_are_optional():
+    """Absent sl/tp keeps the signal level; absent trail/BE does not shadow legacy config."""
+    config = parse_taxonomy_config(
+        {
+            "setups": {
+                "breakout_retest": {
+                    "side": "long",
+                    "description": "Custom retest.",
+                    "entry": "Retest.",
+                    "invalidation": "Break.",
+                    "regimes": ["trend_up"],
+                    "max_hold_bars": 24,
+                }
+            }
+        }
+    )
+
+    setup = config.setups["breakout_retest"]
+
+    assert setup.sl_atr is None
+    assert setup.tp_atr is None
+    assert setup.trail_atr is None
+    assert setup.be_at_r is None
+    rendered = setup.as_dict()
+    assert "sl_atr" not in rendered
+    assert "tp_atr" not in rendered
+    assert "trail_atr" not in rendered
+    assert "be_at_r" not in rendered
 
 
 def test_custom_description_is_rendered_from_the_config():
@@ -645,7 +670,8 @@ def test_jev_section_defaults_reproduce_the_asymmetric_short_policy(tmp_path):
     config = load_taxonomy_config(str(tmp_path / "missing.yaml"))
 
     assert config.jev.bias_short_only is True
-    assert config.jev.log_decisions is False
+    assert config.jev.log_decisions is True
+    assert config.jev.log_path == "runtime/logs/jev_decisions.jsonl"
 
 
 @pytest.mark.asyncio
