@@ -20,9 +20,10 @@ from src.signal_service.analyzer_adapter import (
     UpdateContext,
     analyze_and_store,
 )
-from src.signal_service.contract import iso_z, parse_iso, timeframe_seconds, utc_now_iso
+from src.signal_service.contract import Signal, iso_z, parse_iso, timeframe_seconds, utc_now_iso
 from src.signal_service.jev_gate import JevGate
 from src.signal_service.positions import PositionSnapshot, PositionsSnapshot, load_positions
+from src.signal_service.position_metrics import EntryContext
 from src.signal_service.storage import (
     SignalStorage,
     UpdateStorage,
@@ -283,7 +284,9 @@ class SignalService:
                 latest_by_position[position_id] = update
         produced = 0
         for position in positions:
-            entry_sl, entry_tp = self._entry_levels(symbol, position)
+            entry = self._entry_signal(symbol, position)
+            entry_sl = entry.sl if entry is not None else None
+            entry_tp = entry.tp if entry is not None else None
             stop_loss, take_profit = self._current_levels(
                 position, entry_sl, entry_tp, latest_by_position.get(position.position_id)
             )
@@ -306,6 +309,8 @@ class SignalService:
                 current_price=position.current_price,
                 entry_sl=entry_sl,
                 entry_tp=entry_tp,
+                entry_context=EntryContext.from_signal(entry) if entry is not None else None,
+                position_opened_at=position.open_date,
             )
             try:
                 signal = await asyncio.wait_for(
@@ -333,16 +338,16 @@ class SignalService:
                 )
         return f"updates:{produced}"
 
-    def _entry_levels(
+    def _entry_signal(
         self, symbol: str, position: PositionSnapshot
-    ) -> tuple[Optional[float], Optional[float]]:
-        """Original entry-signal SL/TP (the widening base), if resolvable."""
+    ) -> Optional[Signal]:
+        """Entry signal that opened the position, joined by enter_tag/decision_id."""
         if not position.enter_tag:
-            return None, None
+            return None
         for entry in self.storages[symbol].load_all():
             if entry.decision_id == position.enter_tag:
-                return entry.sl, entry.tp
-        return None, None
+                return entry
+        return None
 
     @staticmethod
     def _current_levels(

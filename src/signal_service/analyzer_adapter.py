@@ -44,6 +44,13 @@ from src.signal_service.contract import (
     timeframe_seconds,
 )
 from src.signal_service.jev_gate import GateResult, JevGate, build_state
+from src.signal_service.position_metrics import (
+    EntryContext,
+    build_position_metrics,
+    format_entry_context_block,
+    format_position_metrics_block,
+    format_regime_comparison_block,
+)
 from src.config.regime_taxonomy import (
     RegimeTaxonomyConfig,
     build_signal_taxonomy_output_contract,
@@ -140,6 +147,10 @@ class UpdateContext:
     current_price: Optional[float] = None
     entry_sl: Optional[float] = None
     entry_tp: Optional[float] = None
+    # Entry-signal context joined by enter_tag/decision_id. None when the
+    # position has no resolvable entry signal (legacy or manual trade).
+    entry_context: Optional[EntryContext] = None
+    position_opened_at: Optional[str] = None
 
     def position_view(self) -> PositionView:
         """Build the duck-typed view consumed by the tightening policy."""
@@ -635,6 +646,16 @@ class PairAnalyzer:
 
         # Hide the still-forming candle from the analysis window.
         candle_open_dt = parse_iso(candle_open_time) if candle_open_time is not None else None
+        # Position updates bypass the pre-gate, so nothing has refreshed the
+        # engine context yet: collect and truncate it first so the metrics use
+        # the just-closed candle and its ATR, not the previous cycle's data.
+        if update_context is not None:
+            await self._refresh_context(as_of)
+        # The position prompt carries the entry thesis, live excursions and
+        # the current regime; it is built once and reused by the echo retry.
+        position_context = self._position_prompt_context(
+            position_context, update_context, as_of
+        )
         result: Dict[str, Any]
         window_state: Dict[str, bool] = {"empty": False}
         try:
@@ -971,14 +992,15 @@ class PairAnalyzer:
             return None
 
     # ---------------------------------------------------------- regime snapshot
-    def _install_regime_snapshot_provider(self, as_of: Optional[datetime] = None) -> None:
+    def _install_regime_snapshot_provider(self) -> None:
         """Render the deterministic regime block from the prompt's live context.
 
         The adapter computes the snapshot before the pre-gate for JEV, but the
         prompt is built by the engine after its own data collection and
-        technical pass. A provider closure lets the prompt see that fresh
-        context instead of the previous cycle's indicators, without importing
-        the signal service into the analyzer layer.
+        technical pass. The provider reuses ``_current_regime_snapshot()`` so
+        the rendered block and the position's ``regime_match`` always come from
+        the same snapshot for this cycle, instead of two independent calls that
+        could disagree.
         """
         builder = getattr(self.engine, "prompt_builder", None)
         if builder is None:
@@ -988,7 +1010,22 @@ class PairAnalyzer:
             if template_manager is not None:
                 template_manager.taxonomy_config = self.taxonomy_config
         builder.regime_snapshot_provider = lambda context: format_regime_snapshot_block(
-            self._regime_snapshot_from_context(context, as_of)
+            self._regime_snapshot_for_prompt(context)
+        )
+
+    def _regime_snapshot_for_prompt(self, context: Any) -> Optional[Dict[str, Any]]:
+        """Return this cycle's snapshot, falling back to the prompt context.
+
+        A snapshot already computed for this cycle (position path or JEV
+        pre-gate) is reused so the rendered block and the position comparison
+        cannot disagree. When no snapshot exists yet, it is derived from the
+        context the prompt builder just passed in.
+        """
+        snapshot = self._current_regime_snapshot()
+        if snapshot is not None:
+            return snapshot
+        return self._regime_snapshot_from_context(
+            context, getattr(self, "_current_analysis_as_of", None)
         )
 
     def _regime_snapshot_available(self) -> bool:
@@ -1443,6 +1480,50 @@ class PairAnalyzer:
             return f"invalid LLM response: empty content{suffix}"
         return None
 
+    def _position_prompt_context(
+        self,
+        position_context: str,
+        ctx: Optional[UpdateContext],
+        as_of: datetime,
+    ) -> str:
+        """Append ENTRY CONTEXT, live metrics and current regime to the prompt.
+
+        Only the position-aware path adds blocks. The stateless entry path
+        returns ``position_context`` unchanged (normally an empty string).
+        Missing candles/ATR degrade each metric to ``None`` instead of raising,
+        so a position without a resolvable entry signal still gets a prompt.
+        """
+        if ctx is None:
+            return position_context
+        context = getattr(self.engine, "context", None)
+        candles = getattr(context, "ohlcv_candles", None) if context is not None else None
+        timestamps = getattr(context, "timestamps", None) if context is not None else None
+        technical = getattr(context, "technical_data", None) if context is not None else None
+        if not isinstance(technical, dict):
+            technical = {}
+        metrics = build_position_metrics(
+            entry_price=ctx.entry_price,
+            entry_sl=ctx.entry_sl,
+            side=ctx.position_side,
+            current_price=ctx.current_price,
+            candles=candles,
+            timestamps=timestamps,
+            opened_at=ctx.position_opened_at,
+            as_of=as_of,
+            timeframe=self.timeframe,
+            atr=technical.get("atr"),
+            atr_pct=technical.get("atr_percent"),
+        )
+        entry_regime = ctx.entry_context.regime if ctx.entry_context is not None else None
+        blocks = [
+            format_entry_context_block(ctx.entry_context),
+            format_position_metrics_block(metrics),
+            format_regime_comparison_block(entry_regime, self._current_regime_snapshot()),
+        ]
+        prefix = position_context.rstrip()
+        rendered = "\n\n".join(block for block in blocks if block)
+        return f"{prefix}\n\n{rendered}" if prefix else rendered
+
     async def _analyze_market(
         self, json_mode: Optional[bool] = None, position_context: str = ""
     ) -> Dict[str, Any]:
@@ -1458,7 +1539,7 @@ class PairAnalyzer:
         """
         if json_mode is None:
             json_mode = self._json_format_enabled()
-        self._install_regime_snapshot_provider(getattr(self, "_current_analysis_as_of", None))
+        self._install_regime_snapshot_provider()
         return await self.engine.analyze_market(
             previous_response=None,
             previous_indicators=None,
