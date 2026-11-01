@@ -23,12 +23,6 @@ from src.signal_service.contract import Signal, iso_z
 
 logger = logging.getLogger(__name__)
 
-#: Label of the shipped post-OOS decision policy. It is recorded on every
-#: line, including lines where the gate was not used, so an audit can group
-#: records by policy without inspecting code.
-GATE_POLICY = "bias_short_only"
-
-
 def _optional_float(value: Any) -> Optional[float]:
     """Return ``value`` as a finite float when possible, otherwise None."""
     if value is None or isinstance(value, bool):
@@ -79,21 +73,58 @@ def _jev_values(signal: Signal, gate_signal: Any) -> Dict[str, Any]:
     }
 
 
+def _gate_policy(gate: Any) -> str:
+    """Return a label for the policy the gate was actually built with.
+
+    The W3 taxonomy can disable the asymmetric short veto, so a constant label
+    would misdescribe every production line. The label is derived from the
+    effective gate configuration instead, keeping records groupable by policy.
+    """
+    if gate is None:
+        return "not_configured"
+    label = (
+        "bias_short_only"
+        if bool(getattr(gate, "bias_short_only", True))
+        else "bias_filter_disabled"
+    )
+    if _optional_float(getattr(gate, "min_confidence", None)) is not None:
+        label = f"{label}+min_confidence"
+    return label
+
+
+def _gate_settings(gate: Any) -> Dict[str, Any]:
+    """Return the effective gate flag values recorded with every line."""
+    if gate is None:
+        return {"bias_short_only": None, "min_confidence": None}
+    return {
+        "bias_short_only": bool(getattr(gate, "bias_short_only", True)),
+        "min_confidence": _optional_float(getattr(gate, "min_confidence", None)),
+    }
+
+
 def _gate_values(gate: Any, gate_result: Any) -> Dict[str, Any]:
     """Describe whether the gate ran and why it allowed or vetoed the signal."""
-    if gate_result is not None:
-        return {
-            "policy": GATE_POLICY,
-            "used": bool(getattr(gate_result, "consulted", False)),
-            "allowed": bool(getattr(gate_result, "allowed", True)),
-            "reason": str(getattr(gate_result, "reason", "") or ""),
-        }
-    return {
-        "policy": GATE_POLICY,
-        "used": False,
-        "allowed": True,
-        "reason": f"JEV gate not used (mode={_gate_mode(gate)})",
+    values: Dict[str, Any] = {
+        "policy": _gate_policy(gate),
+        **_gate_settings(gate),
     }
+    if gate_result is not None:
+        values.update(
+            {
+                "used": bool(getattr(gate_result, "consulted", False)),
+                "allowed": bool(getattr(gate_result, "allowed", True)),
+                "reason": str(getattr(gate_result, "reason", "") or ""),
+            }
+        )
+        return values
+    values.update(
+        {
+            "used": False,
+            "allowed": True,
+            "reason": f"JEV gate not used (mode={_gate_mode(gate)})",
+        }
+    )
+    return values
 
 
 def build_analysis_record(

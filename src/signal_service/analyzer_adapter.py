@@ -476,10 +476,10 @@ class PairAnalyzer:
                 omitted each call falls back to the canonical path/defaults.
             bias_short_only: Keep the post-OOS asymmetric short bias rule. Set
                 False only through an explicit taxonomy ``jev`` section.
-            decision_log: Optional per-analysis JSONL audit writer. When
-                omitted, it is built from ``taxonomy_config.jev`` (enabled only
-                when ``log_decisions`` is true) so the file is written even
-                when the JEV gate mode is ``off``.
+            decision_log: Optional per-analysis JSONL audit writer. Must be
+                supplied explicitly (``DecisionAuditLog.from_config``); when
+                omitted no audit record is written. This keeps replay and
+                tests from touching the live audit file implicitly.
         """
         self.engine = engine
         self.symbol = symbol
@@ -493,8 +493,6 @@ class PairAnalyzer:
         self.taxonomy_config = taxonomy_config
         self.bias_short_only = bias_short_only
         self.decision_log = decision_log
-        if self.decision_log is None and taxonomy_config is not None:
-            self.decision_log = DecisionAuditLog.from_config(taxonomy_config)
         # Gate outcome of the analysis in progress, captured for the audit log.
         self._last_gate_result: Optional[GateResult] = None
         self._flags_applied = False

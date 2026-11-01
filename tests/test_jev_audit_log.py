@@ -132,6 +132,7 @@ def _analyzer(
     gate: Optional[JevGate] = None,
     log_path: Optional[str] = None,
     taxonomy_config: Any = None,
+    bias_short_only: bool = True,
     **extra: Any,
 ) -> PairAnalyzer:
     engine = FakeEngine(_engine_result(action, **extra), _candles(), _timestamps())
@@ -141,6 +142,7 @@ def _analyzer(
         timeframe="1h",
         jev_gate=gate,
         taxonomy_config=taxonomy_config,
+        bias_short_only=bias_short_only,
         decision_log=DecisionAuditLog(log_path) if log_path is not None else None,
     )
 
@@ -149,11 +151,11 @@ def _read_records(path: Any) -> List[Dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def test_absent_taxonomy_uses_the_runtime_signals_fallback():
+def test_absent_taxonomy_uses_the_runtime_logs_fallback():
     """The built-in audit path is repo-local, not the external W3 checkout."""
     config = load_taxonomy_config("/nonexistent/regime_taxonomy.yaml")
 
-    assert config.jev.log_decisions is False
+    assert config.jev.log_decisions is True
     assert config.jev.log_path == DEFAULT_JEV_LOG_PATH
     assert config.jev.log_path.replace("\\", "/").endswith(
         "runtime/logs/jev_decisions.jsonl"
@@ -161,7 +163,12 @@ def test_absent_taxonomy_uses_the_runtime_signals_fallback():
 
 
 def test_audit_logger_is_disabled_unless_log_decisions_is_true(tmp_path):
-    disabled = load_taxonomy_config("/nonexistent/regime_taxonomy.yaml")
+    disabled = load_taxonomy_config(
+        _write(
+            tmp_path / "disabled_regime_taxonomy.yaml",
+            "jev:\n  log_decisions: false\n",
+        )
+    )
     assert DecisionAuditLog.from_config(disabled) is None
 
     enabled = load_taxonomy_config(
@@ -207,7 +214,9 @@ async def test_log_is_written_when_the_jev_gate_is_not_used(tmp_path):
         "confidence": None,
     }
     assert record["gate"] == {
-        "policy": "bias_short_only",
+        "policy": "not_configured",
+        "bias_short_only": None,
+        "min_confidence": None,
         "used": False,
         "allowed": True,
         "reason": "JEV gate not used (mode=off)",
@@ -244,9 +253,38 @@ async def test_log_records_gate_veto_and_all_jev_confidences(tmp_path):
         "confidence": pytest.approx(0.75),
     }
     assert record["gate"]["policy"] == "bias_short_only"
+    assert record["gate"]["bias_short_only"] is True
+    assert record["gate"]["min_confidence"] is None
     assert record["gate"]["used"] is True
     assert record["gate"]["allowed"] is False
     assert "SELL requires short bias" in record["gate"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_gate_policy_reflects_effective_bias_short_only_false(tmp_path):
+    """The W3 taxonomy disables the short veto: the record must say so."""
+    path = tmp_path / "jev_decisions.jsonl"
+    client = FakeJevClient(_jev_response(bias="long"))
+    gate = JevGate(
+        client=client,
+        mode="post",
+        bias_short_only=False,
+        min_confidence=0.5,
+    )
+    analyzer = _analyzer(
+        action="SELL",
+        gate=gate,
+        log_path=str(path),
+        bias_short_only=False,
+    )
+
+    await analyzer.analyze(candle_open_time="2026-01-01T05:00:00Z")
+
+    gate_block = _read_records(path)[0]["gate"]
+    assert gate_block["policy"] == "bias_filter_disabled+min_confidence"
+    assert gate_block["bias_short_only"] is False
+    assert gate_block["min_confidence"] == pytest.approx(0.5)
+    assert gate_block["allowed"] is True
 
 
 def test_log_carries_optional_taxonomy_fields_when_present():

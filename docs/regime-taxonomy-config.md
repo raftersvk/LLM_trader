@@ -150,6 +150,8 @@ Each line describes one analysis and is written by
   },
   "gate": {
     "policy": "bias_short_only",
+    "bias_short_only": true,
+    "min_confidence": null,
     "used": true,
     "allowed": false,
     "reason": "JEV veto: SELL requires short bias (bias=long)"
@@ -164,12 +166,25 @@ Each line describes one analysis and is written by
   was analysed, so the record never describes a future candle.
 - `jev.tradeability` is the raw noul probability. The `*_confidence` fields
   are diagnostics only; the gate policy still filters on `bias` alone.
-- `gate.used` is false when JEV was disabled or the gate did not consult the
-  model (`HOLD`, position update); `allowed` then stays true and `reason`
-  names the mode.
+- `gate.policy` is derived from the gate that actually ran:
+  `bias_short_only` when the asymmetric short veto is enabled,
+  `bias_filter_disabled` when the W3 taxonomy turns it off, and a
+  `+min_confidence` suffix when a JEV confidence threshold is configured.
+  `gate.bias_short_only` and `gate.min_confidence` carry the effective flag
+  values, and the policy is `not_configured` when JEV is off and no gate
+  object exists.
+- `gate.used` records whether the gate consulted JEV. It stays false when the
+  mode is off or the post-gate exempts a `HOLD`; in `pre`/`pre_post` the
+  pre-gate is consulted before the LLM call, so it is true even when the
+  final action is `HOLD`.
 - `setup`, `regime` and `htf_alignment` are emitted only when the signal
   actually carries them.
 - The raw LLM response, prompt, headers and API keys are never written.
+
+Replay logging is opt-in: `replay` writes an audit record only when
+`--audit-log PATH` is given, or when both the gate is enabled and an explicit
+`--taxonomy-config` (with `log_decisions: true`) is supplied. A replay never
+appends to the configured live audit file implicitly.
 
 ## Wiring
 
@@ -184,14 +199,17 @@ Each line describes one analysis and is written by
 - `src/signal_service/jev_gate.py`: the asymmetric short veto comes from the
   `jev` section.
 - `src/signal_service/audit_log.py`: builds the per-analysis JSONL record from
-  the final signal, the gate result and the `jev` section. It is independent
-  of the gate mode, so an audit run with JEV off is still recorded.
+  the final signal, the gate result and the `jev` section. The live `run`
+  command injects it from the config independently of the gate mode, so an
+  audit run with JEV off is still recorded.
 - `src/signal_service/analyzer_adapter.py`: `SIGNAL_TAXONOMY_OUTPUT_CONTRACT`
   is rebuilt from the same config and gated by `enabled_timeframes`, so the
   output contract and the prompt template enable/disable a timeframe together.
   Its setup list only names setups present in the effective `regime_setups`.
+  The audit writer is injected explicitly and never rebuilt from the taxonomy.
 - `src/signal_service/__main__.py`: `--taxonomy-config` loads the document
-  once and injects it into every `PairAnalyzer` and the JEV gate.
+  once and injects it into every `PairAnalyzer` and the JEV gate. `replay`
+  takes `--audit-log PATH` as the explicit opt-in for replay audit records.
 
 ## Tests
 
