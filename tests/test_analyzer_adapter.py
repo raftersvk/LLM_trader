@@ -23,6 +23,7 @@ from src.signal_service.analyzer_adapter import (
     analyze_and_store,
     analyze_with_timeout,
 )
+from src.config.regime_taxonomy import parse_taxonomy_config
 from src.signal_service.storage import SignalStorage, signal_file_path
 from src.signal_service.contract import (
     SignalValidationError,
@@ -1085,6 +1086,72 @@ async def test_signal_output_contract_adds_taxonomy_only_on_signal_1h():
 
 
 
+
+
+def test_taxonomy_output_contract_setup_labels_are_config_driven():
+    """The output contract may only name setups the config allows."""
+    config = parse_taxonomy_config({"regime_setups": {"trend_up": ["trend_pullback"]}})
+    engine = SimpleNamespace(
+        prompt_builder=SimpleNamespace(regime_snapshot_provider=lambda _context: "")
+    )
+    analyzer = PairAnalyzer(
+        engine=engine,
+        symbol=SYMBOL,
+        timeframe="1h",
+        taxonomy_config=config,
+    )
+
+    contract = analyzer._signal_output_contract()
+
+    assert "trend_pullback" in contract
+    assert "breakout_retest" not in contract
+    assert "momentum_continuation" not in contract
+
+
+def test_taxonomy_output_contract_follows_the_enabled_timeframes_gate():
+    """Enabling 4h in the config must add the 4h taxonomy addendum."""
+    config = parse_taxonomy_config({"enabled_timeframes": ["1h", "4h"]})
+    engine = SimpleNamespace(
+        prompt_builder=SimpleNamespace(regime_snapshot_provider=lambda _context: "")
+    )
+    analyzer = PairAnalyzer(
+        engine=engine,
+        symbol=SYMBOL,
+        timeframe="4h",
+        taxonomy_config=config,
+    )
+
+    contract = analyzer._signal_output_contract()
+
+    assert "Optional 4h taxonomy keys" in contract
+    assert "Optional 1h taxonomy keys" not in contract
+
+
+def test_taxonomy_output_contract_with_only_4h_enabled_never_says_1h():
+    """The suffix must follow the same enabled set as the prompt template."""
+    config = parse_taxonomy_config({"enabled_timeframes": ["4h"]})
+    engine = SimpleNamespace(
+        prompt_builder=SimpleNamespace(regime_snapshot_provider=lambda _context: "")
+    )
+    analyzer_4h = PairAnalyzer(
+        engine=engine,
+        symbol=SYMBOL,
+        timeframe="4h",
+        taxonomy_config=config,
+    )
+    analyzer_1h = PairAnalyzer(
+        engine=engine,
+        symbol=SYMBOL,
+        timeframe="1h",
+        taxonomy_config=config,
+    )
+
+    contract_4h = analyzer_4h._signal_output_contract()
+    assert "Optional 4h taxonomy keys" in contract_4h
+    assert "Optional 1h taxonomy keys" not in contract_4h
+
+    # 1h is disabled by this config, so its suffix must stay taxonomy-free.
+    assert analyzer_1h._signal_output_contract() == SIGNAL_OUTPUT_CONTRACT
 
 
 @pytest.mark.asyncio

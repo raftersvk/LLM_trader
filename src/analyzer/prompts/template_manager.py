@@ -7,6 +7,11 @@ import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from src.config.regime_taxonomy import (
+    RegimeTaxonomyConfig,
+    get_taxonomy_config,
+    render_setup_taxonomy,
+)
 from src.logger.logger import Logger
 from src.parsing.unified_parser import UnifiedParser
 from src.trading.rr_policy import format_rr_floor, resolve_entry_rr_floor
@@ -59,20 +64,54 @@ class TemplateManager:
         "MANDATORY:",
     )
 
-    def __init__(self, config: "Config", logger: Logger | None = None, timeframe_validator: Any = None):
-        """Initialize the template manager."""
+    def __init__(
+        self,
+        config: "Config",
+        logger: Logger | None = None,
+        timeframe_validator: Any = None,
+        taxonomy_config: RegimeTaxonomyConfig | None = None,
+    ):
+        """Initialize the template manager.
+
+        ``taxonomy_config`` is optional; when omitted the external taxonomy
+        document is loaded lazily (with the built-in defaults as a fallback),
+        so callers that never render the 1h taxonomy pay no file access.
+        """
         self.logger = logger
         self.config = config
         self.timeframe_validator = timeframe_validator
+        self.taxonomy_config = taxonomy_config
+
+    def _taxonomy(self) -> RegimeTaxonomyConfig:
+        """Return the configured taxonomy, loading it on first use."""
+        if self.taxonomy_config is None:
+            self.taxonomy_config = get_taxonomy_config()
+        return self.taxonomy_config
+
+    def _taxonomy_enabled(self, timeframe: str | None, regime_snapshot_available: bool) -> bool:
+        """True when the taxonomy applies to this prompt target."""
+        return bool(regime_snapshot_available) and self._taxonomy().timeframe_enabled(timeframe)
 
     def build_prompt_metadata(self) -> dict[str, str]:
-        """Return metadata used to attribute prompt behavior in logs and dashboards."""
-        return {
+        """Return metadata used to attribute prompt behavior in logs and dashboards.
+
+        When a taxonomy document was actually loaded for this manager (the
+        signal-service path), the prompt version carries its ``version`` so a
+        prompt/behaviour change is attributable to the shared YAML. The live
+        bot never injects a taxonomy config and keeps the base version.
+        """
+        metadata = {
             "prompt_version": self.PROMPT_VERSION,
             "response_contract_version": self.RESPONSE_CONTRACT_VERSION,
             "prompt_variant": self.PROMPT_VARIANT,
             "model_verbosity": self.config.MODEL_VERBOSITY,
         }
+        if self.taxonomy_config is not None:
+            metadata["taxonomy_version"] = self.taxonomy_config.version
+            metadata["prompt_version"] = (
+                f"{self.PROMPT_VERSION}+taxonomy.{self.taxonomy_config.version}"
+            )
+        return metadata
 
     def _build_exit_execution_guidance(self, timeframe: str) -> str:
         stop_type = self.config.STOP_LOSS_TYPE
@@ -719,26 +758,8 @@ class TemplateManager:
         )
 
         setup_taxonomy = ""
-        if timeframe == "1h" and regime_snapshot_available:
-            setup_taxonomy = """=== Setup Taxonomy (1h) ===
-The REGIME SNAPSHOT block supplied in Trading Context is authoritative. Use its regime, htf and allowed_setups values as given; do not recompute ADX/choppiness/ATR or refetch candles, and never infer a regime from a future candle or from the week's realized return (no look-ahead).
-Regime -> allowed setups:
-- trend_up: trend_pullback, breakout_retest, momentum_continuation (long only).
-- trend_down: rally_failure, breakdown_retest, momentum_short (short; on spot these are no-trade because it cannot short).
-- range: range_fade_extreme, range_mean_reversion.
-- low_vol, high_vol, unclear: none — HOLD (tradeable=no). Do not invent a setup for these regimes.
-Setup definitions (classify on the latest closed 1h candle):
-- trend_pullback: long, orderly pullback to SMA20/structure support in an uptrend with a rejection close; invalidated below the pullback low.
-- breakout_retest: long, break of a 20-bar high/range then a held retest of the broken level; invalidated back below that level.
-- momentum_continuation: long, higher-high/higher-low continuation without >2 ATR extension from SMA20; invalidated by a lower low.
-- rally_failure: short, rally into SMA20/resistance rejected with a lower high in a downtrend; invalidated above the swing high.
-- breakdown_retest: short, support break then a rejected retest of the broken level; invalidated back above it.
-- momentum_short: short, lower-high/lower-low continuation without >2 ATR extension; invalidated by a higher high.
-- range_fade_extreme: fade a wick beyond the range boundary that closes back inside; invalidated beyond the boundary.
-- range_mean_reversion: return toward mid/VWAP after an excursion; invalidated by a break of the range.
-- none: no actionable setup (HOLD/CLOSE/UPDATE, or tradeable=no).
-htf_alignment (daily/weekly vs the 1h regime): aligned = same direction; counter = opposite; neutral = no clear higher-timeframe trend. A counter setup needs exceptional confluence and reduced size; a neutral one needs explicit confirmation.
-This is a 1h decision: the execution layer applies the 1h ATR-scaled bracket, so propose structural levels and do not carry over 4h exit distances. Emit setup, regime and htf_alignment in the decision JSON using exactly these labels; omit them only when unknown, and never emit a label outside these lists."""
+        if self._taxonomy_enabled(timeframe, regime_snapshot_available):
+            setup_taxonomy = render_setup_taxonomy(self._taxonomy(), timeframe)
 
         chart_validation_guidance = ""
         if has_chart_analysis:
@@ -1009,7 +1030,7 @@ create additional signals. End with a brief risk disclaimer before the final thr
         # path that installs the deterministic snapshot provider. The shared
         # 4h/live template must not gain these keys or refer to a missing block.
         taxonomy_fields = ""
-        if timeframe == "1h" and regime_snapshot_available:
+        if self._taxonomy_enabled(timeframe, regime_snapshot_available):
             taxonomy_fields = (
                 '        "setup": "none",\n'
                 '        "regime": "unclear",\n'

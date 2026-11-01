@@ -24,24 +24,11 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
-TREND_ADX = 25.0
-WEAK_ADX = 20.0
-RANGE_CHOPPINESS = 61.8
-HIGH_VOL_ATR_PCT_FLOOR = 3.0
-HIGH_VOL_ATR_MULTIPLE = 2.5
-LOW_VOL_ATR_MULTIPLE = 0.55
-LOW_VOL_CHOPPINESS = 55.0
-
-REGIMES = ("trend_up", "trend_down", "range", "low_vol", "high_vol", "unclear")
-
-REGIME_SETUPS: dict[str, tuple[str, ...]] = {
-    "trend_up": ("trend_pullback", "breakout_retest", "momentum_continuation"),
-    "trend_down": ("rally_failure", "breakdown_retest", "momentum_short"),
-    "range": ("range_fade_extreme", "range_mean_reversion"),
-    "low_vol": (),
-    "high_vol": (),
-    "unclear": (),
-}
+from src.config.regime_taxonomy import (
+    RegimeTaxonomyConfig,
+    RegimeThresholds,
+    get_taxonomy_config,
+)
 
 
 def _finite(value: Any) -> float | None:
@@ -126,14 +113,17 @@ def _nested_sma(long_term_data: Mapping[str, Any], period: int) -> float | None:
     return None
 
 
-def _daily_direction(long_term_data: Mapping[str, Any] | None) -> str | None:
+def _daily_direction(
+    long_term_data: Mapping[str, Any] | None,
+    thresholds: RegimeThresholds,
+) -> str | None:
     """Direction of the daily block: bullish, bearish or None."""
     if not long_term_data:
         return None
     plus_di = _finite(long_term_data.get("daily_plus_di"))
     minus_di = _finite(long_term_data.get("daily_minus_di"))
     adx = _finite(long_term_data.get("daily_adx"))
-    if plus_di is not None and minus_di is not None and (adx is None or adx >= WEAK_ADX):
+    if plus_di is not None and minus_di is not None and (adx is None or adx >= thresholds.adx_weak):
         if plus_di > minus_di:
             return "bullish"
         if minus_di > plus_di:
@@ -187,28 +177,31 @@ def _classify(
     sma20: float | None,
     atr_pct: float | None,
     atr_pct_median_90d: float | None,
+    thresholds: RegimeThresholds,
 ) -> tuple[str, float]:
-    """Return the P0-B 1h regime label and its agreement confidence.
+    """Return the regime label and its agreement confidence.
 
     Priority is fixed and ex-ante: high_vol, trend_up, trend_down, low_vol,
-    range, unclear. Only closed data supplied by the caller is used.
+    range, unclear. Only closed data supplied by the caller is used. The
+    numeric cut-offs come from the taxonomy config (defaults match P0-B).
     """
-    high_vol_reference = HIGH_VOL_ATR_PCT_FLOOR
+    high_vol_reference = thresholds.high_vol_atr_pct_floor
     if atr_pct_median_90d is not None:
         high_vol_reference = max(
-            HIGH_VOL_ATR_PCT_FLOOR, HIGH_VOL_ATR_MULTIPLE * atr_pct_median_90d
+            thresholds.high_vol_atr_pct_floor,
+            thresholds.high_vol_atr_multiple * atr_pct_median_90d,
         )
     if (
         atr_pct is not None
         and atr_pct > high_vol_reference
-        and (adx is None or adx < TREND_ADX)
+        and (adx is None or adx < thresholds.adx_trend)
     ):
         return "high_vol", 0.8
 
     directional = plus_di is not None and minus_di is not None and plus_di != minus_di
     if (
         adx is not None
-        and adx >= TREND_ADX
+        and adx >= thresholds.adx_trend
         and directional
         and last_close is not None
         and sma20 is not None
@@ -221,14 +214,14 @@ def _classify(
     if (
         atr_pct is not None
         and atr_pct_median_90d is not None
-        and atr_pct < LOW_VOL_ATR_MULTIPLE * atr_pct_median_90d
+        and atr_pct < thresholds.low_vol_atr_multiple * atr_pct_median_90d
         and choppiness is not None
-        and choppiness > LOW_VOL_CHOPPINESS
+        and choppiness > thresholds.low_vol_choppiness
     ):
         return "low_vol", 0.8
 
-    chop_range = choppiness is not None and choppiness > RANGE_CHOPPINESS
-    weak_adx = adx is not None and adx < WEAK_ADX
+    chop_range = choppiness is not None and choppiness > thresholds.range_choppiness
+    weak_adx = adx is not None and adx < thresholds.adx_weak
     if chop_range or weak_adx:
         return "range", 1.0 if (chop_range and weak_adx) else 0.7
 
@@ -249,12 +242,17 @@ def build_regime_snapshot(
     btc_closes_1w: Sequence[float] | None = None,
     atr_pct_median_90d: float | None = None,
     timeframe: str = "1h",
+    taxonomy_config: RegimeTaxonomyConfig | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic regime snapshot from already-collected data.
 
     Missing inputs degrade to ``None`` fields; they never raise. A snapshot is
     always returned, even when every input is missing (``regime=unclear``).
+    Thresholds and allowed setups come from the taxonomy config. A disabled
+    timeframe exposes no allowed setup and is marked no-trade.
     """
+    config = taxonomy_config or get_taxonomy_config()
+    thresholds = config.regime_thresholds
     technical = technical_data or {}
     adx = _finite(technical.get("adx"))
     choppiness = _finite(technical.get("choppiness"))
@@ -284,8 +282,9 @@ def build_regime_snapshot(
         sma20,
         atr_pct,
         _finite(atr_pct_median_90d),
+        thresholds,
     )
-    daily = _daily_direction(long_term_data)
+    daily = _daily_direction(long_term_data, thresholds)
     weekly = _weekly_direction(weekly_macro)
     htf_alignment = _htf_alignment(regime, daily, weekly)
 
@@ -316,7 +315,10 @@ def build_regime_snapshot(
         ),
     )
 
-    no_trade = regime in ("unclear", "low_vol", "high_vol")
+    allowed_setups = (
+        list(config.allowed_setups(regime)) if config.timeframe_enabled(timeframe) else []
+    )
+    no_trade = not allowed_setups
     return {
         "timeframe": timeframe,
         "regime": regime,
@@ -336,7 +338,7 @@ def build_regime_snapshot(
         "extension_atr": _round(extension_atr, 3),
         "rs_btc_7d": _round(rs_7d, 2),
         "rs_btc_30d": _round(rs_30d, 2),
-        "allowed_setups": list(REGIME_SETUPS.get(regime, ())),
+        "allowed_setups": allowed_setups,
     }
 
 

@@ -43,6 +43,12 @@ from src.signal_service.contract import (
     timeframe_seconds,
 )
 from src.signal_service.jev_gate import GateResult, JevGate, build_state
+from src.config.regime_taxonomy import (
+    RegimeTaxonomyConfig,
+    build_signal_taxonomy_output_contract,
+    default_taxonomy_config,
+    get_taxonomy_config,
+)
 from src.signal_service.regime_snapshot import (
     build_regime_snapshot,
     format_regime_snapshot_block,
@@ -183,15 +189,12 @@ SIGNAL_OUTPUT_CONTRACT = (
     "is mandatory on every cycle.\n"
 )
 
-#: 1h taxonomy addendum. Appended only when the signal target is 1h and the
-#: deterministic snapshot provider is installed, mirroring the template gating.
-SIGNAL_TAXONOMY_OUTPUT_CONTRACT = (
-    "- Optional 1h taxonomy keys inside \"analysis\": \"setup\" "
-    "(trend_pullback|breakout_retest|momentum_continuation|rally_failure|"
-    "breakdown_retest|momentum_short|range_fade_extreme|range_mean_reversion|none), "
-    "\"regime\" (trend_up|trend_down|range|low_vol|high_vol|unclear), "
-    "\"htf_alignment\" (aligned|counter|neutral). Omit a key or use null when "
-    "unknown; never invent a label outside these lists.\n"
+#: Default taxonomy addendum. Appended only when the target timeframe is
+#: enabled by the taxonomy config and the deterministic snapshot provider is
+#: installed, mirroring the template gating. The setup labels are rebuilt from
+#: the effective config at call time; this constant is the default fallback.
+SIGNAL_TAXONOMY_OUTPUT_CONTRACT = build_signal_taxonomy_output_contract(
+    default_taxonomy_config(), "1h"
 )
 
 #: One-shot repair instruction. Kept short so a repair reuses the original
@@ -449,6 +452,8 @@ class PairAnalyzer:
         use_chart: bool = True,
         jev_gate: Optional[JevGate] = None,
         json_response_format: Optional[bool] = None,
+        taxonomy_config: Optional[RegimeTaxonomyConfig] = None,
+        bias_short_only: bool = True,
     ) -> None:
         """Bind a dedicated engine for a single pair.
 
@@ -465,6 +470,10 @@ class PairAnalyzer:
             json_response_format: Opt into response_format={"type":"json_object"}
                 for this pair's signal analysis only. ``None`` reads
                 [signal_service] json_response_format from the engine config.
+            taxonomy_config: External regime/taxonomy thresholds document. When
+                omitted each call falls back to the canonical path/defaults.
+            bias_short_only: Keep the post-OOS asymmetric short bias rule. Set
+                False only through an explicit taxonomy ``jev`` section.
         """
         self.engine = engine
         self.symbol = symbol
@@ -475,6 +484,8 @@ class PairAnalyzer:
         self.use_chart = use_chart
         self.jev_gate = jev_gate
         self.json_response_format = json_response_format
+        self.taxonomy_config = taxonomy_config
+        self.bias_short_only = bias_short_only
         self._flags_applied = False
         # P0-A snapshot reused by the prompt block and the emitted signal, so the
         # same closed-candle inputs decide both the narrative and the contract.
@@ -926,6 +937,10 @@ class PairAnalyzer:
         builder = getattr(self.engine, "prompt_builder", None)
         if builder is None:
             return
+        if self.taxonomy_config is not None:
+            template_manager = getattr(builder, "template_manager", None)
+            if template_manager is not None:
+                template_manager.taxonomy_config = self.taxonomy_config
         builder.regime_snapshot_provider = lambda context: format_regime_snapshot_block(
             self._regime_snapshot_from_context(context, as_of)
         )
@@ -936,10 +951,19 @@ class PairAnalyzer:
         return getattr(builder, "regime_snapshot_provider", None) is not None
 
     def _signal_output_contract(self) -> str:
-        """Return the suffix for this target, with taxonomy only on signal 1h."""
-        if self.timeframe == "1h" and self._regime_snapshot_available():
-            return f"{SIGNAL_OUTPUT_CONTRACT}\n{SIGNAL_TAXONOMY_OUTPUT_CONTRACT}"
-        return SIGNAL_OUTPUT_CONTRACT
+        """Return the suffix for this target with the config-gated taxonomy block.
+
+        The gate is the same ``enabled_timeframes`` used by the prompt
+        template, so a 4h run stays taxonomy-free until the config enables it,
+        and enabling 4h adds the taxonomy on both sides together.
+        """
+        if not self._regime_snapshot_available():
+            return SIGNAL_OUTPUT_CONTRACT
+        config = self.taxonomy_config or get_taxonomy_config()
+        if not config.timeframe_enabled(self.timeframe):
+            return SIGNAL_OUTPUT_CONTRACT
+        taxonomy = build_signal_taxonomy_output_contract(config, self.timeframe)
+        return f"{SIGNAL_OUTPUT_CONTRACT}\n{taxonomy}"
 
     def _regime_snapshot_from_context(
         self, context: Any, as_of: Optional[datetime] = None
@@ -992,6 +1016,7 @@ class PairAnalyzer:
                 btc_closes_1w=btc.get("1w"),
                 atr_pct_median_90d=self._atr_pct_median(context),
                 timeframe=self.timeframe,
+                taxonomy_config=self.taxonomy_config,
             )
             self._last_regime_snapshot = snapshot
             self._last_regime_snapshot_as_of = as_of
@@ -1698,7 +1723,7 @@ class PairAnalyzer:
         # by the JEV bias; a SELL is admitted only on an explicit short bias.
         # A missing/unparseable bias fails open to avoid blocking on a partial
         # JEV payload.
-        if draft.action == "SELL":
+        if self.bias_short_only and draft.action == "SELL":
             bias = jev.get("bias")
             if bias is not None and bias != "short":
                 return False, "JEV bias conflict"
