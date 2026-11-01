@@ -221,6 +221,12 @@ def test_non_mapping_document_is_rejected():
 
 
 def test_setup_names_must_exist_in_the_signal_contract_enum():
+    """A brand-new setup cannot be defined and advertised to the model.
+
+    This is the exact review scenario: the name has a complete definition and
+    is referenced by ``regime_setups``, so it would otherwise reach
+    ``render_setup_taxonomy`` while the contract's static enum drops it.
+    """
     with pytest.raises(TaxonomyConfigError, match="not allowed by the signal contract"):
         parse_taxonomy_config(
             {
@@ -237,7 +243,8 @@ def test_setup_names_must_exist_in_the_signal_contract_enum():
                         "trail_atr": 0.0,
                         "be_at_r": 0.0,
                     }
-                }
+                },
+                "regime_setups": {"trend_up": ["vibes_setup"]},
             }
         )
 
