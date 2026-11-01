@@ -13,6 +13,17 @@ Open Interest and no external call.
 - JEV receives the same fields inside its state. P0-A left the JEV payload and
   the signal contract unchanged; P1-B adds them as optional v1.2 fields (below).
 
+## External policy document
+
+The thresholds and setup taxonomy described below are now loaded from an
+external YAML/JSON document (canonical path:
+`/home/djelinux/TradingBots/trading-stack/freqtrade/user_data/regime_taxonomy.yaml`,
+overridable with `--taxonomy-config` or `$TAXONOMY_CONFIG_PATH`). The built-in
+defaults reproduce the values in this document. See
+`docs/regime-taxonomy-config.md` for the schema and loader semantics.
+`enabled_timeframes` keeps the taxonomy on 1h; 4h stays disabled until the
+P1-A exit validation below passes.
+
 ## Ex-ante rule
 
 The snapshot only sees candles closed at or before the analysed candle close.

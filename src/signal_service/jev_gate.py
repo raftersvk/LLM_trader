@@ -21,13 +21,16 @@ state.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence
 
+from src.config.regime_taxonomy import DEFAULT_JEV_LOG_PATH
 from src.signal_service.contract import iso_z, timeframe_seconds
 from src.signal_service.jev_client import JevClient, JevError, JevResponse
 
@@ -586,14 +589,17 @@ class GateResult:
     error: Optional[str] = None
 
 
-class JevGate:
+class JevGate:  # pylint: disable=too-many-instance-attributes
     """Applies the configured JEV mode to a state and/or an LLM decision."""
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         client: Optional[JevClient] = None,
         mode: Any = JevMode.OFF,
         min_confidence: Optional[float] = None,
+        bias_short_only: bool = True,
+        log_decisions: bool = False,
+        log_path: Optional[str] = None,
     ) -> None:
         """Bind a client and mode.
 
@@ -602,10 +608,17 @@ class JevGate:
             mode: off|pre|post|pre_post.
             min_confidence: Optional score threshold below which a non-HOLD
                 decision is vetoed.
+            bias_short_only: Keep the asymmetric short bias rule (default).
+                When False, the JEV bias never vetoes a SELL.
+            log_decisions: Append one JSONL audit record per consultation.
+            log_path: Audit file path; defaults to the taxonomy canonical dir.
         """
         self.client = client
         self.mode = parse_mode(mode)
         self.min_confidence = min_confidence
+        self.bias_short_only = bias_short_only
+        self.log_decisions = log_decisions
+        self.log_path = log_path or DEFAULT_JEV_LOG_PATH
         self.last_signal: Optional[JevSignal] = None
         self.last_error: Optional[str] = None
 
@@ -683,6 +696,38 @@ class JevGate:
         self.last_signal = signal
         return GateResult(allowed=True, reason="JEV consulted", consulted=True, signal=signal)
 
+    def _record_decision(
+        self,
+        scope: str,
+        state: Dict[str, Any],
+        action: Optional[str],
+        result: GateResult,
+    ) -> None:
+        """Append one audit record to ``log_path`` when enabled."""
+        if not self.log_decisions:
+            return
+        signal = result.signal
+        record = {
+            "scope": scope,
+            "symbol": state.get("symbol"),
+            "action": action,
+            "allowed": result.allowed,
+            "reason": result.reason,
+            "consulted": result.consulted,
+            "error": result.error,
+            "bias": signal.bias if signal is not None else None,
+            "regime": signal.regime if signal is not None else None,
+            "confidence": signal.confidence if signal is not None else None,
+        }
+        try:
+            directory = os.path.dirname(self.log_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            with open(self.log_path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+        except OSError as exc:
+            logger.warning("Cannot write JEV decision log %s: %s", self.log_path, exc)
+
     async def check_pre(self, state: Dict[str, Any]) -> GateResult:
         """Consult JEV before the LLM call without blocking on noul or regime.
 
@@ -694,16 +739,19 @@ class JevGate:
             return GateResult(allowed=True, reason="JEV pre-gate disabled", consulted=False)
         result = await self._consult(state)
         if not result.consulted or result.error is not None:
+            self._record_decision("pre-gate", state, None, result)
             return result
         signal = result.signal
         assert signal is not None  # consulted implies parsed signal
         self._log_consultation("pre-gate", state, signal)
-        return GateResult(
+        final = GateResult(
             allowed=True,
             reason="JEV pre-gate: consulted (advisory only)",
             consulted=True,
             signal=signal,
         )
+        self._record_decision("pre-gate", state, None, final)
+        return final
 
     async def check_post(self, state: Dict[str, Any], action: str) -> GateResult:
         """Veto a non-HOLD LLM decision. HOLD is never blocked.
@@ -723,16 +771,19 @@ class JevGate:
             )
         result = await self._consult(state)
         if not result.consulted or result.error is not None:
+            self._record_decision("post-gate", state, normalized_action, result)
             return result
         signal = result.signal
         assert signal is not None  # consulted implies parsed signal
         self._log_consultation("post-gate", state, signal)
+        final: GateResult
         if (
-            normalized_action == "SELL"
+            self.bias_short_only
+            and normalized_action == "SELL"
             and signal.bias is not None
             and signal.bias != "short"
         ):
-            return GateResult(
+            final = GateResult(
                 allowed=False,
                 reason=(
                     "JEV veto: SELL requires short bias "
@@ -741,12 +792,12 @@ class JevGate:
                 consulted=True,
                 signal=signal,
             )
-        if (
+        elif (
             self.min_confidence is not None
             and signal.confidence is not None
             and signal.confidence < self.min_confidence
         ):
-            return GateResult(
+            final = GateResult(
                 allowed=False,
                 reason=(
                     "JEV veto: confidence "
@@ -755,9 +806,12 @@ class JevGate:
                 consulted=True,
                 signal=signal,
             )
-        return GateResult(
-            allowed=True,
-            reason="JEV post-gate: decision approved",
-            consulted=True,
-            signal=signal,
-        )
+        else:
+            final = GateResult(
+                allowed=True,
+                reason="JEV post-gate: decision approved",
+                consulted=True,
+                signal=signal,
+            )
+        self._record_decision("post-gate", state, normalized_action, final)
+        return final

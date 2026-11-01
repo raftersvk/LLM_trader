@@ -34,6 +34,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from src.config.regime_taxonomy import (
+    DEFAULT_TAXONOMY_CONFIG_PATH,
+    RegimeTaxonomyConfig,
+    load_taxonomy_config,
+)
 from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
 from src.signal_service.contract import (
     SignalValidationError,
@@ -91,6 +96,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--use-chart", type=_parse_bool_flag, default="true")
     run.add_argument("--jev-mode", default=JevMode.OFF.value, choices=[m.value for m in JevMode])
     run.add_argument(
+        "--taxonomy-config", default=None,
+        help="Regime/taxonomy YAML or JSON path "
+             f"(default: $TAXONOMY_CONFIG_PATH or {DEFAULT_TAXONOMY_CONFIG_PATH})",
+    )
+    run.add_argument(
         "--debug-cycle-seconds", type=float, default=0.0,
         help="Debug: replay the last closed candle every N seconds (e.g. 60) "
              "instead of waiting for the next candle close",
@@ -131,6 +141,11 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--use-chart", type=_parse_bool_flag, default="true")
     replay.add_argument("--timeout-seconds", type=float, default=300.0)
     replay.add_argument("--jev-mode", default=JevMode.OFF.value, choices=[m.value for m in JevMode])
+    replay.add_argument(
+        "--taxonomy-config", default=None,
+        help="Regime/taxonomy YAML or JSON path "
+             f"(default: $TAXONOMY_CONFIG_PATH or {DEFAULT_TAXONOMY_CONFIG_PATH})",
+    )
 
     validate = sub.add_parser("validate", help="Validate JSONL signal files")
     validate.add_argument("--input", default=DEFAULT_SIGNALS_DIR)
@@ -142,16 +157,19 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_jev_gate(mode: str):
+def _build_jev_gate(mode: str, taxonomy_config: RegimeTaxonomyConfig | None = None):
     """Build the JEV gate for a CLI mode; `off` makes no network call.
 
     Provider settings come from the ``[jev]`` config section, so the default
     Decision 3.0 endpoint and the legacy OpenCode endpoint are both selectable
     without code changes. The API key is read from keys.env, never logged.
+    The gate policy (asymmetric short bias and optional decision log) comes
+    from the external taxonomy document.
     """
     parsed = parse_mode(mode)
     if parsed is JevMode.OFF:
         return None
+    taxonomy = taxonomy_config or load_taxonomy_config()
     try:
         from src.config.loader import Config
 
@@ -166,7 +184,13 @@ def _build_jev_gate(mode: str):
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("JEV config unavailable (%s); using built-in defaults", exc)
         client = JevClient()
-    return JevGate(client=client, mode=parsed)
+    return JevGate(
+        client=client,
+        mode=parsed,
+        bias_short_only=taxonomy.jev.bias_short_only,
+        log_decisions=taxonomy.jev.log_decisions,
+        log_path=taxonomy.jev.log_path,
+    )
 
 
 def _load_engine_factory():
@@ -230,7 +254,8 @@ async def _run_command(args: argparse.Namespace) -> None:
         args.timeframe,
     )
 
-    jev_gate = _build_jev_gate(args.jev_mode)
+    taxonomy = load_taxonomy_config(args.taxonomy_config)
+    jev_gate = _build_jev_gate(args.jev_mode, taxonomy)
 
     def analyzer_factory(symbol: str) -> PairAnalyzer:
         return PairAnalyzer(
@@ -240,6 +265,8 @@ async def _run_command(args: argparse.Namespace) -> None:
             use_news=args.use_news,
             use_chart=args.use_chart,
             jev_gate=jev_gate,
+            taxonomy_config=taxonomy,
+            bias_short_only=taxonomy.jev.bias_short_only,
         )
 
     service = SignalService(
@@ -403,13 +430,16 @@ async def _replay_command(args: argparse.Namespace) -> None:
         args.timeframe,
     )
     engine = engines[symbol]
+    taxonomy = load_taxonomy_config(args.taxonomy_config)
     analyzer = PairAnalyzer(
         engine=engine,
         symbol=symbol,
         timeframe=args.timeframe,
         use_news=not args.no_news,
         use_chart=args.use_chart,
-        jev_gate=_build_jev_gate(args.jev_mode),
+        jev_gate=_build_jev_gate(args.jev_mode, taxonomy),
+        taxonomy_config=taxonomy,
+        bias_short_only=taxonomy.jev.bias_short_only,
     )
     storage = SignalStorage(signal_file_path(args.output, symbol, args.timeframe))
 

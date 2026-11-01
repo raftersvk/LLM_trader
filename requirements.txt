@@ -23,6 +23,8 @@ openai>=2.49.0
 blockrun-llm==1.4.7
 Pillow>=12.2.0
 python-dotenv>=1.2.2
+# External regime/taxonomy policy document (JSON remains the fallback).
+PyYAML>=6.0.0
 kaleido==1.1.0
 torch>=2.13.0
 chromadb>=1.5.9

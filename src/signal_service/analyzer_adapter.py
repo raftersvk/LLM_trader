@@ -43,6 +43,7 @@ from src.signal_service.contract import (
     timeframe_seconds,
 )
 from src.signal_service.jev_gate import GateResult, JevGate, build_state
+from src.config.regime_taxonomy import RegimeTaxonomyConfig
 from src.signal_service.regime_snapshot import (
     build_regime_snapshot,
     format_regime_snapshot_block,
@@ -449,6 +450,8 @@ class PairAnalyzer:
         use_chart: bool = True,
         jev_gate: Optional[JevGate] = None,
         json_response_format: Optional[bool] = None,
+        taxonomy_config: Optional[RegimeTaxonomyConfig] = None,
+        bias_short_only: bool = True,
     ) -> None:
         """Bind a dedicated engine for a single pair.
 
@@ -465,6 +468,10 @@ class PairAnalyzer:
             json_response_format: Opt into response_format={"type":"json_object"}
                 for this pair's signal analysis only. ``None`` reads
                 [signal_service] json_response_format from the engine config.
+            taxonomy_config: External regime/taxonomy thresholds document. When
+                omitted each call falls back to the canonical path/defaults.
+            bias_short_only: Keep the post-OOS asymmetric short bias rule. Set
+                False only through an explicit taxonomy ``jev`` section.
         """
         self.engine = engine
         self.symbol = symbol
@@ -475,6 +482,8 @@ class PairAnalyzer:
         self.use_chart = use_chart
         self.jev_gate = jev_gate
         self.json_response_format = json_response_format
+        self.taxonomy_config = taxonomy_config
+        self.bias_short_only = bias_short_only
         self._flags_applied = False
         # P0-A snapshot reused by the prompt block and the emitted signal, so the
         # same closed-candle inputs decide both the narrative and the contract.
@@ -926,6 +935,10 @@ class PairAnalyzer:
         builder = getattr(self.engine, "prompt_builder", None)
         if builder is None:
             return
+        if self.taxonomy_config is not None:
+            template_manager = getattr(builder, "template_manager", None)
+            if template_manager is not None:
+                template_manager.taxonomy_config = self.taxonomy_config
         builder.regime_snapshot_provider = lambda context: format_regime_snapshot_block(
             self._regime_snapshot_from_context(context, as_of)
         )
@@ -992,6 +1005,8 @@ class PairAnalyzer:
                 btc_closes_1w=btc.get("1w"),
                 atr_pct_median_90d=self._atr_pct_median(context),
                 timeframe=self.timeframe,
+                symbol=self.symbol,
+                taxonomy_config=self.taxonomy_config,
             )
             self._last_regime_snapshot = snapshot
             self._last_regime_snapshot_as_of = as_of
@@ -1698,7 +1713,7 @@ class PairAnalyzer:
         # by the JEV bias; a SELL is admitted only on an explicit short bias.
         # A missing/unparseable bias fails open to avoid blocking on a partial
         # JEV payload.
-        if draft.action == "SELL":
+        if self.bias_short_only and draft.action == "SELL":
             bias = jev.get("bias")
             if bias is not None and bias != "short":
                 return False, "JEV bias conflict"
