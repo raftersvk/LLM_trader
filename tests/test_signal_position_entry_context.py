@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -208,9 +209,11 @@ def test_blocks_render_all_required_fields():
     regime = format_regime_comparison_block(
         "trend_up", {"regime": "trend_up", "allowed_setups": ["trend_pullback"]}
     )
-    assert "current_regime=trend_up" in regime
-    assert "allowed_setups=trend_pullback" in regime
+    assert "entry_regime=trend_up" in regime
     assert "regime_match=yes" in regime
+    # The REGIME SNAPSHOT block is the only source of the current regime.
+    assert "current_regime=" not in regime
+    assert "allowed_setups=" not in regime
 
 
 def test_regime_comparison_detects_mismatch_and_missing_snapshot():
@@ -219,8 +222,8 @@ def test_regime_comparison_detects_mismatch_and_missing_snapshot():
     )
     assert "regime_match=no" in mismatch
     fallback = format_regime_comparison_block("trend_up", None)
-    assert "current_regime=unknown" in fallback
     assert "regime_match=unknown" in fallback
+    assert "current_regime" not in fallback
 
 
 # ------------------------------------------------------------------ adapter
@@ -281,7 +284,7 @@ def test_adapter_prompt_contains_entry_context_and_metrics():
     prompt = engine.calls[0]["position_context"]
     assert "ENTRY CONTEXT" in prompt
     assert "POSITION METRICS" in prompt
-    assert "CURRENT REGIME" in prompt
+    assert "POSITION REGIME CHECK" in prompt
     assert "setup=trend_pullback" in prompt
     assert "invalidation=Close below the pullback low." in prompt
     # R is based on entry_sl=66500, not the current 68000 stop.
@@ -332,6 +335,105 @@ def test_stateless_entry_prompt_is_unchanged():
         )
     )
     assert engine.calls[0]["position_context"] == ""
+
+
+# ------------------------------------------------------- stale-context regression
+class _Collector:
+    """Simulates a collector that only knows the fresh (current) candles."""
+
+    def __init__(self, context):
+        self.context = context
+        self.called = 0
+
+    async def collect_data(self, context):
+        self.called += 1
+        context.ohlcv_candles = list(CANDLES + [FUTURE_CANDLE])
+        context.timestamps = list(TIMESTAMPS + [FUTURE_TIMESTAMP])
+        context.current_price = 69000.0
+
+
+class _PromptBuilder:
+    """Minimal prompt builder exposing the provider installed by the adapter."""
+
+    regime_snapshot_provider = None
+
+
+class _RefreshEngine(_FakeEngine):
+    """Engine whose context starts one candle old and is refreshed on collect."""
+
+    def __init__(self, raw):
+        super().__init__(raw)
+        self.context = self._Ctx()
+        # Start the cycle one candle behind: only the 09:00 candle exists.
+        self.context.ohlcv_candles = [CANDLES[0]]
+        self.context.timestamps = [TIMESTAMPS[0]]
+        self.context.technical_data = {}
+        self.data_collector = _Collector(self.context)
+        self.prompt_builder = _PromptBuilder()
+        self.prompt = ""
+
+    async def _calculate_technical_indicators(self):
+        self.context.technical_data = {
+            "atr": 300.0,
+            "atr_percent": 0.43,
+            "adx": 35.0,
+            "plus_di": 30.0,
+            "minus_di": 10.0,
+            "choppiness": 35.0,
+            "sma_20": 68000.0,
+        }
+
+    async def _process_long_term_data(self):
+        return None
+
+    async def analyze_market(self, **kwargs):
+        self.calls.append(kwargs)
+        provider = self.prompt_builder.regime_snapshot_provider
+        snapshot_block = provider(self.context) if provider else ""
+        self.prompt = kwargs.get("position_context", "")
+        if snapshot_block:
+            self.prompt = f"{self.prompt}\n\n{snapshot_block}"
+        return {"raw_response": self.last_llm_response, "recommendation": "UPDATE"}
+
+
+def test_metrics_use_refreshed_closed_candle_not_previous_cycle():
+    raw = json.dumps({"signal": "UPDATE", "confidence": "HIGH", "stop_loss": 68000.0,
+                      "reasoning": "tighten"})
+    engine = _RefreshEngine(raw)
+    signal = asyncio.run(
+        PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h").analyze(
+            candle_open_time="2026-10-30T10:00:00Z", update_context=_ctx()
+        )
+    )
+    assert signal.action == "UPDATE"
+    assert engine.data_collector.called == 1
+    prompt = engine.calls[0]["position_context"]
+    # The 10:00 candle (high 69500) must contribute; the stale 09:00-only
+    # context would have capped MFE at 68500 (mfe_R=1.00).
+    assert "mfe_R=2.00" in prompt
+    assert "mae_R=0.50" in prompt
+    assert "atr=300" in prompt
+    assert "atr_pct=0.43" in prompt
+
+
+def test_current_regime_is_rendered_only_by_the_snapshot_block():
+    raw = json.dumps({"signal": "UPDATE", "confidence": "HIGH", "stop_loss": 68000.0,
+                      "reasoning": "tighten"})
+    engine = _RefreshEngine(raw)
+    signal = asyncio.run(
+        PairAnalyzer(engine=engine, symbol=SYMBOL, timeframe="1h").analyze(
+            candle_open_time="2026-10-30T10:00:00Z", update_context=_ctx()
+        )
+    )
+    assert signal.action == "UPDATE"
+    prompt = engine.prompt
+    assert prompt.count("## REGIME SNAPSHOT") == 1
+    assert prompt.count("allowed_setups=") == 1
+    assert "current_regime" not in prompt
+    assert "regime_match=yes" in prompt
+    # ``entry_regime=`` is not a word-boundary ``regime=``: the only current
+    # regime label is the one in the deterministic snapshot block.
+    assert len(re.findall(r"\bregime=", prompt)) == 1
 
 
 # ------------------------------------------------------------------ service

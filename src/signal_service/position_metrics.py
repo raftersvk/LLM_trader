@@ -223,23 +223,22 @@ def format_regime_comparison_block(
     entry_regime: Optional[str],
     snapshot: Optional[Mapping[str, Any]],
 ) -> str:
-    """Render the current regime, its allowed setups and the entry comparison."""
-    current_regime = None
-    setups: list[str] = []
-    if snapshot:
-        current_regime = snapshot.get("regime")
-        raw_setups = snapshot.get("allowed_setups")
-        if isinstance(raw_setups, (list, tuple)):
-            setups = [str(item) for item in raw_setups]
+    """Render only the entry/current regime comparison.
+
+    The prompt already contains the single ``REGIME SNAPSHOT (deterministic)``
+    block with the current regime and its allowed setups, rendered from the
+    freshly collected context. This block must not repeat those values: it
+    only reports whether the entry regime still matches that snapshot.
+    """
+    current_regime = snapshot.get("regime") if snapshot else None
     if entry_regime and current_regime:
         match = "yes" if entry_regime == current_regime else "no"
     else:
         match = "unknown"
-    allowed = ",".join(setups) or "unknown"
     return (
-        "## CURRENT REGIME (deterministic)\n"
-        f"current_regime={_text(current_regime)} allowed_setups={allowed}\n"
-        f"entry_regime={_text(entry_regime)} regime_match={match}"
+        "## POSITION REGIME CHECK\n"
+        f"entry_regime={_text(entry_regime)} regime_match={match}\n"
+        "Current regime and allowed_setups are in the REGIME SNAPSHOT block above."
     )
 
 
@@ -318,6 +317,13 @@ def _closed_highs_lows(
     as_of: Optional[datetime],
     timeframe: str,
 ) -> tuple[list[float], list[float]]:
+    """Return highs/lows of closed, post-entry candles.
+
+    A candle that opened before the entry is dropped even when it closed after
+    it: its high/low may predate the fill, so excluding it keeps MFE/MAE
+    conservative instead of crediting pre-entry movement. Likewise a candle
+    that is not fully closed at ``as_of`` is excluded (no look-ahead).
+    """
     highs: list[float] = []
     lows: list[float] = []
     if candles is None:

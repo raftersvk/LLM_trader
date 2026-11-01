@@ -45,7 +45,6 @@ from src.signal_service.contract import (
 from src.signal_service.jev_gate import GateResult, JevGate, build_state
 from src.signal_service.position_metrics import (
     EntryContext,
-    PositionMetrics,
     build_position_metrics,
     format_entry_context_block,
     format_position_metrics_block,
@@ -151,8 +150,6 @@ class UpdateContext:
     # position has no resolvable entry signal (legacy or manual trade).
     entry_context: Optional[EntryContext] = None
     position_opened_at: Optional[str] = None
-    # Filled by the adapter from closed candles before the prompt is built.
-    position_metrics: Optional[PositionMetrics] = None
 
     def position_view(self) -> PositionView:
         """Build the duck-typed view consumed by the tightening policy."""
@@ -604,6 +601,11 @@ class PairAnalyzer:
 
         # Hide the still-forming candle from the analysis window.
         candle_open_dt = parse_iso(candle_open_time) if candle_open_time is not None else None
+        # Position updates bypass the pre-gate, so nothing has refreshed the
+        # engine context yet: collect and truncate it first so the metrics use
+        # the just-closed candle and its ATR, not the previous cycle's data.
+        if update_context is not None:
+            await self._refresh_context(as_of)
         # The position prompt carries the entry thesis, live excursions and
         # the current regime; it is built once and reused by the echo retry.
         position_context = self._position_prompt_context(
@@ -1450,7 +1452,6 @@ class PairAnalyzer:
             atr=technical.get("atr"),
             atr_pct=technical.get("atr_percent"),
         )
-        ctx.position_metrics = metrics
         entry_regime = ctx.entry_context.regime if ctx.entry_context is not None else None
         blocks = [
             format_entry_context_block(ctx.entry_context),
