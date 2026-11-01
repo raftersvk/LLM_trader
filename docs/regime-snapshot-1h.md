@@ -63,6 +63,10 @@ policy described here; set it to `false` to disable the short veto.
 - The pre-gate has no side yet, so it only consults and logs. In `pre` mode the
   short-only rule is applied by the adapter risk layer once the LLM decision is
   known; in `post`/`pre_post` the post-gate applies it.
+- Each analysis also appends one structured record to the decision audit log
+  (`jev.log_path`, default `runtime/logs/jev_decisions.jsonl`) even when the
+  gate is off. The record carries the signal, the advisory JEV answers and the
+  gate outcome; see `docs/regime-taxonomy-config.md`.
 - The OOS decision behind this policy: short + short bias over 28 trades was
   +14.05 R at 64.3 % WR (`rally_failure` 22 trades, +12.91 R at 68 % WR);
   long + bias was -9.14 R and unstable; `noul >= 0.50` degraded the arm and the

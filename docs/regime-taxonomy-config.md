@@ -87,7 +87,7 @@ pair_overrides: {}              # optional flat execution overrides (W3 schema)
 
 jev:
   bias_short_only: true         # W3 canonical: shorts only (P0-B default)
-  log_decisions: true           # append JSONL audit records
+  log_decisions: true           # append one JSONL audit record per analysis
   log_path: runtime/logs/jev_decisions.jsonl
 ```
 
@@ -119,8 +119,72 @@ jev:
   `BTC/USDT:USDT` and `BTC/USDT` keys resolve to the signal symbol.
 - `jev`: the W3 canonical file sets `bias_short_only: true` (shorts only,
   P0-B default) and `log_decisions: true`; set `bias_short_only: false` to
-  disable the post-OOS short veto. `log_decisions` appends one JSON record per
-  JEV consultation to `log_path`.
+  disable the post-OOS short veto. `log_decisions` appends one structured
+  JSONL record per analysis to `log_path`, including runs where the gate is
+  disabled (`--jev-mode off`) or never consulted. When `log_path` is omitted
+  it defaults to `runtime/logs/jev_decisions.jsonl` under the repository root.
+
+### Decision audit log
+
+Each line describes one analysis and is written by
+`src/signal_service/audit_log.py` after the contract signal is built:
+
+```json
+{
+  "ts": "2026-11-01T06:01:02Z",
+  "symbol": "BTC/USDT",
+  "timeframe": "1h",
+  "decision_id": "btc-usdt-1h-2026-11-01t05:00:00z",
+  "candle_close_time": "2026-11-01T06:00:00Z",
+  "signal_action": "SELL",
+  "signal_confidence": 0.85,
+  "risk_approved": false,
+  "jev": {
+    "tradeability": 0.82,
+    "bias": "long",
+    "regime": "trend",
+    "bias_confidence": 0.8,
+    "regime_confidence": 0.7,
+    "tradeability_confidence": 0.66,
+    "confidence": 0.75
+  },
+  "gate": {
+    "policy": "bias_short_only",
+    "bias_short_only": true,
+    "min_confidence": null,
+    "used": true,
+    "allowed": false,
+    "reason": "JEV veto: SELL requires short bias (bias=long)"
+  },
+  "setup": "trend_pullback",
+  "regime": "trend_up",
+  "htf_alignment": "aligned"
+}
+```
+
+- `ts` is the write time; `candle_close_time` is the close of the candle that
+  was analysed, so the record never describes a future candle.
+- `jev.tradeability` is the raw noul probability. The `*_confidence` fields
+  are diagnostics only; the gate policy still filters on `bias` alone.
+- `gate.policy` is derived from the gate that actually ran:
+  `bias_short_only` when the asymmetric short veto is enabled,
+  `bias_filter_disabled` when the W3 taxonomy turns it off, and a
+  `+min_confidence` suffix when a JEV confidence threshold is configured.
+  `gate.bias_short_only` and `gate.min_confidence` carry the effective flag
+  values, and the policy is `not_configured` when JEV is off and no gate
+  object exists.
+- `gate.used` records whether the gate consulted JEV. It stays false when the
+  mode is off or the post-gate exempts a `HOLD`; in `pre`/`pre_post` the
+  pre-gate is consulted before the LLM call, so it is true even when the
+  final action is `HOLD`.
+- `setup`, `regime` and `htf_alignment` are emitted only when the signal
+  actually carries them.
+- The raw LLM response, prompt, headers and API keys are never written.
+
+Replay logging is opt-in: `replay` writes an audit record only when
+`--audit-log PATH` is given, or when both the gate is enabled and an explicit
+`--taxonomy-config` (with `log_decisions: true`) is supplied. A replay never
+appends to the configured live audit file implicitly.
 
 ## Wiring
 
@@ -132,14 +196,20 @@ jev:
   optional JSON taxonomy fields are generated from the config and gated by
   `enabled_timeframes`. When a taxonomy config is loaded, the prompt metadata
   appends `+taxonomy.<version>` to `prompt_version`.
-- `src/signal_service/jev_gate.py`: the asymmetric short veto and optional
-  decision log come from the `jev` section.
+- `src/signal_service/jev_gate.py`: the asymmetric short veto comes from the
+  `jev` section.
+- `src/signal_service/audit_log.py`: builds the per-analysis JSONL record from
+  the final signal, the gate result and the `jev` section. The live `run`
+  command injects it from the config independently of the gate mode, so an
+  audit run with JEV off is still recorded.
 - `src/signal_service/analyzer_adapter.py`: `SIGNAL_TAXONOMY_OUTPUT_CONTRACT`
   is rebuilt from the same config and gated by `enabled_timeframes`, so the
   output contract and the prompt template enable/disable a timeframe together.
   Its setup list only names setups present in the effective `regime_setups`.
+  The audit writer is injected explicitly and never rebuilt from the taxonomy.
 - `src/signal_service/__main__.py`: `--taxonomy-config` loads the document
-  once and injects it into every `PairAnalyzer` and the JEV gate.
+  once and injects it into every `PairAnalyzer` and the JEV gate. `replay`
+  takes `--audit-log PATH` as the explicit opt-in for replay audit records.
 
 ## Tests
 

@@ -40,6 +40,7 @@ from src.config.regime_taxonomy import (
     load_taxonomy_config,
 )
 from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
+from src.signal_service.audit_log import DecisionAuditLog
 from src.signal_service.contract import (
     SignalValidationError,
     iso_z,
@@ -146,6 +147,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Regime/taxonomy YAML or JSON path "
              f"(default: $TAXONOMY_CONFIG_PATH or {DEFAULT_TAXONOMY_CONFIG_PATH})",
     )
+    replay.add_argument(
+        "--audit-log", "--jev-audit-log", dest="audit_log", default=None,
+        help="Write per-analysis replay audit records to this JSONL path. "
+             "Replay never appends to the configured live audit log implicitly.",
+    )
 
     validate = sub.add_parser("validate", help="Validate JSONL signal files")
     validate.add_argument("--input", default=DEFAULT_SIGNALS_DIR)
@@ -191,6 +197,30 @@ def _build_jev_gate(mode: str, taxonomy_config: RegimeTaxonomyConfig | None = No
         log_decisions=taxonomy.jev.log_decisions,
         log_path=taxonomy.jev.log_path,
     )
+
+
+def _replay_decision_log(
+    args: argparse.Namespace,
+    taxonomy: RegimeTaxonomyConfig,
+) -> Optional[DecisionAuditLog]:
+    """Build replay's audit writer only for an explicit request.
+
+    Replay defaults to ``--jev-mode off`` and must never append records to the
+    live audit file merely because an external taxonomy file enables logging.
+    It writes only when ``--audit-log`` names a destination, or when the
+    operator enables the gate *and* passes an explicit ``--taxonomy-config``
+    whose own ``jev.log_path`` then applies. This keeps tests and ad-hoc
+    replays isolated from production state.
+    """
+    explicit_path = getattr(args, "audit_log", None)
+    if explicit_path:
+        return DecisionAuditLog(explicit_path, enabled=True)
+    if (
+        getattr(args, "taxonomy_config", None)
+        and parse_mode(args.jev_mode) is not JevMode.OFF
+    ):
+        return DecisionAuditLog.from_config(taxonomy)
+    return None
 
 
 def _load_engine_factory():
@@ -256,6 +286,9 @@ async def _run_command(args: argparse.Namespace) -> None:
 
     taxonomy = load_taxonomy_config(args.taxonomy_config)
     jev_gate = _build_jev_gate(args.jev_mode, taxonomy)
+    # The audit log is independent of the gate mode: with log_decisions on it
+    # records every analysis, including runs where JEV is off or not consulted.
+    decision_log = DecisionAuditLog.from_config(taxonomy)
 
     def analyzer_factory(symbol: str) -> PairAnalyzer:
         return PairAnalyzer(
@@ -267,6 +300,7 @@ async def _run_command(args: argparse.Namespace) -> None:
             jev_gate=jev_gate,
             taxonomy_config=taxonomy,
             bias_short_only=taxonomy.jev.bias_short_only,
+            decision_log=decision_log,
         )
 
     service = SignalService(
@@ -440,6 +474,7 @@ async def _replay_command(args: argparse.Namespace) -> None:
         jev_gate=_build_jev_gate(args.jev_mode, taxonomy),
         taxonomy_config=taxonomy,
         bias_short_only=taxonomy.jev.bias_short_only,
+        decision_log=_replay_decision_log(args, taxonomy),
     )
     storage = SignalStorage(signal_file_path(args.output, symbol, args.timeframe))
 

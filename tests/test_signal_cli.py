@@ -318,6 +318,23 @@ class _SkipTestExchangeManager:
         return (object(), "fake")
 
 
+def _write_replay_taxonomy(
+    tmp_path: Path,
+    log_decisions: bool = True,
+    log_path: Path | None = None,
+) -> Path:
+    """Write an isolated taxonomy config so replay never reads the real W3 file."""
+    path = tmp_path / "replay_regime_taxonomy.yaml"
+    audit_path = log_path or (tmp_path / "live_jev_decisions.jsonl")
+    path.write_text(
+        "jev:\n"
+        f"  log_decisions: {'true' if log_decisions else 'false'}\n"
+        f"  log_path: {audit_path}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 @pytest.mark.asyncio
 async def test_replay_skips_candles_before_the_csv_data(tmp_path, monkeypatch, caplog):
     """Windows with no closed candle are skipped and only real data is written."""
@@ -333,6 +350,7 @@ async def test_replay_skips_candles_before_the_csv_data(tmp_path, monkeypatch, c
         "2026-01-01T03:00:00Z,110.0,120.0,100.0,115.0,333333.0\n",
         encoding="utf-8",
     )
+    taxonomy = _write_replay_taxonomy(tmp_path, log_decisions=True)
     args = cli._build_parser().parse_args([
         "replay",
         "--pairs", "BTC/USDT",
@@ -340,6 +358,7 @@ async def test_replay_skips_candles_before_the_csv_data(tmp_path, monkeypatch, c
         "--end", "2026-01-01T04:00:00Z",
         "--candles", str(candles),
         "--output", str(tmp_path / "signals"),
+        "--taxonomy-config", str(taxonomy),
         "--no-news",
     ])
 
@@ -350,6 +369,9 @@ async def test_replay_skips_candles_before_the_csv_data(tmp_path, monkeypatch, c
     assert len(rows) == 1
     assert json.loads(rows[0])["candle_open_time"] == "2026-01-01T03:00:00Z"
     assert "Skipping candle 2026-01-01T00:00:00Z" in caplog.text
+    # A replay with the gate off must not append to the configured live audit
+    # file, even when that taxonomy enables decision logging.
+    assert not (tmp_path / "live_jev_decisions.jsonl").exists()
 
 
 @pytest.mark.asyncio
@@ -379,6 +401,7 @@ async def test_future_end_produces_no_future_rows_or_calls(tmp_path, monkeypatch
         "--end", (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
         "--candles", str(candles),
         "--output", str(tmp_path / "signals"),
+        "--taxonomy-config", str(_write_replay_taxonomy(tmp_path)),
         "--no-news",
     ])
 
@@ -424,6 +447,7 @@ async def test_replay_skips_off_grid_start(tmp_path, monkeypatch, caplog):
         "--end", "2026-01-01T04:30:00Z",
         "--candles", str(candles),
         "--output", str(tmp_path / "signals"),
+        "--taxonomy-config", str(_write_replay_taxonomy(tmp_path)),
         "--no-news",
     ])
 
@@ -433,3 +457,44 @@ async def test_replay_skips_off_grid_start(tmp_path, monkeypatch, caplog):
     assert engine.analyze_candles == []
     assert not (tmp_path / "signals" / "BTC_USDT_1h.jsonl").exists()
     assert "not present in" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_replay_audit_log_is_written_only_on_explicit_opt_in(tmp_path, monkeypatch):
+    """--audit-log is the only way replay writes records with the gate off."""
+    from src.signal_service import __main__ as cli
+
+    engine = _SkipTestEngine()
+    monkeypatch.setattr(cli, "_load_engine_factory", lambda: _SkipTestRoot(engine))
+    candles = tmp_path / "BTC_USDT_1h.csv"
+    candles.write_text(
+        "time,open,high,low,close,volume\n"
+        "2026-01-01T03:00:00Z,110.0,120.0,100.0,115.0,333333.0\n",
+        encoding="utf-8",
+    )
+    live_path = tmp_path / "live_jev_decisions.jsonl"
+    replay_path = tmp_path / "replay_jev_decisions.jsonl"
+    taxonomy = _write_replay_taxonomy(tmp_path, log_decisions=True, log_path=live_path)
+    args = cli._build_parser().parse_args([
+        "replay",
+        "--pairs", "BTC/USDT",
+        "--start", "2026-01-01",
+        "--end", "2026-01-01T04:00:00Z",
+        "--candles", str(candles),
+        "--output", str(tmp_path / "signals"),
+        "--taxonomy-config", str(taxonomy),
+        "--audit-log", str(replay_path),
+        "--no-news",
+    ])
+
+    await cli._replay_command(args)
+
+    records = [
+        json.loads(line)
+        for line in replay_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(records) == 1
+    assert records[0]["candle_close_time"] == "2026-01-01T04:00:00Z"
+    assert records[0]["gate"]["policy"] == "not_configured"
+    assert not live_path.exists()

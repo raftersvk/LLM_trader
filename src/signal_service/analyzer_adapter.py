@@ -26,6 +26,7 @@ from src.signal_service.position_policy import (
     direction_for_side,
     evaluate_update,
 )
+from src.signal_service.audit_log import DecisionAuditLog
 from src.signal_service.contract import (
     ALLOWED_ACTIONS,
     ALLOWED_HTF_ALIGNMENTS,
@@ -454,6 +455,7 @@ class PairAnalyzer:
         json_response_format: Optional[bool] = None,
         taxonomy_config: Optional[RegimeTaxonomyConfig] = None,
         bias_short_only: bool = True,
+        decision_log: Optional[DecisionAuditLog] = None,
     ) -> None:
         """Bind a dedicated engine for a single pair.
 
@@ -474,6 +476,10 @@ class PairAnalyzer:
                 omitted each call falls back to the canonical path/defaults.
             bias_short_only: Keep the post-OOS asymmetric short bias rule. Set
                 False only through an explicit taxonomy ``jev`` section.
+            decision_log: Optional per-analysis JSONL audit writer. Must be
+                supplied explicitly (``DecisionAuditLog.from_config``); when
+                omitted no audit record is written. This keeps replay and
+                tests from touching the live audit file implicitly.
         """
         self.engine = engine
         self.symbol = symbol
@@ -486,6 +492,9 @@ class PairAnalyzer:
         self.json_response_format = json_response_format
         self.taxonomy_config = taxonomy_config
         self.bias_short_only = bias_short_only
+        self.decision_log = decision_log
+        # Gate outcome of the analysis in progress, captured for the audit log.
+        self._last_gate_result: Optional[GateResult] = None
         self._flags_applied = False
         # P0-A snapshot reused by the prompt block and the emitted signal, so the
         # same closed-candle inputs decide both the narrative and the contract.
@@ -539,6 +548,41 @@ class PairAnalyzer:
         position_context: str = "",
         update_context: Optional[UpdateContext] = None,
     ) -> Signal:
+        """Run one analysis and append its audit record.
+
+        Every analysis is recorded, including HOLD fallbacks and runs where
+        the JEV gate is disabled or never consulted. The audit writer is
+        best-effort: a write failure never changes the returned signal.
+        """
+        self._last_gate_result = None
+        signal = await self._analyze(
+            candle_open_time=candle_open_time,
+            position_context=position_context,
+            update_context=update_context,
+        )
+        self._record_audit(signal)
+        return signal
+
+    def _record_audit(self, signal: Signal) -> None:
+        """Append the audit record for one final signal (best effort)."""
+        if self.decision_log is None:
+            return
+        try:
+            self.decision_log.record(
+                signal,
+                gate_result=self._last_gate_result,
+                gate=self.jev_gate,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # The audit log is diagnostic: never lose a signal for it.
+            logger.warning("Cannot record JEV audit for %s: %s", self.symbol, exc)
+
+    async def _analyze(
+        self,
+        candle_open_time: Optional[str] = None,
+        position_context: str = "",
+        update_context: Optional[UpdateContext] = None,
+    ) -> Signal:
         """Run an analysis and return a validated Signal.
 
         The default call is stateless (``position_context=""``) and produces an
@@ -584,6 +628,7 @@ class PairAnalyzer:
                 logger.warning("JEV pre-gate skipped for %s: no closed-candle state", self.symbol)
             else:
                 pre_result = await self.jev_gate.check_pre(state)
+                self._last_gate_result = pre_result
                 if pre_result.consulted and not pre_result.allowed:
                     logger.info("JEV pre-gate blocked %s: %s", self.symbol, pre_result.reason)
                     return self._gate_blocked_signal(pre_result, candle_open_time)
@@ -748,6 +793,7 @@ class PairAnalyzer:
                     logger.warning("JEV post-gate skipped for %s: no closed-candle state", self.symbol)
                 else:
                     post_result = await self.jev_gate.check_post(state, draft.action)
+                    self._last_gate_result = post_result
                     if not post_result.allowed:
                         veto_reason = post_result.reason
                         logger.info("JEV post-gate vetoed %s %s: %s", self.symbol, draft.action, veto_reason)
@@ -2189,9 +2235,11 @@ async def analyze_with_timeout(
     except asyncio.TimeoutError:
         logger.warning("Analysis timed out after %.0fs: HOLD fallback", timeout_seconds)
         candle_open_dt = parse_iso(candle_open_time) if candle_open_time is not None else None
-        return analyzer._hold_fallback(  # pylint: disable=protected-access
+        signal = analyzer._hold_fallback(  # pylint: disable=protected-access
             reasoning="analysis timeout", candle_open_dt=candle_open_dt,
         )
+        analyzer._record_audit(signal)  # pylint: disable=protected-access
+        return signal
 
 
 def _refresh_heartbeat(

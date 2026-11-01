@@ -21,10 +21,8 @@ state.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -442,6 +440,9 @@ class JevSignal:
     model: str
     tradeability: Optional[bool] = None
     tradeability_probability: Optional[float] = None
+    #: Confidence attached to the tradeability answer. Audit only: it is not a
+    #: contract field and never gates a decision.
+    tradeability_confidence: Optional[float] = None
     bias: Optional[str] = None
     bias_confidence: Optional[float] = None
     regime: Optional[str] = None
@@ -557,6 +558,7 @@ def parse_jev_signal(
         model=response.model,
         tradeability=tradeability,
         tradeability_probability=probability,
+        tradeability_confidence=_as_optional_float(tradeability_answer.get("confidence")),
         bias=_choice_value(bias_answer, ALLOWED_BIAS, "bias"),
         bias_confidence=_as_optional_float(bias_answer.get("confidence")),
         regime=_choice_value(regime_answer, ALLOWED_REGIME, "regime"),
@@ -610,8 +612,10 @@ class JevGate:  # pylint: disable=too-many-instance-attributes
                 decision is vetoed.
             bias_short_only: Keep the asymmetric short bias rule (default).
                 When False, the JEV bias never vetoes a SELL.
-            log_decisions: Append one JSONL audit record per consultation.
-            log_path: Audit file path; defaults to the taxonomy canonical dir.
+            log_decisions: Kept for configuration compatibility. The gate no
+                longer writes the audit file itself; the per-analysis record is
+                produced by ``DecisionAuditLog`` (gate on or off).
+            log_path: Kept for configuration compatibility; see ``DecisionAuditLog``.
         """
         self.client = client
         self.mode = parse_mode(mode)
@@ -696,38 +700,6 @@ class JevGate:  # pylint: disable=too-many-instance-attributes
         self.last_signal = signal
         return GateResult(allowed=True, reason="JEV consulted", consulted=True, signal=signal)
 
-    def _record_decision(
-        self,
-        scope: str,
-        state: Dict[str, Any],
-        action: Optional[str],
-        result: GateResult,
-    ) -> None:
-        """Append one audit record to ``log_path`` when enabled."""
-        if not self.log_decisions:
-            return
-        signal = result.signal
-        record = {
-            "scope": scope,
-            "symbol": state.get("symbol"),
-            "action": action,
-            "allowed": result.allowed,
-            "reason": result.reason,
-            "consulted": result.consulted,
-            "error": result.error,
-            "bias": signal.bias if signal is not None else None,
-            "regime": signal.regime if signal is not None else None,
-            "confidence": signal.confidence if signal is not None else None,
-        }
-        try:
-            directory = os.path.dirname(self.log_path)
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-            with open(self.log_path, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record, sort_keys=True) + "\n")
-        except OSError as exc:
-            logger.warning("Cannot write JEV decision log %s: %s", self.log_path, exc)
-
     async def check_pre(self, state: Dict[str, Any]) -> GateResult:
         """Consult JEV before the LLM call without blocking on noul or regime.
 
@@ -739,7 +711,6 @@ class JevGate:  # pylint: disable=too-many-instance-attributes
             return GateResult(allowed=True, reason="JEV pre-gate disabled", consulted=False)
         result = await self._consult(state)
         if not result.consulted or result.error is not None:
-            self._record_decision("pre-gate", state, None, result)
             return result
         signal = result.signal
         assert signal is not None  # consulted implies parsed signal
@@ -750,7 +721,6 @@ class JevGate:  # pylint: disable=too-many-instance-attributes
             consulted=True,
             signal=signal,
         )
-        self._record_decision("pre-gate", state, None, final)
         return final
 
     async def check_post(self, state: Dict[str, Any], action: str) -> GateResult:
@@ -771,7 +741,6 @@ class JevGate:  # pylint: disable=too-many-instance-attributes
             )
         result = await self._consult(state)
         if not result.consulted or result.error is not None:
-            self._record_decision("post-gate", state, normalized_action, result)
             return result
         signal = result.signal
         assert signal is not None  # consulted implies parsed signal
@@ -813,5 +782,4 @@ class JevGate:  # pylint: disable=too-many-instance-attributes
                 consulted=True,
                 signal=signal,
             )
-        self._record_decision("post-gate", state, normalized_action, final)
         return final

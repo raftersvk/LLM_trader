@@ -27,6 +27,8 @@ pyrightconfig.json
 # JEV calibration observations and generated weekly policy (local runtime state)
 /runtime/jev_bench/observations.jsonl
 /runtime/jev_calibration/
+# Per-analysis JEV decision audit (local runtime state)
+/runtime/logs/jev_decisions.jsonl
 /cache/
 /logs/
 /research_papers/
