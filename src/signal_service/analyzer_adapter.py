@@ -43,7 +43,12 @@ from src.signal_service.contract import (
     timeframe_seconds,
 )
 from src.signal_service.jev_gate import GateResult, JevGate, build_state
-from src.config.regime_taxonomy import RegimeTaxonomyConfig
+from src.config.regime_taxonomy import (
+    RegimeTaxonomyConfig,
+    build_signal_taxonomy_output_contract,
+    default_taxonomy_config,
+    get_taxonomy_config,
+)
 from src.signal_service.regime_snapshot import (
     build_regime_snapshot,
     format_regime_snapshot_block,
@@ -184,15 +189,12 @@ SIGNAL_OUTPUT_CONTRACT = (
     "is mandatory on every cycle.\n"
 )
 
-#: 1h taxonomy addendum. Appended only when the signal target is 1h and the
-#: deterministic snapshot provider is installed, mirroring the template gating.
-SIGNAL_TAXONOMY_OUTPUT_CONTRACT = (
-    "- Optional 1h taxonomy keys inside \"analysis\": \"setup\" "
-    "(trend_pullback|breakout_retest|momentum_continuation|rally_failure|"
-    "breakdown_retest|momentum_short|range_fade_extreme|range_mean_reversion|none), "
-    "\"regime\" (trend_up|trend_down|range|low_vol|high_vol|unclear), "
-    "\"htf_alignment\" (aligned|counter|neutral). Omit a key or use null when "
-    "unknown; never invent a label outside these lists.\n"
+#: Default taxonomy addendum. Appended only when the target timeframe is
+#: enabled by the taxonomy config and the deterministic snapshot provider is
+#: installed, mirroring the template gating. The setup labels are rebuilt from
+#: the effective config at call time; this constant is the default fallback.
+SIGNAL_TAXONOMY_OUTPUT_CONTRACT = build_signal_taxonomy_output_contract(
+    default_taxonomy_config(), "1h"
 )
 
 #: One-shot repair instruction. Kept short so a repair reuses the original
@@ -949,10 +951,19 @@ class PairAnalyzer:
         return getattr(builder, "regime_snapshot_provider", None) is not None
 
     def _signal_output_contract(self) -> str:
-        """Return the suffix for this target, with taxonomy only on signal 1h."""
-        if self.timeframe == "1h" and self._regime_snapshot_available():
-            return f"{SIGNAL_OUTPUT_CONTRACT}\n{SIGNAL_TAXONOMY_OUTPUT_CONTRACT}"
-        return SIGNAL_OUTPUT_CONTRACT
+        """Return the suffix for this target with the config-gated taxonomy block.
+
+        The gate is the same ``enabled_timeframes`` used by the prompt
+        template, so a 4h run stays taxonomy-free until the config enables it,
+        and enabling 4h adds the taxonomy on both sides together.
+        """
+        if not self._regime_snapshot_available():
+            return SIGNAL_OUTPUT_CONTRACT
+        config = self.taxonomy_config or get_taxonomy_config()
+        if not config.timeframe_enabled(self.timeframe):
+            return SIGNAL_OUTPUT_CONTRACT
+        taxonomy = build_signal_taxonomy_output_contract(config, self.timeframe)
+        return f"{SIGNAL_OUTPUT_CONTRACT}\n{taxonomy}"
 
     def _regime_snapshot_from_context(
         self, context: Any, as_of: Optional[datetime] = None

@@ -93,13 +93,25 @@ class TemplateManager:
         return bool(regime_snapshot_available) and self._taxonomy().timeframe_enabled(timeframe)
 
     def build_prompt_metadata(self) -> dict[str, str]:
-        """Return metadata used to attribute prompt behavior in logs and dashboards."""
-        return {
+        """Return metadata used to attribute prompt behavior in logs and dashboards.
+
+        When a taxonomy document was actually loaded for this manager (the
+        signal-service path), the prompt version carries its ``version`` so a
+        prompt/behaviour change is attributable to the shared YAML. The live
+        bot never injects a taxonomy config and keeps the base version.
+        """
+        metadata = {
             "prompt_version": self.PROMPT_VERSION,
             "response_contract_version": self.RESPONSE_CONTRACT_VERSION,
             "prompt_variant": self.PROMPT_VARIANT,
             "model_verbosity": self.config.MODEL_VERBOSITY,
         }
+        if self.taxonomy_config is not None:
+            metadata["taxonomy_version"] = self.taxonomy_config.version
+            metadata["prompt_version"] = (
+                f"{self.PROMPT_VERSION}+taxonomy.{self.taxonomy_config.version}"
+            )
+        return metadata
 
     def _build_exit_execution_guidance(self, timeframe: str) -> str:
         stop_type = self.config.STOP_LOSS_TYPE

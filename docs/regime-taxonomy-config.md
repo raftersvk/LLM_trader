@@ -85,9 +85,9 @@ pair_overrides: {}              # optional flat execution overrides (W3 schema)
 #   trail_after_r: 1.5
 
 jev:
-  bias_short_only: true         # post-OOS asymmetric short rule
-  log_decisions: false          # append JSONL audit records
-  log_path: /home/djelinux/TradingBots/trading-stack/freqtrade/user_data/jev_decisions.jsonl
+  bias_short_only: false        # W3 canonical: short veto disabled
+  log_decisions: true           # append JSONL audit records
+  log_path: runtime/logs/jev_decisions.jsonl
 ```
 
 ### Sections
@@ -105,13 +105,17 @@ jev:
   `regimes`, `sl_atr`, `tp_atr`, `max_hold_bars`, `trail_atr`, `be_at_r`.
   `description`/`invalidation` are rendered into the prompt taxonomy;
   `entry` and the numeric bracket fields are carried for downstream exit
-  wiring and are not yet enforced by the execution layer.
+  wiring and are not yet enforced by the execution layer. Setup names are
+  restricted to `ALLOWED_SETUPS` in the signal contract, so the YAML can never
+  announce a setup the contract cannot carry.
 - `pair_overrides`: optional flat per-pair execution overrides using the W3
   field set (`sl_atr`, `tp_atr`, `max_hold_bars`, `max_hold_hours`,
   `max_stake`, `leverage`, `trail_atr`, `be_at_r`, `trail_after_r`). These are
   consumed by the Freqtrade strategy, not by the regime snapshot. Both
   `BTC/USDT:USDT` and `BTC/USDT` keys resolve to the signal symbol.
-- `jev`: `bias_short_only` keeps the shipped post-OOS rule when `true`;
+- `jev`: the W3 canonical file sets `bias_short_only: false` and
+  `log_decisions: true`. `bias_short_only: true` keeps the shipped post-OOS
+  short veto (the built-in fallback value when no file is present);
   `log_decisions` appends one JSON record per JEV consultation to `log_path`.
 
 ## Wiring
@@ -122,9 +126,14 @@ jev:
   come from the config; a disabled timeframe is no-trade.
 - `src/analyzer/prompts/template_manager.py`: the setup taxonomy block and the
   optional JSON taxonomy fields are generated from the config and gated by
-  `enabled_timeframes`.
+  `enabled_timeframes`. When a taxonomy config is loaded, the prompt metadata
+  appends `+taxonomy.<version>` to `prompt_version`.
 - `src/signal_service/jev_gate.py`: the asymmetric short veto and optional
   decision log come from the `jev` section.
+- `src/signal_service/analyzer_adapter.py`: `SIGNAL_TAXONOMY_OUTPUT_CONTRACT`
+  is rebuilt from the same config and gated by `enabled_timeframes`, so the
+  output contract and the prompt template enable/disable a timeframe together.
+  Its setup list only names setups present in the effective `regime_setups`.
 - `src/signal_service/__main__.py`: `--taxonomy-config` loads the document
   once and injects it into every `PairAnalyzer` and the JEV gate.
 

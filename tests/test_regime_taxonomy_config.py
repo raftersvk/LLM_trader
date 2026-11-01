@@ -220,6 +220,28 @@ def test_non_mapping_document_is_rejected():
         parse_taxonomy_config(["not", "a", "mapping"])
 
 
+def test_setup_names_must_exist_in_the_signal_contract_enum():
+    with pytest.raises(TaxonomyConfigError, match="not allowed by the signal contract"):
+        parse_taxonomy_config(
+            {
+                "setups": {
+                    "vibes_setup": {
+                        "side": "long",
+                        "description": "not a contract label",
+                        "entry": "entry",
+                        "invalidation": "invalidation",
+                        "regimes": ["trend_up"],
+                        "sl_atr": 2.5,
+                        "tp_atr": 4.5,
+                        "max_hold_bars": 12,
+                        "trail_atr": 0.0,
+                        "be_at_r": 0.0,
+                    }
+                }
+            }
+        )
+
+
 # Canonical W3 document (trading-stack PR #15). Embedded so CI does not need the
 # sibling checkout; the installed file is also checked below when present.
 CANONICAL_TAXONOMY_YAML = """\
@@ -443,6 +465,9 @@ def test_installed_canonical_file_matches_the_w3_schema():
     assert config.version == "1"
     assert config.enabled_timeframes == ("1h",)
     assert set(config.setups) == set(DEFAULT_SETUPS)
+    from src.signal_service.contract import ALLOWED_SETUPS
+
+    assert set(config.setups) <= (ALLOWED_SETUPS - {"none"})
     assert config.jev.log_path.endswith("jev_decisions.jsonl")
 
 
@@ -581,6 +606,21 @@ def test_template_manager_renders_the_config_taxonomy_only_on_1h():
     )
     assert '"setup": "none"' in one_hour_format
     assert '"setup": "none"' not in four_hours_format
+
+
+def test_prompt_metadata_carries_the_taxonomy_version():
+    config = parse_taxonomy_config({"version": 7})
+    manager = TemplateManager(
+        config=make_config(),
+        logger=null_logger(),
+        timeframe_validator=TimeframeValidator(),
+        taxonomy_config=config,
+    )
+
+    metadata = manager.build_prompt_metadata()
+
+    assert metadata["taxonomy_version"] == "7"
+    assert metadata["prompt_version"] == "trading-analysis-prompt-v1.6+taxonomy.7"
 
 
 def test_all_regimes_have_a_definition_even_when_the_file_is_partial():

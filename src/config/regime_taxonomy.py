@@ -538,6 +538,27 @@ def _parse_setups(data: Any, base: Mapping[str, SetupDefinition]) -> dict[str, S
     return setups
 
 
+def _contract_setup_names() -> frozenset[str]:
+    """Return the setup labels the signal contract can carry.
+
+    Imported lazily: ``src.signal_service.__init__`` imports the analyzer,
+    which imports this module, so a top-level import would be circular. By the
+    time a document is parsed the package is fully loaded.
+    """
+    from src.signal_service.contract import ALLOWED_SETUPS  # pylint: disable=import-outside-toplevel
+
+    return frozenset(ALLOWED_SETUPS) - {"none"}
+
+
+def _validate_contract_setups(setups: Mapping[str, SetupDefinition]) -> None:
+    """Reject setup names the signal contract enum cannot emit."""
+    unknown = sorted(name for name in setups if name not in _contract_setup_names())
+    if unknown:
+        raise TaxonomyConfigError(
+            "setups not allowed by the signal contract: " + ", ".join(unknown)
+        )
+
+
 def _parse_regime_setups(
     data: Any,
     base: Mapping[str, tuple[str, ...]],
@@ -633,6 +654,7 @@ def parse_taxonomy_config(
 
     thresholds = RegimeThresholds.from_mapping(document.get("regime_thresholds"))
     setups = _parse_setups(document.get("setups"), DEFAULT_SETUPS)
+    _validate_contract_setups(setups)
     regime_setups = _parse_regime_setups(document.get("regime_setups"), DEFAULT_REGIME_SETUPS, setups)
     pair_overrides = _parse_pair_overrides(document.get("pair_overrides"))
     jev = JevSettings.from_mapping(document.get("jev"))
@@ -722,6 +744,36 @@ def load_taxonomy_config(path: str | None = None) -> RegimeTaxonomyConfig:
 def get_taxonomy_config(path: str | None = None) -> RegimeTaxonomyConfig:
     """Alias for :func:`load_taxonomy_config` used by call sites."""
     return load_taxonomy_config(path)
+
+
+# ------------------------------------------------------------ output contract
+def build_signal_taxonomy_output_contract(
+    config: RegimeTaxonomyConfig,
+    timeframe: str | None = "1h",
+) -> str:
+    """Build the optional-taxonomy addendum of the signal output contract.
+
+    The setup labels come from the effective ``regime_setups`` mapping, so the
+    prompt can never ask for a setup the config does not allow. Regimes and
+    htf alignments are the fixed contract enums.
+    """
+    labels: list[str] = []
+    for regime in REGIMES:
+        for name in config.allowed_setups(regime):
+            if name not in labels:
+                labels.append(name)
+    if not labels:
+        labels.append("none")
+    elif "none" not in labels:
+        labels.append("none")
+    label = str(timeframe).strip().lower() if timeframe else "1h"
+    return (
+        f'- Optional {label} taxonomy keys inside "analysis": "setup" '
+        f"({'|'.join(labels)}), "
+        f'"regime" ({"|".join(REGIMES)}), '
+        '"htf_alignment" (aligned|counter|neutral). Omit a key or use null when '
+        "unknown; never invent a label outside these lists.\n"
+    )
 
 
 # --------------------------------------------------------------------- rendering
