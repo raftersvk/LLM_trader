@@ -89,14 +89,37 @@ class FreqtradeReadOnlyClient:
         self._token = str(token)
         return self._token
 
-    async def open_trades(self) -> List[Dict[str, Any]]:
-        """Return the open trades (never logs prices, only a count)."""
+    async def _status_response(self) -> httpx.Response:
+        """GET /api/v1/status with the cached (or freshly obtained) bearer token."""
         assert self._client is not None
         token = await self._ensure_token()
-        response = await self._client.get(
+        return await self._client.get(
             f"{self.base_url}/api/v1/status",
             headers={"Authorization": f"Bearer {token}"},
         )
+
+    async def open_trades(self) -> List[Dict[str, Any]]:
+        """Return the open trades (never logs prices, only a count).
+
+        A cached token can expire between polls. On 401/403 the cached token is
+        invalidated, a single re-login is attempted, and the request is replayed
+        exactly once. A second auth failure propagates instead of looping.
+        """
+        response = await self._status_response()
+        if response.status_code in (401, 403):
+            logger.warning(
+                "Freqtrade status returned HTTP %d; invalidating cached token and "
+                "re-authenticating once",
+                response.status_code,
+            )
+            self._token = None
+            response = await self._status_response()
+            if response.status_code in (401, 403):
+                logger.error(
+                    "Freqtrade status still returned HTTP %d after re-authentication; "
+                    "giving up this poll",
+                    response.status_code,
+                )
         response.raise_for_status()
         data = response.json()
         if not isinstance(data, list):
