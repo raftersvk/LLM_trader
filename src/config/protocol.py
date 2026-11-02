@@ -126,6 +126,16 @@ class ConfigProtocol(Protocol):
     @property
     def INCLUDE_COIN_DESCRIPTION(self) -> bool: ...
 
+    # LLM-focus v2 rollout flags (all default off)
+    @property
+    def LLM_FOCUS_V2(self) -> bool: ...
+
+    @property
+    def SHORTLIST_V2(self) -> bool: ...
+
+    @property
+    def EVENT_POSITIONS_V2(self) -> bool: ...
+
 
 
     @property

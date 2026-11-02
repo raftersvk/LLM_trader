@@ -157,6 +157,17 @@ deepseek_max_tokens = 65536
 google_temperature = 1.0
 google_top_p = 0.95
 google_top_k = 64
+[llm_focus]
+# LLM-focus v2 rollout flags. All default to false: with these flags off the
+# legacy pipeline is unchanged.
+# Phase 1: v2 prompt/schema. The LLM stops self-reporting regime/HTF, position
+# size and absolute SL/TP; the deterministic strategy layer owns them.
+llm_focus_v2 = false
+# Phase 2: recall-oriented pre-LLM shortlist (P0-A regime/setups, ATR, positions).
+shortlist_v2 = false
+# Phase 3: event-driven LLM position reviews (regime flip, near SL/TP, ATR shock, stale).
+event_positions_v2 = false
+
 [risk_management]
 # SL/TP execution mode: soft (candle-close only) | hard (intra-candle polling)
 stop_loss_type = hard

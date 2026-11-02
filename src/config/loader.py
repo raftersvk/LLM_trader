@@ -11,6 +11,7 @@ from typing import Any
 
 from dotenv import dotenv_values
 
+from src.llm_focus.flags import coerce_flag_value
 from src.utils.prompt_budget import PromptBudgetPolicy
 from src.utils.timeframe_validator import TimeframeValidator
 
@@ -536,6 +537,27 @@ class Config:
     def INCLUDE_COIN_DESCRIPTION(self) -> bool:
         """Whether to include project description in coin details section."""
         return self.get_config("general", "include_coin_description", False)
+
+    # LLM-focus v2 Feature Flags (all default off)
+    @property
+    def LLM_FOCUS_V2(self) -> bool:
+        """Use the v2 prompt/schema that leaves regime, size and SL/TP to the strategy."""
+        return self._feature_flag("llm_focus_v2")
+
+    @property
+    def SHORTLIST_V2(self) -> bool:
+        """Use the recall-oriented pre-LLM shortlist."""
+        return self._feature_flag("shortlist_v2")
+
+    @property
+    def EVENT_POSITIONS_V2(self) -> bool:
+        """Use event-driven LLM position reviews instead of routine reviews."""
+        return self._feature_flag("event_positions_v2")
+
+    def _feature_flag(self, key: str) -> bool:
+        """Read an [llm_focus] boolean and default to off for unknown values."""
+        parsed = coerce_flag_value(self.get_config("llm_focus", key, False))
+        return False if parsed is None else parsed
 
     @property
     def DEBUG_SAVE_CHARTS(self):

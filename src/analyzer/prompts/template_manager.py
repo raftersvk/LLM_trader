@@ -12,6 +12,13 @@ from src.config.regime_taxonomy import (
     get_taxonomy_config,
     render_setup_taxonomy,
 )
+from src.llm_focus.flags import llm_focus_v2_enabled
+from src.llm_focus.prompts import (
+    build_v2_analysis_steps,
+    build_v2_decision_rules,
+    build_v2_response_template,
+    build_v2_system_prompt,
+)
 from src.logger.logger import Logger
 from src.parsing.unified_parser import UnifiedParser
 from src.trading.rr_policy import format_rr_floor, resolve_entry_rr_floor
@@ -360,6 +367,17 @@ class TemplateManager:
         Returns:
             str: Formatted system prompt
         """
+        if llm_focus_v2_enabled(self.config):
+            thresholds = dynamic_thresholds or {}
+            return build_v2_system_prompt(
+                symbol,
+                timeframe,
+                previous_response=previous_response,
+                performance_context=performance_context,
+                brain_context=brain_context,
+                last_analysis_time=last_analysis_time,
+                confidence_threshold=thresholds.get("confidence_threshold", 70),
+            )
         thresholds = dynamic_thresholds or {}
         adx_strong = thresholds.get("adx_strong_threshold", 25)
         _verbosity = self._normalize_model_verbosity(model_verbosity)
@@ -666,6 +684,9 @@ class TemplateManager:
         Returns:
             str: Decision Rules block for inclusion in the system prompt
         """
+        if llm_focus_v2_enabled(self.config):
+            thresholds = dynamic_thresholds or {}
+            return build_v2_decision_rules(thresholds.get("confidence_threshold", 70))
         # pylint: disable=too-many-locals
         _verbosity = self._normalize_model_verbosity(model_verbosity)
         thresholds = dynamic_thresholds or {}
@@ -944,6 +965,8 @@ create additional signals. End with a brief risk disclaimer before the final thr
         Returns:
             str: Formatted response template (output-format-only)
         """
+        if llm_focus_v2_enabled(self.config):
+            return build_v2_response_template(dynamic_thresholds)
         _thresholds = dynamic_thresholds or {}
         chart_validation_line = ""
         if has_chart_analysis:
@@ -1159,6 +1182,8 @@ Provide exactly ONE signal. No multi-step signals ("CLOSE then BUY", etc)."""
         Returns:
             str: Formatted analysis steps
         """
+        if llm_focus_v2_enabled(self.config):
+            return build_v2_analysis_steps(symbol)
         analyzed_base = symbol.split("/")[0] if "/" in symbol else symbol
 
         if available_periods:
