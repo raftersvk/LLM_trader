@@ -223,6 +223,10 @@ class CompositionRoot(ProvisioningMixin):
         self.engine_registry = AnalysisEngineRegistry()
         self.vector_memory_registry = VectorMemoryRegistry()
         self.multi_pair_manager = None
+        # Effective costs are resolved once at startup and shared with every
+        # analyzer engine so the v2 fee gate honours config.ini > taxonomy >
+        # defaults instead of re-resolving the taxonomy alone.
+        self._startup_costs: CostsSettings | None = None
 
     # pylint: disable=too-many-statements
     async def build_dependencies(self) -> dict:
@@ -230,6 +234,7 @@ class CompositionRoot(ProvisioningMixin):
         start_time = time.perf_counter()
 
         costs = _resolve_startup_costs(self.config, self.logger)
+        self._startup_costs = costs
         self.logger.info("Effective costs: %s", format_costs_summary(costs))
 
         self.console.clear()

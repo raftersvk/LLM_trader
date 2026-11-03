@@ -475,6 +475,7 @@ class ProvisioningMixin:
                 TrendValidator(),
                 PatternQualityScorer(),
                 RiskRewardValidator(),
+                costs=getattr(self, "_startup_costs", None),
             ),
             "chart_generator": ChartGenerator(
                 self.logger,
