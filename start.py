@@ -32,9 +32,16 @@ from src.composition.startup_support import (
 )
 from src.config.loader import config
 from src.config.regime_taxonomy import (
+    CostsSettings,
+    TaxonomyConfigError,
     format_costs_summary,
     load_taxonomy_config,
     resolve_costs_config,
+)
+from src.llm_focus.flags import (
+    event_positions_v2_enabled,
+    llm_focus_v2_enabled,
+    shortlist_v2_enabled,
 )
 from src.logger.logger import Logger
 from src.trading import (
@@ -158,6 +165,41 @@ class SingleInstanceLock:
 RELOAD_EXIT_CODE = 42
 
 
+def _any_v2_flag_enabled(config_obj) -> bool:
+    """Return True when at least one LLM-focus v2 flag is enabled."""
+    return any(
+        predicate(config_obj)
+        for predicate in (
+            llm_focus_v2_enabled,
+            shortlist_v2_enabled,
+            event_positions_v2_enabled,
+        )
+    )
+
+
+def _resolve_startup_costs(config_obj, logger) -> CostsSettings:
+    """Resolve the startup cost policy without letting a bad sibling file abort LIVE.
+
+    The external taxonomy is only read here for the effective-costs log line and
+    the fee-gate defaults. When every v2 flag is off the bot must keep starting
+    even if that file is invalid or carries fields this parser does not know;
+    the built-in defaults reproduce the pre-taxonomy behaviour. With a v2 flag
+    enabled the taxonomy is load-bearing, so the error stays fatal.
+    """
+    try:
+        taxonomy = load_taxonomy_config()
+    except (TaxonomyConfigError, OSError) as exc:
+        if _any_v2_flag_enabled(config_obj):
+            raise
+        logger.warning(
+            "Invalid external taxonomy config ignored (%s); using built-in "
+            "defaults because no v2 flag is enabled.",
+            exc,
+        )
+        taxonomy = None
+    return resolve_costs_config(taxonomy, config_obj.costs_overrides())
+
+
 class CompositionRoot(ProvisioningMixin):
     """Composition Root for the trading bot application.
 
@@ -187,9 +229,7 @@ class CompositionRoot(ProvisioningMixin):
         """Build all dependencies for the trading bot via segmented provisions."""
         start_time = time.perf_counter()
 
-        costs = resolve_costs_config(
-            load_taxonomy_config(), self.config.costs_overrides()
-        )
+        costs = _resolve_startup_costs(self.config, self.logger)
         self.logger.info("Effective costs: %s", format_costs_summary(costs))
 
         self.console.clear()

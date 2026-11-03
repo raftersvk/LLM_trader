@@ -533,6 +533,8 @@ def _default_setup(
     tp_atr: float | None = None,
     trail_atr: float | None = None,
     be_at_r: float | None = None,
+    tp_mode: str = TP_MODE_ATR_MULTIPLE,
+    tp_submode: str | None = None,
 ) -> SetupDefinition:
     """Build one built-in setup definition (mirrors the W3 canonical file)."""
     return SetupDefinition(
@@ -547,6 +549,8 @@ def _default_setup(
         tp_atr=tp_atr,
         trail_atr=trail_atr,
         be_at_r=be_at_r,
+        tp_mode=tp_mode,
+        tp_submode=tp_submode,
     )
 
 
@@ -621,6 +625,7 @@ DEFAULT_SETUPS: Mapping[str, SetupDefinition] = {
         12,
         sl_atr=2.0,
         tp_atr=4.5,
+        tp_mode=TP_MODE_STRUCTURE,
     ),
     "range_mean_reversion": _default_setup(
         "range_mean_reversion",
@@ -632,6 +637,7 @@ DEFAULT_SETUPS: Mapping[str, SetupDefinition] = {
         12,
         sl_atr=2.0,
         tp_atr=4.5,
+        tp_mode=TP_MODE_STRUCTURE,
     ),
 }
 

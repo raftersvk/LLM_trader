@@ -713,10 +713,27 @@ def test_setup_tp_mode_validation_and_defaults():
 
 def test_built_in_defaults_equal_the_canonical_document(tmp_path):
     canonical = load_taxonomy_config(
-        _write(tmp_path / "regime_taxonomy.yaml", CANONICAL_TAXONOMY_YAML)
+        _write(tmp_path / "regime_taxonomy.yaml", CANONICAL_PR18_TAXONOMY_YAML)
     )
 
     assert default_taxonomy_config().as_dict() == canonical.as_dict()
+
+
+def test_built_in_defaults_set_structure_mode_for_the_range_setups():
+    defaults = default_taxonomy_config()
+
+    for name in ("range_mean_reversion", "range_fade_extreme"):
+        assert defaults.setups[name].tp_mode == TP_MODE_STRUCTURE
+        assert defaults.setups[name].tp_submode is None
+    for name in (
+        "trend_pullback",
+        "breakout_retest",
+        "momentum_continuation",
+        "rally_failure",
+        "breakdown_retest",
+        "momentum_short",
+    ):
+        assert defaults.setups[name].tp_mode == TP_MODE_ATR_MULTIPLE, name
 
 
 # ------------------------------------------------------------------ thresholds
