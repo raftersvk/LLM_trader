@@ -61,6 +61,58 @@ class TestBuildShortlist:
             REASON_NO_ALLOWED_SETUPS,
         )
 
+    def test_accepts_real_p0a_trend_up_candidate(self):
+        result = build_shortlist(
+            [
+                _candidate(
+                    regime="trend_up",
+                    allowed_setups=(
+                        "trend_pullback",
+                        "breakout_retest",
+                        "momentum_continuation",
+                    ),
+                )
+            ]
+        )
+        assert result.symbols == ("BTC/USDT",)
+        assert result.candidates[0].regime == "TRENDING_UP"
+
+    def test_accepts_real_p0a_trend_down_setup(self):
+        result = build_shortlist(
+            [
+                _candidate(
+                    regime="trend_down",
+                    allowed_setups=("rally_failure", "breakdown_retest", "momentum_short"),
+                    setup="rally_failure",
+                    direction="SHORT",
+                    jev_bias="SHORT",
+                )
+            ]
+        )
+        assert result.symbols == ("BTC/USDT",)
+        assert result.candidates[0].setup == "RALLY_FAILURE"
+
+    def test_rejects_explicit_empty_allowed_setups_for_known_regime(self):
+        result = build_shortlist(
+            [_candidate(regime="trend_up", allowed_setups=(), setup="TREND_PULLBACK")]
+        )
+        assert result.symbols == ()
+        assert result.rejections[0].reasons == (REASON_NO_ALLOWED_SETUPS,)
+
+    def test_rejects_disabled_timeframe_empty_allowed_setups(self):
+        result = build_shortlist(
+            [_candidate(regime="range", allowed_setups=(), setup="RANGE_FADE_EXTREME")]
+        )
+        assert result.symbols == ()
+        assert result.rejections[0].reasons == (REASON_NO_ALLOWED_SETUPS,)
+
+    @pytest.mark.parametrize("regime", ["low_vol", "high_vol", "unclear"])
+    def test_rejects_no_trade_regimes_as_no_allowed_setups(self, regime):
+        result = build_shortlist([_candidate(regime=regime, allowed_setups=(), setup=None)])
+        assert result.symbols == ()
+        assert result.rejections[0].reasons == (REASON_NO_ALLOWED_SETUPS,)
+        assert REASON_REGIME_UNKNOWN not in result.rejections[0].reasons
+
     def test_rejects_setup_outside_p0a_allowed_list(self):
         result = build_shortlist([_candidate(setup="RANGE_FADE")])
         assert result.rejections[0].reasons == (REASON_SETUP_NOT_ALLOWED,)

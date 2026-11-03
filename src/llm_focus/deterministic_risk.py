@@ -10,12 +10,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from src.config.regime_taxonomy import DEFAULT_REGIME_SETUPS
+
 TRENDING_UP = "TRENDING_UP"
 TRENDING_DOWN = "TRENDING_DOWN"
 RANGING = "RANGING"
+NO_TRADE = "NO_TRADE"
 UNKNOWN = "UNKNOWN"
 
+# Canonical P0-A labels (src/config/regime_taxonomy.py REGIMES) plus legacy
+# aliases kept for older prompts/archives. Low/high volatility and unclear are
+# hard no-trade regimes, not unknown ones.
 _REGIME_ALIASES = {
+    "TREND_UP": TRENDING_UP,
+    "TREND_DOWN": TRENDING_DOWN,
+    "RANGE": RANGING,
+    "LOW_VOL": NO_TRADE,
+    "HIGH_VOL": NO_TRADE,
+    "UNCLEAR": NO_TRADE,
     "BULLISH": TRENDING_UP,
     "UP": TRENDING_UP,
     "UPTREND": TRENDING_UP,
@@ -23,16 +35,20 @@ _REGIME_ALIASES = {
     "DOWN": TRENDING_DOWN,
     "DOWNTREND": TRENDING_DOWN,
     "NEUTRAL": RANGING,
-    "RANGE": RANGING,
     "SIDEWAYS": RANGING,
 }
 
-DEFAULT_ALLOWED_SETUPS: dict[str, tuple[str, ...]] = {
-    TRENDING_UP: ("TREND_PULLBACK", "BREAKOUT_RETEST", "MOMENTUM_CONTINUATION"),
-    TRENDING_DOWN: ("TREND_PULLBACK", "BREAKDOWN_RETEST", "MOMENTUM_CONTINUATION"),
-    RANGING: ("RANGE_FADE", "MEAN_REVERSION"),
-    UNKNOWN: (),
+_DEFAULT_SETUPS_FROM_TAXONOMY = {
+    TRENDING_UP: DEFAULT_REGIME_SETUPS["trend_up"],
+    TRENDING_DOWN: DEFAULT_REGIME_SETUPS["trend_down"],
+    RANGING: DEFAULT_REGIME_SETUPS["range"],
 }
+
+DEFAULT_ALLOWED_SETUPS: dict[str, tuple[str, ...]] = {
+    regime: tuple(setup.upper() for setup in setups)
+    for regime, setups in _DEFAULT_SETUPS_FROM_TAXONOMY.items()
+}
+DEFAULT_ALLOWED_SETUPS.update({NO_TRADE: (), UNKNOWN: ()})
 
 _CONFIDENCE_SIZE = {"HIGH": 0.03, "MEDIUM": 0.02, "LOW": 0.01}
 
@@ -103,14 +119,17 @@ def assess_regime(
 ) -> RegimeAssessment:
     """Build a normalized regime assessment from P0-A inputs.
 
-    When ``allowed_setups`` is omitted the defaults for the normalized regime
-    are used. Unknown regimes have no allowed setups, which makes the shortlist
-    fail closed.
+    ``allowed_setups=None`` means the field was omitted, so the defaults for the
+    normalized regime are used. An explicit empty list means P0-A declared a
+    hard no-trade (no-trade regime or disabled timeframe) and must stay empty
+    so the shortlist rejects the candidate. Unknown regimes have no allowed
+    setups, which makes the shortlist fail closed.
     """
     normalized_regime = normalize_regime(regime)
-    setups = normalize_setups(allowed_setups)
-    if not setups:
+    if allowed_setups is None:
         setups = DEFAULT_ALLOWED_SETUPS[normalized_regime]
+    else:
+        setups = normalize_setups(allowed_setups)
     safe_atr_pct = float(atr_pct) if atr_pct is not None else 0.0
     return RegimeAssessment(
         regime=normalized_regime,

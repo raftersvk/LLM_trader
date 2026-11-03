@@ -3,6 +3,7 @@
 import pytest
 
 from src.llm_focus.deterministic_risk import (
+    NO_TRADE,
     RANGING,
     TRENDING_DOWN,
     TRENDING_UP,
@@ -24,6 +25,41 @@ class TestRegime:
         assert normalize_regime("neutral") == RANGING
         assert normalize_regime("sideways") == RANGING
 
+    @pytest.mark.parametrize(
+        ("p0a_regime", "expected_regime", "expected_setups"),
+        [
+            (
+                "trend_up",
+                TRENDING_UP,
+                ("TREND_PULLBACK", "BREAKOUT_RETEST", "MOMENTUM_CONTINUATION"),
+            ),
+            (
+                "trend_down",
+                TRENDING_DOWN,
+                ("RALLY_FAILURE", "BREAKDOWN_RETEST", "MOMENTUM_SHORT"),
+            ),
+            ("range", RANGING, ("RANGE_FADE_EXTREME", "RANGE_MEAN_REVERSION")),
+            ("low_vol", NO_TRADE, ()),
+            ("high_vol", NO_TRADE, ()),
+            ("unclear", NO_TRADE, ()),
+        ],
+    )
+    def test_canonical_p0a_regimes_use_taxonomy_setups(
+        self, p0a_regime, expected_regime, expected_setups
+    ):
+        assessment = assess_regime(p0a_regime, atr_pct=2.0)
+
+        assert assessment.regime == expected_regime
+        assert assessment.allowed_setups == expected_setups
+
+    def test_no_trade_regimes_are_not_unknown(self):
+        for p0a_regime in ("low_vol", "high_vol", "unclear"):
+            assessment = assess_regime(p0a_regime, atr_pct=2.0)
+
+            assert assessment.regime == NO_TRADE
+            assert assessment.regime != UNKNOWN
+            assert assessment.allowed_setups == ()
+
     def test_unknown_regime_fails_closed(self):
         assessment = assess_regime("mystery", atr_pct=2.0)
         assert assessment.regime == UNKNOWN
@@ -33,6 +69,31 @@ class TestRegime:
         assessment = assess_regime("trending_up", atr_pct=2.0)
         assert "TREND_PULLBACK" in assessment.allowed_setups
         assert assessment.volatility == "MEDIUM"
+
+    def test_omitted_allowed_setups_use_regime_defaults(self):
+        omitted = assess_regime("trend_up", atr_pct=2.0)
+        explicit_null = assess_regime_from_mapping({"regime": "trend_up", "atr_pct": 2.0})
+
+        assert omitted.allowed_setups == (
+            "TREND_PULLBACK",
+            "BREAKOUT_RETEST",
+            "MOMENTUM_CONTINUATION",
+        )
+        assert explicit_null.allowed_setups == omitted.allowed_setups
+
+    def test_explicit_empty_allowed_setups_stay_no_trade(self):
+        assessment = assess_regime("trend_up", allowed_setups=[], atr_pct=2.0)
+
+        assert assessment.regime == TRENDING_UP
+        assert assessment.allowed_setups == ()
+
+    def test_disabled_timeframe_empty_allowed_setups_stay_no_trade(self):
+        assessment = assess_regime_from_mapping(
+            {"regime": "range", "allowed_setups": [], "atr_pct": 2.0}
+        )
+
+        assert assessment.regime == RANGING
+        assert assessment.allowed_setups == ()
 
     def test_explicit_setups_are_normalized(self):
         assessment = assess_regime(
