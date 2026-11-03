@@ -558,9 +558,11 @@ class RiskSettings:
             raise TaxonomyConfigError(
                 f"risk.exposure_mode must be one of {'|'.join(EXPOSURE_MODES)}"
             )
-        pair_overrides = _parse_risk_pair_overrides(data.get("pair_overrides"))
+        pair_overrides = _parse_risk_pair_overrides(
+            data.get("pair_overrides", base.pair_overrides)
+        )
         regime_multipliers = _parse_regime_multipliers(
-            data.get("regime_risk_multipliers")
+            data.get("regime_risk_multipliers", base.regime_risk_multipliers)
         )
         return cls(
             risk_per_trade_pct=risk_per_trade_pct,

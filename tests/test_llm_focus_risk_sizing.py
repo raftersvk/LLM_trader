@@ -126,6 +126,61 @@ class TestRiskSettings:
         effective = resolve_risk_config(taxonomy, {})
         assert effective.max_portfolio_exposure_pct == pytest.approx(50.0)
 
+    def test_absent_config_ini_keeps_taxonomy_pair_and_regime_maps(self):
+        taxonomy = parse_taxonomy_config(
+            {
+                "risk": {
+                    "risk_per_trade_pct": 0.25,
+                    "pair_overrides": {"BEAMX/USDT": 0.1, "TRX/USDT": 0.15},
+                    "regime_risk_multipliers": {"high_vol": 0.5, "low_vol": 1.0},
+                }
+            }
+        )
+
+        effective = resolve_risk_config(taxonomy, {})
+
+        assert effective.pair_overrides == {
+            "BEAMX/USDT": pytest.approx(0.1),
+            "TRX/USDT": pytest.approx(0.15),
+        }
+        assert effective.regime_risk_multipliers == {
+            "high_vol": pytest.approx(0.5),
+            "low_vol": pytest.approx(1.0),
+        }
+        summary = format_risk_summary(effective)
+        assert "pair_risk=BEAMX/USDT=0.1%,TRX/USDT=0.15%" in summary
+        assert "regime_multipliers=high_vol=0.5,low_vol=1" in summary
+
+    def test_config_ini_pair_and_regime_maps_win_over_taxonomy(self):
+        taxonomy = parse_taxonomy_config(
+            {
+                "risk": {
+                    "pair_overrides": {"BEAMX/USDT": 0.1},
+                    "regime_risk_multipliers": {"high_vol": 0.5},
+                }
+            }
+        )
+        overrides = {
+            "pair_overrides": {"TRX/USDT": 0.2},
+            "regime_risk_multipliers": {"low_vol": 1.0},
+        }
+
+        effective = resolve_risk_config(taxonomy, overrides)
+
+        assert effective.pair_overrides == {"TRX/USDT": pytest.approx(0.2)}
+        assert effective.regime_risk_multipliers == {"low_vol": pytest.approx(1.0)}
+        assert "BEAMX/USDT" not in format_risk_summary(effective)
+        assert "high_vol" not in format_risk_summary(effective)
+
+    def test_fully_empty_taxonomy_and_config_keep_empty_maps(self):
+        effective = resolve_risk_config(parse_taxonomy_config({}), {})
+
+        assert effective.pair_overrides == {}
+        assert effective.regime_risk_multipliers == {}
+        summary = format_risk_summary(effective)
+        assert "pair_risk=none" in summary
+        assert "regime_multipliers=none" in summary
+
     @pytest.mark.parametrize(
         "risk",
         [
