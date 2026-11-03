@@ -62,7 +62,7 @@ costs:
 
 - **Précédence** : `config.ini` > taxonomie YAML > défauts intégrés. Le bloc `[costs]` de `config.ini` existe parce que venue/tier sont propres au compte. Les valeurs effectives sont loguées au démarrage (`Effective costs: ...`).
 - Les nombres Kraken viennent de `src/llm_focus/fees.py` (spot T1 0,40/0,80 ; T2 0,30/0,60 ; T3 0,22/0,38 ; stablecoin 0,20/0,20 ; futures T1 0,02/0,05). Le YAML et `config.ini` les surchargent.
-- La porte d'entrée, appliquée **après** les validations de C (côté, 0,5–10 %, entrée présente), exige les deux conditions :
+- La porte d'entrée, appliquée **après** les validations de C (côté, bande ATR relative, entrée présente), exige les deux conditions :
   - `tp_distance_pct >= min_edge_multiple * round_trip` sinon `fees_exceed_edge` ;
   - `(tp_distance_pct - round_trip) / (sl_distance_pct + round_trip) >= min_rr` sinon `fees_break_rr`.
 - La sortie est supposée **taker** sauf sortie maker documentée. Un échec est explicite (`risk_approved=false`) et les niveaux ne sont jamais remplacés.
