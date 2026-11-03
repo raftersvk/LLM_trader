@@ -195,7 +195,8 @@ class AnalysisResultProcessor:
         deterministic target validation (correct side, R/R floor), the
         ATR-relative stop band and the fee-aware entry gate. The resulting
         ``risk_approved`` flag and explicit rejection reason are written back
-        into ``analysis`` so an invalid signal cannot be executed silently.
+        into ``analysis``; a rejected BUY/SELL is also downgraded to HOLD so the
+        live strategy and executor cannot open the trade.
         """
         analysis = normalized.get("analysis")
         if not isinstance(analysis, dict):
@@ -207,9 +208,9 @@ class AnalysisResultProcessor:
         stop_loss = analysis.get("stop_loss")
         take_profit = analysis.get("take_profit")
         if stop_loss is None or take_profit is None:
-            analysis["risk_approved"] = False
-            analysis["risk_rejection_reason"] = (
-                "LLM stop_loss and take_profit must both be provided"
+            self._reject_v2_signal(
+                analysis,
+                "LLM stop_loss and take_profit must both be provided",
             )
             return
 
@@ -235,7 +236,7 @@ class AnalysisResultProcessor:
         )
         analysis["risk_approved"] = plan.risk_approved
         if plan.rejection_reason:
-            analysis["risk_rejection_reason"] = plan.rejection_reason
+            self._reject_v2_signal(analysis, plan.rejection_reason)
         if plan.rr_ratio is not None:
             analysis["risk_reward_ratio"] = plan.rr_ratio
         normalized["risk_plan"] = {
@@ -247,6 +248,14 @@ class AnalysisResultProcessor:
             "tp_distance_pct": plan.tp_distance_pct,
             "rr_ratio": plan.rr_ratio,
         }
+
+    @staticmethod
+    def _reject_v2_signal(analysis: dict[str, Any], reason: str) -> None:
+        """Mark a v2 entry rejected and downgrade it to HOLD for execution."""
+        analysis["risk_rejected_signal"] = analysis.get("signal")
+        analysis["signal"] = "HOLD"
+        analysis["risk_approved"] = False
+        analysis["risk_rejection_reason"] = reason
 
     def _v2_costs(self) -> CostsSettings:
         """Resolve effective costs for the v2 fee gate, falling back safely."""

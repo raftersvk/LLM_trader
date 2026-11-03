@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.analyzer.decision_contract import validate_decision_payload
 from src.llm_focus.prompts import (
     V2_ACTIONS,
     V2_ANALYSIS_SCHEMA,
@@ -156,6 +157,24 @@ class TestV2Mapping:
         assert validate_v2_payload(payload) == ()
         mapped = to_v1_compatible(payload, entry_price=100_000.0)["analysis"]
         assert mapped["signal"] == action.upper()
+
+    @pytest.mark.parametrize(
+        ("confidence", "expected"),
+        [(72.5, 73), (72.4, 72), (78, 78), (140, 100), (-3, 0)],
+    )
+    def test_to_v1_compatible_coerces_confidence_to_the_integer_contract(
+        self, confidence, expected
+    ):
+        payload = _valid_payload()
+        payload["analysis"]["confidence"] = confidence
+
+        mapped = to_v1_compatible(
+            payload, entry_price=100_000.0, position_size=0.02
+        )["analysis"]
+
+        assert mapped["confidence"] == expected
+        assert isinstance(mapped["confidence"], int)
+        assert validate_decision_payload({"analysis": mapped}) == []
 
     def test_v2_template_contract(self):
         template = build_v2_response_template()

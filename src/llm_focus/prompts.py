@@ -265,7 +265,7 @@ def to_v1_compatible(
     action = str(analysis.get("action") or "").strip().upper()
     mapped: dict[str, Any] = {
         "signal": action,
-        "confidence": analysis.get("confidence"),
+        "confidence": _v1_confidence(analysis.get("confidence")),
         "reasoning": analysis.get("reasoning", ""),
         "setup": analysis.get("setup"),
         "entry_thesis": analysis.get("entry_thesis"),
@@ -297,6 +297,22 @@ def _positive_number(value: Any) -> float | None:
         return None
     numeric = float(value)
     return numeric if math.isfinite(numeric) and numeric > 0 else None
+
+
+def _v1_confidence(value: Any) -> Any:
+    """Coerce the v2 numeric confidence to the v1 integer contract.
+
+    The v2 schema accepts any number in 0..100 while ``validate_decision_payload``
+    requires an integer. A fractional value such as 72.5 would otherwise trigger
+    a spurious correction retry and still fail validation, so round to the
+    nearest integer and clamp to the v1 range. Non-numeric values stay untouched
+    for the contract to report.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    if not math.isfinite(float(value)):
+        return value
+    return min(100, max(0, int(math.floor(float(value) + 0.5))))
 
 
 def _derive_risk_reward_ratio(

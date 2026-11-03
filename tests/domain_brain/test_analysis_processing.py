@@ -516,7 +516,8 @@ async def test_llm_focus_v2_fee_gate_rejects_a_thin_target_end_to_end():
     )
 
     analysis = result["analysis"]
-    assert analysis["signal"] == "BUY"
+    assert analysis["signal"] == "HOLD"
+    assert analysis["risk_rejected_signal"] == "BUY"
     assert analysis["risk_approved"] is False
     assert "fees_break_rr" in analysis["risk_rejection_reason"]
     assert result["risk_plan"]["risk_approved"] is False
@@ -534,7 +535,8 @@ async def test_llm_focus_v2_atr_band_rejects_an_implausible_stop_end_to_end():
     )
 
     analysis = result["analysis"]
-    assert analysis["signal"] == "BUY"
+    assert analysis["signal"] == "HOLD"
+    assert analysis["risk_rejected_signal"] == "BUY"
     assert analysis["risk_approved"] is False
     assert "implausible_stop" in analysis["risk_rejection_reason"]
     assert result["risk_plan"]["risk_approved"] is False
