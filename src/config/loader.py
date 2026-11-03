@@ -601,6 +601,19 @@ class Config:
             return int(number) if number.is_integer() else value
         return number
 
+    def risk_sizing_overrides(self) -> dict[str, Any]:
+        """Return the optional [risk_sizing] block for config.ini precedence."""
+        section = self._config_data.get("risk_sizing")
+        if not isinstance(section, dict):
+            return {}
+        overrides = dict(section)
+        # ``_convert_value`` maps the bare literal "1" to True; restore the
+        # numeric values expected by RiskSettings.
+        for key in ("risk_per_trade_pct", "min_size_pct", "max_leverage", "max_portfolio_exposure_pct"):
+            if isinstance(overrides.get(key), bool):
+                overrides[key] = int(overrides[key])
+        return overrides
+
     @property
     def DEBUG_SAVE_CHARTS(self):
         return self.get_config("debug", "save_chart_images", False)

@@ -452,6 +452,216 @@ class CostsSettings:
         )
 
 
+EXPOSURE_MODE_SCALE_DOWN = "scale_down"
+EXPOSURE_MODE_REJECT = "reject"
+EXPOSURE_MODES: tuple[str, ...] = (EXPOSURE_MODE_SCALE_DOWN, EXPOSURE_MODE_REJECT)
+
+
+@dataclass(frozen=True)
+class RiskSettings:
+    """Risk-budget position sizing policy (v2, flag-gated).
+
+    The **risk level is the tuning knob**; position size is a consequence of
+    it and the validated stop distance::
+
+        size_pct = risk_per_trade_pct / sl_distance_pct
+
+    Both inputs are percentages, so a 0.25% risk on a 2% stop gives
+    ``0.25 / 2.0 = 0.125`` (12.5% of capital). There is **no fixed per-trade
+    size cap** by default: the real brakes are the portfolio exposure ceiling
+    (``max_portfolio_exposure_pct``) and the account limits (spot 100%,
+    futures ``max_leverage``). An optional canonical per-pair ``max_stake``
+    (quote currency) still acts as an explicit safety cap when configured.
+
+    ``risk_per_trade_pct`` is the global default. ``pair_overrides`` maps a
+    symbol to its own risk level (for example a volatile pair such as
+    ``BEAMX/USDT`` at 0.10-0.15%). ``regime_risk_multipliers`` scales the
+    effective risk per regime (for example ``high_vol: 0.5``); an absent or
+    ``1.0`` multiplier is neutral.
+
+    ``max_portfolio_exposure_pct`` is a percentage of capital. When absent it
+    follows the trading mode: 100% on spot and 200% on futures.
+
+    A taxonomy ``risk`` block or a config.ini ``[risk_sizing]`` block overrides
+    the defaults; config.ini has the highest precedence.
+    """
+
+    risk_per_trade_pct: float = 0.25
+    min_size_pct: float = 0.1
+    max_leverage: float = 1.0
+    max_portfolio_exposure_pct: float | None = None
+    exposure_mode: str = EXPOSURE_MODE_SCALE_DOWN
+    pair_overrides: Mapping[str, float] = field(default_factory=dict)
+    regime_risk_multipliers: Mapping[str, float] = field(default_factory=dict)
+
+    _FIELDS: ClassVar[tuple[str, ...]] = (
+        "risk_per_trade_pct",
+        "min_size_pct",
+        "max_leverage",
+        "max_portfolio_exposure_pct",
+        "exposure_mode",
+        "pair_overrides",
+        "regime_risk_multipliers",
+    )
+
+    @classmethod
+    def from_mapping(
+        cls,
+        data: Mapping[str, Any] | None,
+        base: "RiskSettings | None" = None,
+    ) -> "RiskSettings":
+        """Validate a ``risk`` block on top of ``base`` (defaults when absent)."""
+        base = base or cls()
+        if data is None:
+            return base
+        if not isinstance(data, Mapping):
+            raise TaxonomyConfigError("risk must be a mapping")
+        unknown = set(data) - set(cls._FIELDS)
+        if unknown:
+            raise TaxonomyConfigError(
+                f"risk has unknown keys: {', '.join(sorted(map(str, unknown)))}"
+            )
+        risk_per_trade_pct = _number(
+            data.get("risk_per_trade_pct", base.risk_per_trade_pct),
+            "risk.risk_per_trade_pct",
+            minimum=0.0,
+            allow_zero=False,
+        )
+        min_size_pct = _number(
+            data.get("min_size_pct", base.min_size_pct),
+            "risk.min_size_pct",
+            minimum=0.0,
+            allow_zero=True,
+        )
+        max_leverage = _number(
+            data.get("max_leverage", base.max_leverage),
+            "risk.max_leverage",
+            minimum=1.0,
+            allow_zero=True,
+        )
+        exposure_raw = data.get("max_portfolio_exposure_pct", base.max_portfolio_exposure_pct)
+        max_portfolio_exposure_pct = (
+            None
+            if exposure_raw is None
+            else _number(
+                exposure_raw,
+                "risk.max_portfolio_exposure_pct",
+                minimum=0.0,
+                allow_zero=False,
+            )
+        )
+        exposure_mode = _string(
+            data.get("exposure_mode", base.exposure_mode),
+            "risk.exposure_mode",
+        ).lower()
+        if exposure_mode not in EXPOSURE_MODES:
+            raise TaxonomyConfigError(
+                f"risk.exposure_mode must be one of {'|'.join(EXPOSURE_MODES)}"
+            )
+        pair_overrides = _parse_risk_pair_overrides(data.get("pair_overrides"))
+        regime_multipliers = _parse_regime_multipliers(
+            data.get("regime_risk_multipliers")
+        )
+        return cls(
+            risk_per_trade_pct=risk_per_trade_pct,
+            min_size_pct=min_size_pct,
+            max_leverage=max_leverage,
+            max_portfolio_exposure_pct=max_portfolio_exposure_pct,
+            exposure_mode=exposure_mode,
+            pair_overrides=pair_overrides,
+            regime_risk_multipliers=regime_multipliers,
+        )
+
+    def min_size_fraction(self) -> float:
+        """Return the minimum tradable size as a fraction of capital."""
+        return self.min_size_pct / 100.0
+
+    def portfolio_exposure_pct(self, trading_mode: str = "spot") -> float:
+        """Return the effective portfolio ceiling in percent of capital."""
+        if self.max_portfolio_exposure_pct is not None:
+            return self.max_portfolio_exposure_pct
+        return 200.0 if str(trading_mode).strip().lower() == "futures" else 100.0
+
+    def risk_for_symbol(self, symbol: str | None = None) -> float:
+        """Return the global risk level or the pair's configured override."""
+        if not symbol:
+            return self.risk_per_trade_pct
+        compact = symbol.replace("/", "").split(":", 1)[0].upper()
+        for key, value in self.pair_overrides.items():
+            key_symbol = key.split(":", 1)[0]
+            if key_symbol == symbol or key_symbol.replace("/", "").upper() == compact:
+                return value
+        return self.risk_per_trade_pct
+
+    def regime_multiplier(self, regime: str | None = None) -> float:
+        """Return the regime risk multiplier; absent/unknown is neutral (1.0)."""
+        if not regime:
+            return 1.0
+        normalized = str(regime).strip().lower().replace("-", "_").replace(" ", "_")
+        return self.regime_risk_multipliers.get(normalized, 1.0)
+
+    def effective_risk_per_trade_pct(
+        self,
+        symbol: str | None = None,
+        regime: str | None = None,
+    ) -> float:
+        """Return the risk level after pair override and regime multiplier."""
+        return self.risk_for_symbol(symbol) * self.regime_multiplier(regime)
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the validated settings as a plain mapping."""
+        return {
+            "risk_per_trade_pct": float(self.risk_per_trade_pct),
+            "min_size_pct": float(self.min_size_pct),
+            "max_leverage": float(self.max_leverage),
+            "max_portfolio_exposure_pct": self.max_portfolio_exposure_pct,
+            "exposure_mode": self.exposure_mode,
+            "pair_overrides": dict(self.pair_overrides),
+            "regime_risk_multipliers": dict(self.regime_risk_multipliers),
+        }
+
+
+def _parse_risk_pair_overrides(data: Any) -> dict[str, float]:
+    """Parse the optional per-pair risk levels inside the ``risk`` block."""
+    if data is None:
+        return {}
+    if not isinstance(data, Mapping):
+        raise TaxonomyConfigError("risk.pair_overrides must be a mapping")
+    result: dict[str, float] = {}
+    for symbol, value in data.items():
+        name = _string(symbol, "risk.pair_overrides key")
+        result[name] = _number(
+            value,
+            f"risk.pair_overrides.{name}",
+            minimum=0.0,
+            allow_zero=False,
+        )
+    return result
+
+
+def _parse_regime_multipliers(data: Any) -> dict[str, float]:
+    """Parse the optional per-regime risk multipliers inside ``risk``."""
+    if data is None:
+        return {}
+    if not isinstance(data, Mapping):
+        raise TaxonomyConfigError("risk.regime_risk_multipliers must be a mapping")
+    unknown = [regime for regime in data if regime not in REGIMES]
+    if unknown:
+        raise TaxonomyConfigError(
+            "risk.regime_risk_multipliers has unknown regimes: "
+            f"{', '.join(map(str, unknown))}"
+        )
+    result: dict[str, float] = {}
+    for regime, value in data.items():
+        result[str(regime)] = _number(
+            value,
+            f"risk.regime_risk_multipliers.{regime}",
+            minimum=0.0,
+            allow_zero=False,
+        )
+    return result
+
+
 @dataclass(frozen=True)
 class RegimeTaxonomyConfig:
     """Validated taxonomy document used by the snapshot, prompt and JEV gate."""
@@ -464,6 +674,7 @@ class RegimeTaxonomyConfig:
     pair_overrides: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
     jev: JevSettings = field(default_factory=JevSettings)
     costs: CostsSettings = field(default_factory=CostsSettings)
+    risk: RiskSettings = field(default_factory=RiskSettings)
     source_path: str | None = None
 
     def timeframe_enabled(self, timeframe: str | None) -> bool:
@@ -517,6 +728,7 @@ class RegimeTaxonomyConfig:
                 "min_sl_atr_multiple": self.costs.min_sl_atr_multiple,
                 "max_sl_atr_multiple": self.costs.max_sl_atr_multiple,
             },
+            "risk": self.risk.as_dict(),
         }
 
 
@@ -867,6 +1079,7 @@ def parse_taxonomy_config(
         "pair_overrides",
         "jev",
         "costs",
+        "risk",
     }
     unknown = set(document) - known
     if unknown:
@@ -891,6 +1104,7 @@ def parse_taxonomy_config(
     pair_overrides = _parse_pair_overrides(document.get("pair_overrides"))
     jev = JevSettings.from_mapping(document.get("jev"))
     costs = CostsSettings.from_mapping(document.get("costs"))
+    risk = RiskSettings.from_mapping(document.get("risk"))
 
     return RegimeTaxonomyConfig(
         version=version,
@@ -901,6 +1115,7 @@ def parse_taxonomy_config(
         pair_overrides=pair_overrides,
         jev=jev,
         costs=costs,
+        risk=risk,
         source_path=source_path,
     )
 
@@ -923,6 +1138,44 @@ def format_costs_summary(costs: CostsSettings) -> str:
         f"round_trip={costs.round_trip_pct():g}% "
         f"min_edge={costs.min_edge_multiple:g}x "
         f"sl_atr=[{costs.min_sl_atr_multiple:g},{costs.max_sl_atr_multiple:g}]x"
+    )
+
+
+def resolve_risk_config(
+    taxonomy_config: RegimeTaxonomyConfig | None = None,
+    overrides: Mapping[str, Any] | None = None,
+) -> RiskSettings:
+    """Resolve effective sizing with precedence config.ini > taxonomy > defaults."""
+    taxonomy = taxonomy_config or default_taxonomy_config()
+    return RiskSettings.from_mapping(overrides, base=taxonomy.risk)
+
+
+def format_risk_summary(risk: RiskSettings) -> str:
+    """Return one-line startup summary of the effective sizing policy."""
+    exposure = (
+        "spot=100%/futures=200%"
+        if risk.max_portfolio_exposure_pct is None
+        else f"{risk.max_portfolio_exposure_pct:g}%"
+    )
+    pairs = (
+        ",".join(f"{symbol}={value:g}%" for symbol, value in sorted(risk.pair_overrides.items()))
+        or "none"
+    )
+    multipliers = (
+        ",".join(
+            f"{regime}={value:g}"
+            for regime, value in sorted(risk.regime_risk_multipliers.items())
+        )
+        or "none"
+    )
+    return (
+        f"risk_per_trade={risk.risk_per_trade_pct:g}% "
+        f"pair_risk={pairs} "
+        f"regime_multipliers={multipliers} "
+        f"min_size={risk.min_size_pct:g}% "
+        f"max_leverage={risk.max_leverage:g}x "
+        f"portfolio_exposure={exposure} "
+        f"exposure_mode={risk.exposure_mode}"
     )
 
 

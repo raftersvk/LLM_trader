@@ -19,7 +19,7 @@ La décision humaine du 2026-11-03 retient **définitivement la politique C** po
 | SL/TP | **LLM propose les niveaux absolus, le code VALIDE (politique C)** | A (multiples ATR taxonomie) : **-47,41 $ / -2,50 %** par trade. C : **-19,81 $ / -1,09 %**. B (structure) : **-41,09 $**. Sur **41 entrées communes**, B et C sont équivalentes et toutes deux significativement meilleures que A (**+0,43 pt**). A est **abandonnée**. B n'est pas retenue : une seule source de niveaux est plus simple. | Acté (C) |
 | VALIDATION DES NIVEAUX | **Bande SL relative à l'ATR** | Pas de plafond absolu de 10 % sur les niveaux LLM : `min_sl_atr_multiple × ATR <= sl_distance <= max_sl_atr_multiple × ATR` (défauts 0,25x/12x, configurables). Hors bande → `implausible_stop`. Les bornes 0,5–10 % ne restent que sur le repli ATR. | Acté |
 | FRAIS / EDGE | **Configuration + porte fail-closed** | `costs` : venue/tier/entry_order_type/maker_pct/taker_pct/min_edge_multiple. Précédence **config.ini > taxonomie > défauts**. Rejette `fees_exceed_edge` et `fees_break_rr`, sans substitution. Valeurs effectives loguées au démarrage. | Acté |
-| TAILLE | **Risque / volatilité** : `risque% / distance au SL%`, plafonnée par `max_stake` | Cible déterministe, indépendante du `position_size` LLM. | En évaluation, non implémentée |
+| TAILLE | **Risque / volatilité** : le **niveau de risque** est le levier, `taille = risque% / distance au SL%`, sans plafond fixe par trade ; freins = exposition portefeuille et limites de compte | Implémentée derrière `llm_focus_v2` (`false` par défaut), sans preuve de PnL ; voir ADR-0003. | En évaluation, implémentée (flag off) |
 
 ## Politique C — le LLM propose, le code valide
 
@@ -100,5 +100,4 @@ P0-A reste l'autorité tant que **l'accord indépendant JEV/P0-A est < 70 %** ou
 - Paires et levier.
 - Horaires de trading.
 - Seuil de confiance.
-- Implémentation de la taille risque/volatilité.
 - Validation d'un edge sur un échantillon plus large et hors spot-only.
