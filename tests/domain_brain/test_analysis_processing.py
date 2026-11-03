@@ -22,6 +22,7 @@ from src.analyzer.trend_validator import (
     TrendValidation,
     TrendValidator,
 )
+from src.config.regime_taxonomy import CostsSettings
 from src.dashboard.dashboard_state import DashboardState
 from src.dashboard.decision_presenter import (
     build_decision_graph,
@@ -111,7 +112,7 @@ def make_processor(*, supports_image: bool = True, chart_error: Exception | None
     )
 
 
-def make_json_parser_processor(first_response: str):
+def make_json_parser_processor(first_response: str, costs: CostsSettings | None = None):
     """Processor wired to the real parser so the reply contract is exercised."""
     model_manager = MagicMock()
     model_manager.supports_image_analysis.return_value = False
@@ -123,6 +124,7 @@ def make_json_parser_processor(first_response: str):
         trend_validator=TrendValidator(),
         quality_scorer=PatternQualityScorer(),
         risk_reward_validator=RiskRewardValidator(),
+        costs=costs,
     )
     return processor, model_manager
 
@@ -413,6 +415,132 @@ async def test_json_object_reply_keeps_the_narrative_and_a_trailing_block():
     block = result["raw_response"].split("```json", 1)[1].rsplit("```", 1)[0]
     assert json.loads(block)["analysis"]["signal"] == "BUY"
     model_manager.send_prompt_streaming.assert_awaited_once()
+
+
+def v2_json_reply(
+    *,
+    stop_loss: float = 98_000.0,
+    take_profit: float = 104_000.0,
+    action: str = "BUY",
+) -> str:
+    """Return a v2-shape LLM reply carrying absolute policy-C levels."""
+    return json.dumps(
+        {
+            "narrative": "1) SETUP: trend pullback held the 50 SMA.",
+            "analysis": {
+                "action": action,
+                "setup": "TREND_PULLBACK",
+                "entry_thesis": "Pullback held above the 50 SMA with volume support.",
+                "invalidation": "Close below the swing low invalidates the thesis.",
+                "confidence": 78,
+                "reasoning": "Trend and momentum align.",
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "news": ["ETF flow positive"],
+            },
+        }
+    )
+
+
+V2_JSON_REPLY = v2_json_reply()
+
+
+def v2_processor(reply: str, *, atr: float = 1_000.0):
+    """Build the real parser/processor pipeline for a v2 reply."""
+    processor, model_manager = make_json_parser_processor(
+        reply, costs=CostsSettings()
+    )
+    processor.context = AnalysisContext(
+        symbol="BTC/USDT",
+        current_price=100_000.0,
+        technical_data={"atr": atr, "atr_percent": atr / 100_000.0 * 100},
+    )
+    return processor, model_manager
+
+
+def v2_templates():
+    """Return the flag-on system/reply prompts used by the real pipeline."""
+    from src.analyzer.prompts.template_manager import TemplateManager
+
+    config = SimpleNamespace(
+        STOP_LOSS_TYPE="soft",
+        STOP_LOSS_CHECK_INTERVAL="1h",
+        TAKE_PROFIT_TYPE="soft",
+        TAKE_PROFIT_CHECK_INTERVAL="1h",
+        RESEARCH_TEAM_ENABLED=False,
+        PROVIDER="googleai",
+        MARKET_TYPE="spot",
+        ENTRY_ORDER_TYPE="market",
+        MODEL_VERBOSITY="medium",
+        LLM_FOCUS_V2=True,
+    )
+    manager = TemplateManager(config=config)
+    return manager.build_system_prompt("BTC/USDT"), manager.build_response_template()
+
+
+async def test_llm_focus_v2_flag_on_cycle_satisfies_decision_contract():
+    """A full flag-on cycle: v2 prompt -> v2 reply -> validated v1 decision."""
+    from src.analyzer.decision_contract import validate_decision_payload
+
+    system_prompt, response_template = v2_templates()
+    assert "V2 Decision Boundary" in system_prompt
+    assert '"action"' in response_template
+
+    processor, model_manager = v2_processor(V2_JSON_REPLY)
+
+    result = await processor.process_analysis(
+        system_prompt=system_prompt, prompt=response_template
+    )
+
+    analysis = result["analysis"]
+    assert analysis["signal"] == "BUY"
+    assert analysis["entry_price"] == 100_000.0
+    assert analysis["risk_reward_ratio"] == pytest.approx(2.0)
+    assert analysis["risk_approved"] is True
+    assert "risk_rejection_reason" not in analysis
+    assert 0 < analysis["position_size"] <= 1
+    assert validate_decision_payload(result) == []
+    assert result["response_validation"]["status"] == "valid"
+    model_manager.send_prompt_streaming.assert_awaited_once()
+
+
+async def test_llm_focus_v2_fee_gate_rejects_a_thin_target_end_to_end():
+    """A geometrically valid BUY whose fee-adjusted R/R fails is rejected."""
+    system_prompt, response_template = v2_templates()
+    processor, _ = v2_processor(
+        v2_json_reply(stop_loss=99_000.0, take_profit=101_050.0)
+    )
+
+    result = await processor.process_analysis(
+        system_prompt=system_prompt, prompt=response_template
+    )
+
+    analysis = result["analysis"]
+    assert analysis["signal"] == "HOLD"
+    assert analysis["risk_rejected_signal"] == "BUY"
+    assert analysis["risk_approved"] is False
+    assert "fees_break_rr" in analysis["risk_rejection_reason"]
+    assert result["risk_plan"]["risk_approved"] is False
+
+
+async def test_llm_focus_v2_atr_band_rejects_an_implausible_stop_end_to_end():
+    """A stop far inside the ATR band is rejected by the real pipeline."""
+    system_prompt, response_template = v2_templates()
+    processor, _ = v2_processor(
+        v2_json_reply(stop_loss=99_900.0, take_profit=105_000.0), atr=1_000.0
+    )
+
+    result = await processor.process_analysis(
+        system_prompt=system_prompt, prompt=response_template
+    )
+
+    analysis = result["analysis"]
+    assert analysis["signal"] == "HOLD"
+    assert analysis["risk_rejected_signal"] == "BUY"
+    assert analysis["risk_approved"] is False
+    assert "implausible_stop" in analysis["risk_rejection_reason"]
+    assert result["risk_plan"]["risk_approved"] is False
+
 
 
 async def test_reply_without_a_json_block_falls_back_without_a_second_request():

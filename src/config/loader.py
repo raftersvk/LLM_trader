@@ -11,6 +11,7 @@ from typing import Any
 
 from dotenv import dotenv_values
 
+from src.llm_focus.flags import coerce_flag_value
 from src.utils.prompt_budget import PromptBudgetPolicy
 from src.utils.timeframe_validator import TimeframeValidator
 
@@ -63,6 +64,18 @@ VALID_EXIT_TYPES = {"soft", "hard"}
 VALID_MODEL_VERBOSITIES = {"low", "medium", "high", "full"}
 MIN_REFERENCE_EXIT_CHECK_SECONDS = 2.0
 MAX_REFERENCE_EXIT_CHECK_SECONDS = 120.0
+
+# ``_convert_value`` maps the bare literals "1"/"0" to booleans for every key.
+# That is wrong for the numeric ``[costs]`` settings, so ``costs_overrides``
+# restores the number these fields require.
+_COST_NUMERIC_TYPES: dict[str, type] = {
+    "tier": int,
+    "maker_pct": float,
+    "taker_pct": float,
+    "min_edge_multiple": float,
+    "min_sl_atr_multiple": float,
+    "max_sl_atr_multiple": float,
+}
 
 class Config:
     """Configuration class that loads settings from environment and INI files.
@@ -536,6 +549,57 @@ class Config:
     def INCLUDE_COIN_DESCRIPTION(self) -> bool:
         """Whether to include project description in coin details section."""
         return self.get_config("general", "include_coin_description", False)
+
+    # LLM-focus v2 Feature Flags (all default off)
+    @property
+    def LLM_FOCUS_V2(self) -> bool:
+        """Use the v2 prompt/schema that leaves regime, size and SL/TP to the strategy."""
+        return self._feature_flag("llm_focus_v2")
+
+    @property
+    def SHORTLIST_V2(self) -> bool:
+        """Use the recall-oriented pre-LLM shortlist."""
+        return self._feature_flag("shortlist_v2")
+
+    @property
+    def EVENT_POSITIONS_V2(self) -> bool:
+        """Use event-driven LLM position reviews instead of routine reviews."""
+        return self._feature_flag("event_positions_v2")
+
+    def _feature_flag(self, key: str) -> bool:
+        """Read an [llm_focus] boolean and default to off for unknown values."""
+        parsed = coerce_flag_value(self.get_config("llm_focus", key, False))
+        return False if parsed is None else parsed
+
+    def costs_overrides(self) -> dict[str, Any]:
+        """Return the optional [costs] block for config.ini > taxonomy precedence."""
+        section = self._config_data.get("costs")
+        if not isinstance(section, dict):
+            return {}
+        overrides = dict(section)
+        for key, caster in _COST_NUMERIC_TYPES.items():
+            if key in overrides:
+                overrides[key] = self._coerce_cost_number(overrides[key], caster)
+        return overrides
+
+    @staticmethod
+    def _coerce_cost_number(value: Any, caster: type) -> Any:
+        """Restore a numeric [costs] value that ``_convert_value`` made a bool.
+
+        Bare ``1``/``0`` become ``True``/``False`` in ``_load_ini_config``; the
+        numeric cost fields need an ``int`` (tier) or ``float`` instead. Values
+        that cannot be converted are left untouched so ``CostsSettings`` reports
+        them with its own taxonomy error.
+        """
+        if isinstance(value, bool):
+            value = int(value)
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return value
+        if caster is int:
+            return int(number) if number.is_integer() else value
+        return number
 
     @property
     def DEBUG_SAVE_CHARTS(self):

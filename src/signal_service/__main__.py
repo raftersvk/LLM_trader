@@ -37,7 +37,9 @@ import numpy as np
 from src.config.regime_taxonomy import (
     DEFAULT_TAXONOMY_CONFIG_PATH,
     RegimeTaxonomyConfig,
+    format_costs_summary,
     load_taxonomy_config,
+    resolve_costs_config,
 )
 from src.signal_service.analyzer_adapter import PairAnalyzer, ReplayDataInjector
 from src.signal_service.audit_log import DecisionAuditLog
@@ -67,6 +69,21 @@ DEFAULT_SCHEMA_PATH = os.environ.get(
     "SIGNAL_SCHEMA_PATH",
     os.path.join(os.path.dirname(PROJECT_ROOT), "trading-stack", "contracts", "signal.schema.json"),
 )
+
+
+def _log_effective_costs(taxonomy: RegimeTaxonomyConfig) -> None:
+    """Log config.ini > taxonomy > defaults costs for operational visibility."""
+    overrides: dict[str, Any] = {}
+    try:
+        from src.config.loader import config as runtime_config
+
+        overrides = runtime_config.costs_overrides()
+    except (ImportError, FileNotFoundError, RuntimeError):
+        overrides = {}
+    logger.info(
+        "Effective costs: %s",
+        format_costs_summary(resolve_costs_config(taxonomy, overrides)),
+    )
 
 
 def _apply_config_override(config_path: str) -> None:
@@ -285,6 +302,7 @@ async def _run_command(args: argparse.Namespace) -> None:
     )
 
     taxonomy = load_taxonomy_config(args.taxonomy_config)
+    _log_effective_costs(taxonomy)
     jev_gate = _build_jev_gate(args.jev_mode, taxonomy)
     # The audit log is independent of the gate mode: with log_decisions on it
     # records every analysis, including runs where JEV is off or not consulted.
@@ -465,6 +483,7 @@ async def _replay_command(args: argparse.Namespace) -> None:
     )
     engine = engines[symbol]
     taxonomy = load_taxonomy_config(args.taxonomy_config)
+    _log_effective_costs(taxonomy)
     analyzer = PairAnalyzer(
         engine=engine,
         symbol=symbol,

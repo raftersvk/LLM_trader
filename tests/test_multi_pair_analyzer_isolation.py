@@ -1,8 +1,8 @@
 """Per-pair analyzer collaborators must not be shared between engines."""
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from start import CompositionRoot
+from src.config.regime_taxonomy import CostsSettings
 
 
 def _root() -> CompositionRoot:
@@ -60,3 +60,19 @@ def test_collaborator_builder_returns_new_instances():
 
     for key in first:
         assert first[key] is not second[key], key
+
+
+def test_analyzer_processors_receive_the_startup_costs():
+    """The v2 fee gate must see the config.ini > taxonomy > defaults costs."""
+    root = _root()
+    root._startup_costs = CostsSettings(
+        venue="spot", tier=1, entry_order_type="taker",
+        maker_pct=0.40, taker_pct=0.80,
+    )
+    infra, apis, utils, rag, models = _inputs()
+
+    collaborators = root._build_analyzer_collaborators(
+        infra, apis, utils, rag, models
+    )
+
+    assert collaborators["result_processor"]._costs is root._startup_costs

@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, ClassVar, Mapping
 
+from src.llm_focus.fees import KRAKEN_FUTURES_TIER_1, get_fee_rate
+
 DEFAULT_TAXONOMY_CONFIG_PATH = (
     "/home/djelinux/TradingBots/trading-stack/freqtrade/user_data/regime_taxonomy.yaml"
 )
@@ -41,6 +43,29 @@ REGIMES: tuple[str, ...] = (
 )
 NO_TRADE_REGIMES: tuple[str, ...] = ("low_vol", "high_vol", "unclear")
 ALLOWED_SIDES: tuple[str, ...] = ("long", "short", "both")
+TP_MODE_ATR_MULTIPLE = "atr_multiple"
+TP_MODE_STRUCTURE = "structure"
+VALID_TP_MODES: tuple[str, ...] = (TP_MODE_ATR_MULTIPLE, TP_MODE_STRUCTURE)
+STRUCTURE_MID_RANGE = "mid_range"
+STRUCTURE_VWAP = "vwap"
+STRUCTURE_MEASURED_MOVE = "measured_move"
+VALID_TP_SUBMODES: tuple[str, ...] = (
+    STRUCTURE_MID_RANGE,
+    STRUCTURE_VWAP,
+    STRUCTURE_MEASURED_MOVE,
+)
+COST_VENUES: tuple[str, ...] = ("spot", "futures")
+COST_ORDER_TYPES: tuple[str, ...] = ("taker", "maker")
+COST_FIELDS: frozenset[str] = frozenset({
+    "venue",
+    "tier",
+    "entry_order_type",
+    "maker_pct",
+    "taker_pct",
+    "min_edge_multiple",
+    "min_sl_atr_multiple",
+    "max_sl_atr_multiple",
+})
 #: Flat per-pair execution fields shared with the Freqtrade strategy (W3).
 PAIR_OVERRIDE_FIELDS: frozenset[str] = frozenset({
     "sl_atr",
@@ -143,6 +168,8 @@ class SetupDefinition:
     tp_atr: float | None = None
     trail_atr: float | None = None
     be_at_r: float | None = None
+    tp_mode: str = TP_MODE_ATR_MULTIPLE
+    tp_submode: str | None = None
 
     _FIELDS: ClassVar[tuple[str, ...]] = (
         "side",
@@ -155,6 +182,8 @@ class SetupDefinition:
         "tp_atr",
         "trail_atr",
         "be_at_r",
+        "tp_mode",
+        "tp_submode",
     )
     _REQUIRED_FIELDS: ClassVar[tuple[str, ...]] = (
         "side",
@@ -234,6 +263,14 @@ class SetupDefinition:
                 f"setups.{name}.be_at_r",
                 allow_zero=True,
             ),
+            tp_mode=_tp_mode(
+                data.get("tp_mode", base.tp_mode if base else TP_MODE_ATR_MULTIPLE),
+                f"setups.{name}.tp_mode",
+            ),
+            tp_submode=_optional_tp_submode(
+                data.get("tp_submode", base.tp_submode if base else None),
+                f"setups.{name}.tp_submode",
+            ),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -255,6 +292,9 @@ class SetupDefinition:
             value = getattr(self, name)
             if value is not None:
                 data[name] = value
+        data["tp_mode"] = self.tp_mode
+        if self.tp_submode is not None:
+            data["tp_submode"] = self.tp_submode
         return data
 
 
@@ -291,6 +331,128 @@ class JevSettings:
 
 
 @dataclass(frozen=True)
+class CostsSettings:
+    """Fee policy used by the fee-aware entry gate.
+
+    Built-in defaults are Kraken futures Tier 1. A taxonomy ``costs`` block or a
+    config.ini ``[costs]`` block overrides them; config.ini has the highest
+    precedence. Exit fees are assumed taker unless a maker exit is explicitly
+    documented by the caller.
+    """
+
+    venue: str = "futures"
+    tier: int = 1
+    entry_order_type: str = "taker"
+    maker_pct: float = KRAKEN_FUTURES_TIER_1.maker_pct
+    taker_pct: float = KRAKEN_FUTURES_TIER_1.taker_pct
+    min_edge_multiple: float = 1.5
+    min_sl_atr_multiple: float = 0.25
+    max_sl_atr_multiple: float = 12.0
+
+    def fee_pct(self, order_type: str | None = None) -> float:
+        """Return the fee in percent for an order type (defaults to entry type)."""
+        normalized = str(order_type or self.entry_order_type).strip().lower()
+        if normalized not in COST_ORDER_TYPES:
+            raise TaxonomyConfigError("order_type must be 'taker' or 'maker'")
+        return self.maker_pct if normalized == "maker" else self.taker_pct
+
+    def round_trip_pct(self) -> float:
+        """Entry fee plus the assumed taker exit fee, in percent."""
+        return self.fee_pct(self.entry_order_type) + self.fee_pct("taker")
+
+    @classmethod
+    def from_mapping(
+        cls,
+        data: Mapping[str, Any] | None,
+        base: "CostsSettings | None" = None,
+    ) -> "CostsSettings":
+        """Validate a ``costs`` block on top of ``base`` (defaults when absent)."""
+        base = base or cls()
+        if data is None:
+            return base
+        if not isinstance(data, Mapping):
+            raise TaxonomyConfigError("costs must be a mapping")
+        unknown = set(data) - COST_FIELDS
+        if unknown:
+            raise TaxonomyConfigError(
+                f"costs has unknown keys: {', '.join(sorted(map(str, unknown)))}"
+            )
+
+        venue = _string(data.get("venue", base.venue), "costs.venue").lower()
+        if venue not in COST_VENUES:
+            raise TaxonomyConfigError(
+                f"costs.venue must be one of {'|'.join(COST_VENUES)}"
+            )
+        tier_raw = data.get("tier", base.tier)
+        if isinstance(tier_raw, bool) or not isinstance(tier_raw, int) or tier_raw < 1:
+            raise TaxonomyConfigError("costs.tier must be a positive integer")
+        tier = tier_raw
+        entry_order_type = _string(
+            data.get("entry_order_type", base.entry_order_type),
+            "costs.entry_order_type",
+        ).lower()
+        if entry_order_type not in COST_ORDER_TYPES:
+            raise TaxonomyConfigError(
+                f"costs.entry_order_type must be one of {'|'.join(COST_ORDER_TYPES)}"
+            )
+
+        maker_pct = (
+            _number(data["maker_pct"], "costs.maker_pct", minimum=0.0)
+            if "maker_pct" in data
+            else base.maker_pct
+        )
+        taker_pct = (
+            _number(data["taker_pct"], "costs.taker_pct", minimum=0.0)
+            if "taker_pct" in data
+            else base.taker_pct
+        )
+        if venue != base.venue or tier != base.tier:
+            # Venue/tier changed without explicit rates: follow the Kraken
+            # constants for the new venue/tier instead of the previous rates.
+            try:
+                rate = get_fee_rate("kraken", venue, tier)
+            except ValueError as exc:
+                raise TaxonomyConfigError(str(exc)) from exc
+            if "maker_pct" not in data:
+                maker_pct = rate.maker_pct
+            if "taker_pct" not in data:
+                taker_pct = rate.taker_pct
+
+        min_edge_multiple = _number(
+            data.get("min_edge_multiple", base.min_edge_multiple),
+            "costs.min_edge_multiple",
+            minimum=0.0,
+            allow_zero=False,
+        )
+        min_sl_atr_multiple = _number(
+            data.get("min_sl_atr_multiple", base.min_sl_atr_multiple),
+            "costs.min_sl_atr_multiple",
+            minimum=0.0,
+            allow_zero=False,
+        )
+        max_sl_atr_multiple = _number(
+            data.get("max_sl_atr_multiple", base.max_sl_atr_multiple),
+            "costs.max_sl_atr_multiple",
+            minimum=0.0,
+            allow_zero=False,
+        )
+        if max_sl_atr_multiple <= min_sl_atr_multiple:
+            raise TaxonomyConfigError(
+                "costs.max_sl_atr_multiple must be greater than costs.min_sl_atr_multiple"
+            )
+        return cls(
+            venue=venue,
+            tier=tier,
+            entry_order_type=entry_order_type,
+            maker_pct=maker_pct,
+            taker_pct=taker_pct,
+            min_edge_multiple=min_edge_multiple,
+            min_sl_atr_multiple=min_sl_atr_multiple,
+            max_sl_atr_multiple=max_sl_atr_multiple,
+        )
+
+
+@dataclass(frozen=True)
 class RegimeTaxonomyConfig:
     """Validated taxonomy document used by the snapshot, prompt and JEV gate."""
 
@@ -301,6 +463,7 @@ class RegimeTaxonomyConfig:
     setups: Mapping[str, SetupDefinition] = field(default_factory=dict)
     pair_overrides: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
     jev: JevSettings = field(default_factory=JevSettings)
+    costs: CostsSettings = field(default_factory=CostsSettings)
     source_path: str | None = None
 
     def timeframe_enabled(self, timeframe: str | None) -> bool:
@@ -344,6 +507,16 @@ class RegimeTaxonomyConfig:
                 "log_decisions": self.jev.log_decisions,
                 "log_path": self.jev.log_path,
             },
+            "costs": {
+                "venue": self.costs.venue,
+                "tier": self.costs.tier,
+                "entry_order_type": self.costs.entry_order_type,
+                "maker_pct": self.costs.maker_pct,
+                "taker_pct": self.costs.taker_pct,
+                "min_edge_multiple": self.costs.min_edge_multiple,
+                "min_sl_atr_multiple": self.costs.min_sl_atr_multiple,
+                "max_sl_atr_multiple": self.costs.max_sl_atr_multiple,
+            },
         }
 
 
@@ -360,6 +533,8 @@ def _default_setup(
     tp_atr: float | None = None,
     trail_atr: float | None = None,
     be_at_r: float | None = None,
+    tp_mode: str = TP_MODE_ATR_MULTIPLE,
+    tp_submode: str | None = None,
 ) -> SetupDefinition:
     """Build one built-in setup definition (mirrors the W3 canonical file)."""
     return SetupDefinition(
@@ -374,6 +549,8 @@ def _default_setup(
         tp_atr=tp_atr,
         trail_atr=trail_atr,
         be_at_r=be_at_r,
+        tp_mode=tp_mode,
+        tp_submode=tp_submode,
     )
 
 
@@ -448,6 +625,7 @@ DEFAULT_SETUPS: Mapping[str, SetupDefinition] = {
         12,
         sl_atr=2.0,
         tp_atr=4.5,
+        tp_mode=TP_MODE_STRUCTURE,
     ),
     "range_mean_reversion": _default_setup(
         "range_mean_reversion",
@@ -459,6 +637,7 @@ DEFAULT_SETUPS: Mapping[str, SetupDefinition] = {
         12,
         sl_atr=2.0,
         tp_atr=4.5,
+        tp_mode=TP_MODE_STRUCTURE,
     ),
 }
 
@@ -509,6 +688,36 @@ def _positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise TaxonomyConfigError(f"{label} must be a positive integer")
     return value
+
+
+def _tp_mode(value: Any, label: str) -> str:
+    """Validate the target-geometry mode enum (default applied by the caller)."""
+    if not isinstance(value, str) or not value.strip():
+        raise TaxonomyConfigError(
+            f"{label} must be one of {'|'.join(VALID_TP_MODES)}"
+        )
+    mode = value.strip().lower()
+    if mode not in VALID_TP_MODES:
+        raise TaxonomyConfigError(
+            f"{label} must be one of {'|'.join(VALID_TP_MODES)}, got {value!r}"
+        )
+    return mode
+
+
+def _optional_tp_submode(value: Any, label: str) -> str | None:
+    """Validate the optional structural target sub-mode enum."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise TaxonomyConfigError(
+            f"{label} must be one of {'|'.join(VALID_TP_SUBMODES)} or null"
+        )
+    submode = value.strip().lower()
+    if submode not in VALID_TP_SUBMODES:
+        raise TaxonomyConfigError(
+            f"{label} must be one of {'|'.join(VALID_TP_SUBMODES)}, got {value!r}"
+        )
+    return submode
 
 
 def _boolean(value: Any, label: str) -> bool:
@@ -657,6 +866,7 @@ def parse_taxonomy_config(
         "setups",
         "pair_overrides",
         "jev",
+        "costs",
     }
     unknown = set(document) - known
     if unknown:
@@ -680,6 +890,7 @@ def parse_taxonomy_config(
     regime_setups = _parse_regime_setups(document.get("regime_setups"), DEFAULT_REGIME_SETUPS, setups)
     pair_overrides = _parse_pair_overrides(document.get("pair_overrides"))
     jev = JevSettings.from_mapping(document.get("jev"))
+    costs = CostsSettings.from_mapping(document.get("costs"))
 
     return RegimeTaxonomyConfig(
         version=version,
@@ -689,7 +900,29 @@ def parse_taxonomy_config(
         setups=setups,
         pair_overrides=pair_overrides,
         jev=jev,
+        costs=costs,
         source_path=source_path,
+    )
+
+
+def resolve_costs_config(
+    taxonomy_config: RegimeTaxonomyConfig | None = None,
+    overrides: Mapping[str, Any] | None = None,
+) -> CostsSettings:
+    """Resolve effective costs with precedence config.ini > taxonomy > defaults."""
+    taxonomy = taxonomy_config or default_taxonomy_config()
+    return CostsSettings.from_mapping(overrides, base=taxonomy.costs)
+
+
+def format_costs_summary(costs: CostsSettings) -> str:
+    """Return one-line startup summary of the effective cost policy."""
+    return (
+        f"venue={costs.venue} tier={costs.tier} "
+        f"entry={costs.entry_order_type} "
+        f"maker={costs.maker_pct:g}%/side taker={costs.taker_pct:g}%/side "
+        f"round_trip={costs.round_trip_pct():g}% "
+        f"min_edge={costs.min_edge_multiple:g}x "
+        f"sl_atr=[{costs.min_sl_atr_multiple:g},{costs.max_sl_atr_multiple:g}]x"
     )
 
 

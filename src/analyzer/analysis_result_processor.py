@@ -13,7 +13,16 @@ from src.analyzer.decision_contract import validate_decision_payload
 from src.analyzer.pattern_quality_scorer import PatternQualityScorer
 from src.analyzer.risk_reward_validator import RiskRewardValidator
 from src.analyzer.trend_validator import TrendValidator
+from src.config.regime_taxonomy import (
+    CostsSettings,
+    TaxonomyConfigError,
+    load_taxonomy_config,
+    resolve_costs_config,
+)
+from src.llm_focus.deterministic_risk import build_risk_plan, compute_position_size
+from src.llm_focus.prompts import to_v1_compatible
 from src.logger.logger import Logger
+from src.utils.indicator_classifier import resolve_scalar
 
 if TYPE_CHECKING:
     from src.analyzer.analysis_context import AnalysisContext
@@ -31,6 +40,7 @@ class AnalysisResultProcessor:
         trend_validator: TrendValidator,
         quality_scorer: PatternQualityScorer,
         risk_reward_validator: RiskRewardValidator,
+        costs: CostsSettings | None = None,
     ):
         """Initialize the processor"""
         self.model_manager = model_manager
@@ -40,6 +50,7 @@ class AnalysisResultProcessor:
         self._trend_validator = trend_validator
         self._quality_scorer = quality_scorer
         self._risk_reward_validator = risk_reward_validator
+        self._costs = costs
 
     async def process_analysis(self, system_prompt: str, prompt: str,
                               chart_image: io.BytesIO | bytes | str | None = None,
@@ -93,6 +104,7 @@ class AnalysisResultProcessor:
         cleaned_response = self._clean_response(complete_response)
 
         parsed_response = self.unified_parser.parse_ai_response(cleaned_response)
+        parsed_response = self._normalize_v2_decision(parsed_response)
 
         if not self.unified_parser.validate_ai_response(parsed_response):
             self.logger.warning("Invalid response format from AI model")
@@ -126,6 +138,7 @@ class AnalysisResultProcessor:
             )
             cleaned_response = self._clean_response(complete_response)
             parsed_response = self.unified_parser.parse_ai_response(cleaned_response)
+            parsed_response = self._normalize_v2_decision(parsed_response)
             if not self.unified_parser.validate_ai_response(parsed_response):
                 self.logger.error("Contract retry returned an invalid response shape")
                 return {
@@ -146,6 +159,112 @@ class AnalysisResultProcessor:
         self._log_analysis_result(parsed_response)
 
         return self._format_analysis_response(parsed_response, cleaned_response)
+
+    def _normalize_v2_decision(self, parsed_response: dict[str, Any]) -> dict[str, Any]:
+        """Convert an LLM-focus v2 payload into the v1 decision contract.
+
+        ``llm_focus_v2`` prompts the model for ``action`` plus proposed
+        ``stop_loss``/``take_profit`` instead of ``signal`` and the v1 execution
+        fields. ``to_v1_compatible`` is the single conversion point; the current
+        market price and the deterministic position size fill the fields the
+        parser/decision contract requires. Responses that already carry a v1
+        ``signal`` are returned untouched.
+        """
+        analysis = parsed_response.get("analysis")
+        if not isinstance(analysis, dict) or "signal" in analysis or "action" not in analysis:
+            return parsed_response
+
+        entry_price = self.context.current_price if self.context is not None else None
+        converted = to_v1_compatible(
+            parsed_response,
+            entry_price=entry_price,
+            position_size=compute_position_size(analysis.get("confidence")),
+        )
+        normalized = {**parsed_response, **converted}
+        self._apply_v2_risk_validation(normalized)
+        validate = getattr(self.unified_parser, "validate_trading_response", None)
+        if callable(validate):
+            normalized["response_validation"] = validate(normalized)
+        return normalized
+
+    def _apply_v2_risk_validation(self, normalized: dict[str, Any]) -> None:
+        """Run policy-C risk validation on a converted v2 decision.
+
+        ``to_v1_compatible`` carries the LLM's absolute levels into the v1
+        contract, but policy C also requires those levels to pass the
+        deterministic target validation (correct side, R/R floor), the
+        ATR-relative stop band and the fee-aware entry gate. The resulting
+        ``risk_approved`` flag and explicit rejection reason are written back
+        into ``analysis``; a rejected BUY/SELL is also downgraded to HOLD so the
+        live strategy and executor cannot open the trade.
+        """
+        analysis = normalized.get("analysis")
+        if not isinstance(analysis, dict):
+            return
+        signal = str(analysis.get("signal") or "").strip().upper()
+        if signal not in ("BUY", "SELL"):
+            return
+
+        stop_loss = analysis.get("stop_loss")
+        take_profit = analysis.get("take_profit")
+        if stop_loss is None or take_profit is None:
+            self._reject_v2_signal(
+                analysis,
+                "LLM stop_loss and take_profit must both be provided",
+            )
+            return
+
+        technical = getattr(self.context, "technical_data", None) or {}
+        atr = resolve_scalar(technical.get("atr"))
+        atr_pct = resolve_scalar(
+            technical.get("atr_percent", technical.get("atr_percentage"))
+        )
+        entry_price = (
+            getattr(self.context, "current_price", None)
+            if self.context is not None
+            else None
+        )
+        plan = build_risk_plan(
+            direction="LONG" if signal == "BUY" else "SHORT",
+            entry_price=entry_price,
+            atr=atr if atr > 0 else None,
+            confidence=analysis.get("confidence"),
+            atr_pct=atr_pct if atr_pct > 0 else None,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            costs=self._v2_costs(),
+        )
+        analysis["risk_approved"] = plan.risk_approved
+        if plan.rejection_reason:
+            self._reject_v2_signal(analysis, plan.rejection_reason)
+        if plan.rr_ratio is not None:
+            analysis["risk_reward_ratio"] = plan.rr_ratio
+        normalized["risk_plan"] = {
+            "direction": plan.direction,
+            "target_source": plan.target_source,
+            "risk_approved": plan.risk_approved,
+            "rejection_reason": plan.rejection_reason,
+            "sl_distance_pct": plan.sl_distance_pct,
+            "tp_distance_pct": plan.tp_distance_pct,
+            "rr_ratio": plan.rr_ratio,
+        }
+
+    @staticmethod
+    def _reject_v2_signal(analysis: dict[str, Any], reason: str) -> None:
+        """Mark a v2 entry rejected and downgrade it to HOLD for execution."""
+        analysis["risk_rejected_signal"] = analysis.get("signal")
+        analysis["signal"] = "HOLD"
+        analysis["risk_approved"] = False
+        analysis["risk_rejection_reason"] = reason
+
+    def _v2_costs(self) -> CostsSettings:
+        """Resolve effective costs for the v2 fee gate, falling back safely."""
+        if self._costs is not None:
+            return self._costs
+        try:
+            return resolve_costs_config(load_taxonomy_config())
+        except (TaxonomyConfigError, OSError):
+            return CostsSettings()
 
     def _log_analysis_result(self, parsed_response: dict[str, Any]) -> None:
         """Log analysis result information"""
