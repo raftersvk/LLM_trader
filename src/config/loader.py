@@ -65,6 +65,18 @@ VALID_MODEL_VERBOSITIES = {"low", "medium", "high", "full"}
 MIN_REFERENCE_EXIT_CHECK_SECONDS = 2.0
 MAX_REFERENCE_EXIT_CHECK_SECONDS = 120.0
 
+# ``_convert_value`` maps the bare literals "1"/"0" to booleans for every key.
+# That is wrong for the numeric ``[costs]`` settings, so ``costs_overrides``
+# restores the number these fields require.
+_COST_NUMERIC_TYPES: dict[str, type] = {
+    "tier": int,
+    "maker_pct": float,
+    "taker_pct": float,
+    "min_edge_multiple": float,
+    "min_sl_atr_multiple": float,
+    "max_sl_atr_multiple": float,
+}
+
 class Config:
     """Configuration class that loads settings from environment and INI files.
     """
@@ -565,11 +577,29 @@ class Config:
         if not isinstance(section, dict):
             return {}
         overrides = dict(section)
-        # ``_convert_value`` maps the bare literal "1" to True; restore the
-        # integer tier expected by CostsSettings.
-        if isinstance(overrides.get("tier"), bool):
-            overrides["tier"] = int(overrides["tier"])
+        for key, caster in _COST_NUMERIC_TYPES.items():
+            if key in overrides:
+                overrides[key] = self._coerce_cost_number(overrides[key], caster)
         return overrides
+
+    @staticmethod
+    def _coerce_cost_number(value: Any, caster: type) -> Any:
+        """Restore a numeric [costs] value that ``_convert_value`` made a bool.
+
+        Bare ``1``/``0`` become ``True``/``False`` in ``_load_ini_config``; the
+        numeric cost fields need an ``int`` (tier) or ``float`` instead. Values
+        that cannot be converted are left untouched so ``CostsSettings`` reports
+        them with its own taxonomy error.
+        """
+        if isinstance(value, bool):
+            value = int(value)
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return value
+        if caster is int:
+            return int(number) if number.is_integer() else value
+        return number
 
     @property
     def DEBUG_SAVE_CHARTS(self):

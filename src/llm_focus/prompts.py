@@ -120,15 +120,15 @@ def build_v2_response_template(
         "5) ACTION: Signal with confidence justification."
     )
     analysis_object = """{
-        "action": "BUY|SELL|HOLD|CLOSE|UPDATE",
-        "setup": "single setup name",
-        "entry_thesis": "falsifiable reason the setup is actionable now",
-        "invalidation": "concrete condition that invalidates the thesis",
-        "confidence": 0-100,
-        "reasoning": "1-2 sentence summary",
-        "stop_loss": 95000.0,
-        "take_profit": 104000.0,
-        "news": ["optional relevant news item"]
+        "action": "HOLD",
+        "setup": "range-bound consolidation",
+        "entry_thesis": "No confirmed setup; price is mid-range with flat momentum.",
+        "invalidation": "A close above resistance with expanding volume would create a new setup.",
+        "confidence": 72,
+        "reasoning": "Conflicting momentum and no actionable level make waiting preferable.",
+        "stop_loss": null,
+        "take_profit": null,
+        "news": []
     }"""
 
     if json_object_output:
@@ -262,9 +262,9 @@ def to_v1_compatible(
     ``risk_reward_ratio`` is derived from the entry and the proposed levels.
     """
     analysis = _analysis_payload(payload)
-    action = str(analysis.get("action") or "").upper()
+    action = str(analysis.get("action") or "").strip().upper()
     mapped: dict[str, Any] = {
-        "signal": analysis.get("action"),
+        "signal": action,
         "confidence": analysis.get("confidence"),
         "reasoning": analysis.get("reasoning", ""),
         "setup": analysis.get("setup"),

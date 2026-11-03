@@ -1,10 +1,13 @@
 """Tests for the v2 prompt/schema contract and TemplateManager isolation."""
 
+import json
+import re
 from types import SimpleNamespace
 
 import pytest
 
 from src.llm_focus.prompts import (
+    V2_ACTIONS,
     V2_ANALYSIS_SCHEMA,
     V2_FORBIDDEN_FIELDS,
     V2_REQUIRED_FIELDS,
@@ -15,6 +18,13 @@ from src.llm_focus.prompts import (
     to_v1_compatible,
     validate_v2_payload,
 )
+
+
+def _example_payload_from_template(template: str) -> dict:
+    """Parse the fenced JSON example out of the response template."""
+    match = re.search(r"```json\s*(\{.*?\})\s*```", template, re.DOTALL)
+    assert match is not None, "template must contain a fenced JSON example"
+    return json.loads(match.group(1))
 
 
 def _valid_payload():
@@ -138,6 +148,15 @@ class TestV2Mapping:
             (100_000.0 - 90_000.0) / (105_000.0 - 100_000.0)
         )
 
+    @pytest.mark.parametrize("action", ["buy", "sell", "hold"])
+    def test_to_v1_compatible_normalizes_lowercase_action(self, action):
+        payload = _valid_payload()
+        payload["analysis"]["action"] = action
+
+        assert validate_v2_payload(payload) == ()
+        mapped = to_v1_compatible(payload, entry_price=100_000.0)["analysis"]
+        assert mapped["signal"] == action.upper()
+
     def test_v2_template_contract(self):
         template = build_v2_response_template()
         for field in (
@@ -163,6 +182,15 @@ class TestV2Mapping:
         assert '"action"' in template
         assert "Structure your analysis before JSON" not in template
         assert "Then output JSON" not in template
+
+    @pytest.mark.parametrize("json_mode", [False, True])
+    def test_v2_template_example_is_valid_json(self, json_mode):
+        template = build_v2_response_template(json_object_output=json_mode)
+        payload = _example_payload_from_template(template)
+
+        assert validate_v2_payload(payload) == ()
+        assert payload["analysis"]["action"] in V2_ACTIONS
+        assert isinstance(payload["analysis"]["confidence"], (int, float))
 
     def test_v2_prompt_text_states_atr_relative_stop_band(self):
         template = build_v2_response_template()
