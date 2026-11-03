@@ -756,6 +756,8 @@ def test_default_costs_are_kraken_futures_tier_1():
     assert costs.taker_pct == pytest.approx(0.05)
     assert costs.round_trip_pct() == pytest.approx(0.10)
     assert costs.min_edge_multiple == pytest.approx(1.5)
+    assert costs.min_sl_atr_multiple == pytest.approx(0.25)
+    assert costs.max_sl_atr_multiple == pytest.approx(12.0)
 
 
 def test_taxonomy_costs_follow_the_venue_tier_constants():
@@ -778,6 +780,8 @@ def test_taxonomy_cost_rates_override_the_constants():
                 "maker_pct": 0.01,
                 "taker_pct": 0.03,
                 "min_edge_multiple": 2.0,
+                "min_sl_atr_multiple": 0.5,
+                "max_sl_atr_multiple": 20.0,
             }
         }
     )
@@ -787,6 +791,8 @@ def test_taxonomy_cost_rates_override_the_constants():
     assert config.costs.taker_pct == pytest.approx(0.03)
     assert config.costs.round_trip_pct() == pytest.approx(0.04)
     assert config.costs.min_edge_multiple == pytest.approx(2.0)
+    assert config.costs.min_sl_atr_multiple == pytest.approx(0.5)
+    assert config.costs.max_sl_atr_multiple == pytest.approx(20.0)
 
 
 def test_runtime_overrides_win_over_taxonomy_and_defaults():
@@ -829,6 +835,9 @@ def test_absent_config_ini_costs_keep_taxonomy_values():
         {"tier": 1.5},
         {"entry_order_type": "limit"},
         {"min_edge_multiple": 0},
+        {"min_sl_atr_multiple": 0},
+        {"max_sl_atr_multiple": 0},
+        {"min_sl_atr_multiple": 12.0, "max_sl_atr_multiple": 0.25},
         {"unknown": 1},
     ],
 )

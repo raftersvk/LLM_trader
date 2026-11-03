@@ -8,6 +8,7 @@ from src.llm_focus.deterministic_risk import (
     RANGING,
     REASON_FEES_BREAK_RR,
     REASON_FEES_EXCEED_EDGE,
+    REASON_IMPLAUSIBLE_STOP,
     TARGET_SOURCE_FALLBACK,
     TARGET_SOURCE_LLM,
     TRENDING_DOWN,
@@ -198,12 +199,53 @@ class TestPolicyCRiskPlan:
         assert plan.stop_loss == pytest.approx(99.0)
         assert plan.take_profit == pytest.approx(101.0)
 
-    def test_distance_bounds_are_rejected(self):
-        plan = build_risk_plan("LONG", 100.0, 1.0, confidence=80, stop_loss=99.9, take_profit=100.2)
+    def test_tiny_stop_is_implausible_by_atr_without_substitution(self):
+        plan = build_risk_plan("LONG", 100.0, 2.0, confidence=80, stop_loss=99.8, take_profit=101.0)
         assert not plan.risk_approved
-        assert plan.rejection_reason.count("outside 0.5-10%") == 2
-        assert plan.stop_loss == pytest.approx(99.9)
-        assert plan.take_profit == pytest.approx(100.2)
+        assert plan.rejection_reason == REASON_IMPLAUSIBLE_STOP
+        assert plan.stop_loss == pytest.approx(99.8)
+        assert plan.take_profit == pytest.approx(101.0)
+
+    def test_wide_15pct_stop_passes_on_high_atr(self):
+        plan = build_risk_plan("LONG", 100.0, 2.0, confidence=80, stop_loss=85.0, take_profit=130.0)
+        assert plan.risk_approved
+        assert plan.rejection_reason is None
+        assert plan.stop_loss == pytest.approx(85.0)
+        assert plan.take_profit == pytest.approx(130.0)
+
+    def test_same_15pct_stop_fails_on_low_atr(self):
+        plan = build_risk_plan("LONG", 100.0, 0.5, confidence=80, stop_loss=85.0, take_profit=130.0)
+        assert not plan.risk_approved
+        assert plan.rejection_reason == REASON_IMPLAUSIBLE_STOP
+        assert plan.stop_loss == pytest.approx(85.0)
+        assert plan.take_profit == pytest.approx(130.0)
+
+    def test_configured_atr_multiples_change_plausibility(self):
+        wide = CostsSettings(min_sl_atr_multiple=0.5, max_sl_atr_multiple=20.0)
+        narrow = CostsSettings(min_sl_atr_multiple=0.25, max_sl_atr_multiple=5.0)
+
+        wide_plan = build_risk_plan(
+            "LONG", 100.0, 2.0, confidence=80,
+            stop_loss=85.0, take_profit=130.0, costs=wide,
+        )
+        narrow_plan = build_risk_plan(
+            "LONG", 100.0, 2.0, confidence=80,
+            stop_loss=85.0, take_profit=130.0, costs=narrow,
+        )
+
+        assert wide_plan.risk_approved
+        assert not narrow_plan.risk_approved
+        assert narrow_plan.rejection_reason == REASON_IMPLAUSIBLE_STOP
+
+    def test_llm_levels_without_atr_fail_closed(self):
+        plan = build_risk_plan(
+            "LONG", 100.0, None, confidence=80,
+            stop_loss=97.0, take_profit=106.0,
+        )
+        assert not plan.risk_approved
+        assert plan.rejection_reason == "atr_unavailable"
+        assert plan.stop_loss == pytest.approx(97.0)
+        assert plan.take_profit == pytest.approx(106.0)
 
     def test_missing_entry_is_rejected(self):
         plan = build_risk_plan("LONG", None, 1.0, confidence=80, stop_loss=97.0, take_profit=106.0)

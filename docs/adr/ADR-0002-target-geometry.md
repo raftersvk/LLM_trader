@@ -39,15 +39,17 @@ La taxonomie canonique vit dans **trading-stack (PR #15)** et n'est pas modifié
 
 ## Validation Python
 
-`validate_target()` vérifie, pour les niveaux LLM comme pour un repli :
+`validate_target()` vérifie le côté, le R/R et les valeurs finies. Pour les niveaux **LLM** (politique C) :
 
 - entrée présente, finie et strictement positive ;
 - côté correct : LONG `SL < entry < TP`, SHORT `TP < entry < SL` ;
-- bornes de distance **0,5 % à 10 %** pour le SL et le TP ;
-- R/R minimum paramétrable (1,0 par défaut) ;
-- valeurs finies et strictement positives.
+- R/R minimum paramétrable ;
+- **aucune borne absolue en pourcentage** : la distance du stop doit rester dans la bande relative `[min_sl_atr_multiple × ATR, max_sl_atr_multiple × ATR]` (défauts 0,25x et 12x, configurables dans `costs`/`[costs]`). Hors bande → `implausible_stop`, sans clamp ni substitution ;
+- un stop large (ex. 15 %) est valide si l'ATR le justifie ; la taille risque/volatilité réduit alors la position.
 
-Après ces contrôles, la **porte de frais** de l'ADR-0001 s'applique (edge 1,5x et R/R ajusté aux frais, selon `[costs]`/taxonomie). Si une vérification échoue : `risk_approved=false` et raison explicite (`fees_exceed_edge` ou `fees_break_rr` inclus). Aucun niveau n'est corrigé, arrondi ou remplacé pour forcer l'approbation.
+Pour le **repli ATR/déterministe uniquement**, les bornes absolues historiques **0,5 % à 10 %** sont conservées, car ce chemin synthétise des niveaux ATR. Le plafond de 10 % ne s'applique jamais aux niveaux LLM : c'était un circuit breaker legacy de la voie ATR.
+
+Après ces contrôles, la **porte de frais** de l'ADR-0001 s'applique (edge 1,5x et R/R ajusté aux frais, selon `[costs]`/taxonomie). Si une vérification échoue : `risk_approved=false` et raison explicite (`implausible_stop`, `fees_exceed_edge` ou `fees_break_rr`). Aucun niveau n'est corrigé, arrondi ou remplacé pour forcer l'approbation.
 
 ## Suivi
 

@@ -40,17 +40,21 @@ Event-driven position management (flag: event_positions_v2)
   direction, SL/TP and size, with the JEV disagreement/precision evidence, the
   numeric regime switch criterion and the policy-C fee caveat.
 - **Policy C (confirmed):** the LLM proposes absolute `stop_loss`/`take_profit`
-  levels; the code validates them (correct side, entry present, 0.5-10%
-  distance bounds, R/R floor). Invalid levels reject the signal
-  (`risk_approved=false` with an explicit reason) and are never replaced by ATR
-  targets.
+  levels; the code validates them (correct side, entry present, R/R floor).
+  LLM stops are bounded by a configurable **ATR-relative** band
+  (`min_sl_atr_multiple` 0.25x to `max_sl_atr_multiple` 12x) instead of the
+  legacy absolute 10% cap; outside the band is `implausible_stop`. The absolute
+  0.5-10% bounds remain only on the ATR-fallback path. Invalid levels reject the
+  signal (`risk_approved=false` with an explicit reason) and are never replaced
+  by ATR targets.
 - `docs/adr/ADR-0002-target-geometry.md` keeps optional per-setup `tp_mode`
   (`atr_multiple` | `structure`) and the structure sub-modes (`mid_range`,
   `vwap`, `measured_move`) as an **explicitly documented fallback only** for
   signals that carry no levels at all. It is never used when the LLM supplied
   levels. The canonical taxonomy stays in trading-stack (PR #15).
 - `src/llm_focus/target_geometry.py` implements the fallback resolver and the
-  Python target validation (correct side, 0.5-10% bounds, configurable R/R).
+  Python target validation (correct side, configurable R/R; absolute 0.5-10%
+  bounds only for the ATR fallback path).
 - `src/llm_focus/fees.py` holds the Kraken reference fees (source and date in
   the module), uses taker by default and exposes venue/tier/liquidity
   sensitivity. Spot Tier 1 is **1.60% round trip** (0.80% + 0.80%), which
@@ -59,11 +63,11 @@ Event-driven position management (flag: event_positions_v2)
   is 0.20/0.20%.
 - **Costs are configuration:** `RegimeTaxonomyConfig.costs` reads an optional
   `costs` block (`venue`, `tier`, `entry_order_type`, `maker_pct`, `taker_pct`,
-  `min_edge_multiple`). Built-in defaults are Kraken futures Tier 1 and the
-  numbers come from `fees.py`; taxonomy values override them, and the
-  `[costs]` section of `config.ini` overrides the taxonomy. Precedence:
-  **config.ini > taxonomy > built-in defaults**. Effective values are logged at
-  startup.
+  `min_edge_multiple`, `min_sl_atr_multiple`, `max_sl_atr_multiple`). Built-in
+  defaults are Kraken futures Tier 1 and the numbers come from `fees.py`;
+  taxonomy values override them, and the `[costs]` section of `config.ini`
+  overrides the taxonomy. Precedence: **config.ini > taxonomy > built-in
+  defaults**. Effective values are logged at startup.
 - **Fee-aware entry gate (fail-closed):** after the policy-C geometric checks,
   require both `tp_distance_pct >= min_edge_multiple * round_trip` and
   `(tp_distance_pct - round_trip) / (sl_distance_pct + round_trip) >= min_rr`.

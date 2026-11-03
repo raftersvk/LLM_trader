@@ -52,6 +52,8 @@ COST_FIELDS: frozenset[str] = frozenset({
     "maker_pct",
     "taker_pct",
     "min_edge_multiple",
+    "min_sl_atr_multiple",
+    "max_sl_atr_multiple",
 })
 #: Flat per-pair execution fields shared with the Freqtrade strategy (W3).
 PAIR_OVERRIDE_FIELDS: frozenset[str] = frozenset({
@@ -318,6 +320,8 @@ class CostsSettings:
     maker_pct: float = KRAKEN_FUTURES_TIER_1.maker_pct
     taker_pct: float = KRAKEN_FUTURES_TIER_1.taker_pct
     min_edge_multiple: float = 1.5
+    min_sl_atr_multiple: float = 0.25
+    max_sl_atr_multiple: float = 12.0
 
     def fee_pct(self, order_type: str | None = None) -> float:
         """Return the fee in percent for an order type (defaults to entry type)."""
@@ -394,6 +398,22 @@ class CostsSettings:
             minimum=0.0,
             allow_zero=False,
         )
+        min_sl_atr_multiple = _number(
+            data.get("min_sl_atr_multiple", base.min_sl_atr_multiple),
+            "costs.min_sl_atr_multiple",
+            minimum=0.0,
+            allow_zero=False,
+        )
+        max_sl_atr_multiple = _number(
+            data.get("max_sl_atr_multiple", base.max_sl_atr_multiple),
+            "costs.max_sl_atr_multiple",
+            minimum=0.0,
+            allow_zero=False,
+        )
+        if max_sl_atr_multiple <= min_sl_atr_multiple:
+            raise TaxonomyConfigError(
+                "costs.max_sl_atr_multiple must be greater than costs.min_sl_atr_multiple"
+            )
         return cls(
             venue=venue,
             tier=tier,
@@ -401,6 +421,8 @@ class CostsSettings:
             maker_pct=maker_pct,
             taker_pct=taker_pct,
             min_edge_multiple=min_edge_multiple,
+            min_sl_atr_multiple=min_sl_atr_multiple,
+            max_sl_atr_multiple=max_sl_atr_multiple,
         )
 
 
@@ -466,6 +488,8 @@ class RegimeTaxonomyConfig:
                 "maker_pct": self.costs.maker_pct,
                 "taker_pct": self.costs.taker_pct,
                 "min_edge_multiple": self.costs.min_edge_multiple,
+                "min_sl_atr_multiple": self.costs.min_sl_atr_multiple,
+                "max_sl_atr_multiple": self.costs.max_sl_atr_multiple,
             },
         }
 
@@ -835,7 +859,8 @@ def format_costs_summary(costs: CostsSettings) -> str:
         f"entry={costs.entry_order_type} "
         f"maker={costs.maker_pct:g}%/side taker={costs.taker_pct:g}%/side "
         f"round_trip={costs.round_trip_pct():g}% "
-        f"min_edge={costs.min_edge_multiple:g}x"
+        f"min_edge={costs.min_edge_multiple:g}x "
+        f"sl_atr=[{costs.min_sl_atr_multiple:g},{costs.max_sl_atr_multiple:g}]x"
     )
 
 

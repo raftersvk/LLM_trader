@@ -268,7 +268,12 @@ def validate_target(
     min_distance_pct: float = 0.5,
     max_distance_pct: float = 10.0,
 ) -> TargetValidation:
-    """Validate target side, R/R and 0.5-10% distance bounds."""
+    """Validate side, R/R and optional distance bounds.
+
+    The default 0.5-10% bounds are retained for the ATR fallback path. Policy-C
+    LLM levels call this with ``min_distance_pct=0`` and an infinite max so no
+    legacy absolute cap is applied.
+    """
     issues: list[str] = []
     try:
         normalized_direction = _normalize_direction(direction)

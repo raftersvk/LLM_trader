@@ -72,6 +72,7 @@ class RegimeAssessment:
 
 REASON_FEES_EXCEED_EDGE = "fees_exceed_edge"
 REASON_FEES_BREAK_RR = "fees_break_rr"
+REASON_IMPLAUSIBLE_STOP = "implausible_stop"
 
 
 @dataclass(frozen=True)
@@ -390,6 +391,7 @@ def build_risk_plan(
         return rejected("direction must be LONG or SHORT", source=TARGET_SOURCE_LLM)
     if not _is_positive_finite(entry_price):
         return rejected("entry price unavailable", source=TARGET_SOURCE_LLM)
+    effective_costs = costs or CostsSettings()
 
     has_stop_loss = stop_loss is not None
     has_take_profit = take_profit is not None
@@ -399,19 +401,33 @@ def build_risk_plan(
                 "LLM stop_loss and take_profit must both be provided",
                 source=TARGET_SOURCE_LLM,
             )
+        # Policy C: no absolute SL/TP percentage cap on LLM levels. The old
+        # 10% RiskManager circuit breaker only applies to the ATR fallback
+        # path; a wide structure stop is legitimate and is bounded instead by
+        # volatility and fee-adjusted risk-based sizing.
         validation = validate_target(
             normalized_direction,
             float(entry_price),
             stop_loss,
             take_profit,
             min_rr=min_rr,
-            min_distance_pct=min_distance_pct,
-            max_distance_pct=max_distance_pct,
+            min_distance_pct=0.0,
+            max_distance_pct=math.inf,
         )
         if not validation.valid:
             return rejected("; ".join(validation.issues), source=TARGET_SOURCE_LLM, validation=validation)
+        if not _is_positive_finite(atr):
+            return rejected("atr_unavailable", source=TARGET_SOURCE_LLM, validation=validation)
+        sl_distance = abs(float(entry_price) - float(stop_loss))
+        atr_value = float(atr)
+        if not (
+            effective_costs.min_sl_atr_multiple * atr_value
+            <= sl_distance
+            <= effective_costs.max_sl_atr_multiple * atr_value
+        ):
+            return rejected(REASON_IMPLAUSIBLE_STOP, source=TARGET_SOURCE_LLM, validation=validation)
         fee_gate = assess_fee_gate(
-            entry_price, stop_loss, take_profit, costs=costs, min_rr=min_rr
+            entry_price, stop_loss, take_profit, costs=effective_costs, min_rr=min_rr
         )
         if not fee_gate.passed:
             return rejected(
@@ -437,7 +453,8 @@ def build_risk_plan(
 
     # No LLM levels at all: documented fallback only (should not occur in
     # practice). The structure/ATR geometry module is never consulted when the
-    # LLM supplied levels.
+    # LLM supplied levels. This path keeps the legacy 0.5%-10% absolute bounds
+    # because it synthesizes ATR-based levels, unlike LLM structure levels.
     if not _is_positive_finite(atr):
         return rejected("fallback target requires a positive ATR", source=TARGET_SOURCE_FALLBACK)
 
@@ -491,7 +508,7 @@ def build_risk_plan(
             validation=validation,
         )
     fee_gate = assess_fee_gate(
-        entry, fallback_stop_loss, fallback_take_profit, costs=costs, min_rr=min_rr
+        entry, fallback_stop_loss, fallback_take_profit, costs=effective_costs, min_rr=min_rr
     )
     if not fee_gate.passed:
         return _make_risk_plan(

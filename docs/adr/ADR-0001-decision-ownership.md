@@ -27,11 +27,14 @@ La décision humaine du 2026-11-03 retient **définitivement la politique C** po
    - prix d'entrée présent et strictement positif ;
    - côté correct : `stop_loss < entry < take_profit` pour un BUY, `take_profit < entry < stop_loss` pour un SELL ;
    - R/R supérieur ou égal au minimum configuré ;
-   - distances SL et TP dans les bornes **0,5 % à 10 %** ;
-   - valeurs finies et strictement positives.
-4. Si la validation échoue, le signal est **REJETÉ pour exécution** : `risk_approved=false` avec une raison explicite. Les niveaux proposés peuvent être conservés pour l'audit, mais ils ne sont **jamais** remplacés silencieusement par une cible ATR.
-5. Le module de géométrie `tp_mode`/`structure` (`src/llm_focus/target_geometry.py`) ne sert plus que de **repli explicitement documenté** pour un signal qui ne porte aucun niveau (cas attendu inexistant). Il n'est jamais consulté quand le LLM a fourni des niveaux.
-6. Tout reste derrière les drapeaux v2 désactivés par défaut : aucun changement du comportement legacy.
+   - valeurs finies et strictement positives ;
+   - **pas de plafond absolu de 10 % sur les niveaux LLM**. La distance du stop doit être dans une bande **relative à la volatilité** : `min_sl_atr_multiple × ATR <= sl_distance <= max_sl_atr_multiple × ATR` (défauts **0,25x** et **12x**, configurables dans le bloc `costs`/risk de la taxonomie et dans `[costs]` de `config.ini`). Hors bande → rejet `implausible_stop`, sans clamp ni ajustement silencieux ;
+   - l'ATR doit être disponible et positif, sinon rejet `atr_unavailable`.
+4. La borne absolue historique **0,5 %–10 %** ne s'applique plus qu'au **chemin de repli ATR/déterministe**, qui synthétise des niveaux ATR ; elle ne s'applique jamais aux niveaux fournis par le LLM. Ce plafond de 10 % était un circuit breaker legacy copié du calcul ATR, pas une règle adaptée à des stops structurels larges (haute volatilité, range large).
+5. Un stop plus large n'est pas automatiquement dangereux : la taille est calculée par `risque% / distance au SL%`, donc un stop de 15 % produit simplement une position plus petite. La porte de frais protège l'économie de l'entrée.
+6. Si la validation échoue, le signal est **REJETÉ pour exécution** : `risk_approved=false` avec une raison explicite. Les niveaux proposés peuvent être conservés pour l'audit, mais ils ne sont **jamais** remplacés silencieusement par une cible ATR.
+7. Le module de géométrie `tp_mode`/`structure` (`src/llm_focus/target_geometry.py`) ne sert plus que de **repli explicitement documenté** pour un signal qui ne porte aucun niveau (cas attendu inexistant). Il n'est jamais consulté quand le LLM a fourni des niveaux.
+8. Tout reste derrière les drapeaux v2 désactivés par défaut : aucun changement du comportement legacy.
 
 ## Preuves et limites
 
@@ -51,6 +54,8 @@ costs:
   maker_pct: 0.02
   taker_pct: 0.05
   min_edge_multiple: 1.5    # expected move >= 1.5x round-trip cost
+  min_sl_atr_multiple: 0.25 # LLM stop plausibility floor (ATR multiples)
+  max_sl_atr_multiple: 12.0 # LLM stop plausibility ceiling (relative, not %)
 ```
 
 - **Précédence** : `config.ini` > taxonomie YAML > défauts intégrés. Le bloc `[costs]` de `config.ini` existe parce que venue/tier sont propres au compte. Les valeurs effectives sont loguées au démarrage (`Effective costs: ...`).

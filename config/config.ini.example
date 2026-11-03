@@ -179,6 +179,10 @@ entry_order_type = taker
 maker_pct = 0.02
 taker_pct = 0.05
 min_edge_multiple = 1.5
+# LLM stop-loss plausibility band, in ATR multiples. No absolute percentage
+# cap applies to LLM levels; a wide stop yields a smaller risk-based size.
+min_sl_atr_multiple = 0.25
+max_sl_atr_multiple = 12.0
 
 [risk_management]
 # SL/TP execution mode: soft (candle-close only) | hard (intra-candle polling)
