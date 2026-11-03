@@ -1,16 +1,20 @@
-"""Deterministic regime, sizing and ATR risk primitives for LLM-focus v2.
+"""Deterministic regime, sizing and target-validation primitives for LLM-focus v2.
 
-In v2 the LLM no longer supplies position size or absolute SL/TP. These pure
-helpers define the deterministic side of the contract so P0-A/JEV/strategy can
-own those values and tests can assert the boundary.
+Policy C: the LLM proposes absolute stop-loss/take-profit levels and this layer
+validates them (correct side, distance bounds, R/R, entry present). Invalid
+levels reject the signal; they are never silently replaced by ATR targets.
+The target-geometry resolver is a documented fallback for signals that carry no
+levels at all. These helpers stay pure so tests can assert the boundary.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from src.config.regime_taxonomy import DEFAULT_REGIME_SETUPS
+from src.llm_focus.target_geometry import resolve_target_geometry, validate_target
 
 TRENDING_UP = "TRENDING_UP"
 TRENDING_DOWN = "TRENDING_DOWN"
@@ -52,6 +56,9 @@ DEFAULT_ALLOWED_SETUPS.update({NO_TRADE: (), UNKNOWN: ()})
 
 _CONFIDENCE_SIZE = {"HIGH": 0.03, "MEDIUM": 0.02, "LOW": 0.01}
 
+TARGET_SOURCE_LLM = "llm"
+TARGET_SOURCE_FALLBACK = "fallback_geometry"
+
 
 @dataclass(frozen=True)
 class RegimeAssessment:
@@ -65,17 +72,25 @@ class RegimeAssessment:
 
 @dataclass(frozen=True)
 class DeterministicRiskPlan:
-    """Risk parameters owned by the deterministic layer."""
+    """Validated policy-C risk plan.
+
+    ``stop_loss``/``take_profit`` are the LLM levels verbatim when provided.
+    ``risk_approved=False`` means execution must be refused and
+    ``rejection_reason`` explains why; no level is ever invented in that case.
+    """
 
     direction: str
-    entry_price: float
-    stop_loss: float
-    take_profit: float
+    entry_price: float | None
+    stop_loss: float | None
+    take_profit: float | None
     size_pct: float
-    sl_distance_pct: float
-    tp_distance_pct: float
-    rr_ratio: float
+    sl_distance_pct: float | None
+    tp_distance_pct: float | None
+    rr_ratio: float | None
     volatility_level: str
+    risk_approved: bool = False
+    rejection_reason: str | None = None
+    target_source: str = TARGET_SOURCE_LLM
 
 
 def normalize_regime(regime: Any) -> str:
@@ -191,57 +206,204 @@ def compute_position_size(confidence: Any) -> float:
     return _CONFIDENCE_SIZE.get(level, _CONFIDENCE_SIZE["MEDIUM"])
 
 
-def build_risk_plan(
-    direction: str,
-    entry_price: float,
-    atr: float,
-    confidence: Any,
-    atr_pct: float | None = None,
-    sl_atr_multiple: float = 2.0,
-    tp_atr_multiple: float = 4.0,
-) -> DeterministicRiskPlan:
-    """Build the full deterministic plan for a v2 qualitative signal."""
-    normalized_direction = str(direction).strip().upper()
-    stop_loss, take_profit = build_atr_stops(
-        normalized_direction,
-        entry_price,
-        atr,
-        sl_atr_multiple=sl_atr_multiple,
-        tp_atr_multiple=tp_atr_multiple,
+def _is_positive_finite(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
     )
 
-    # Reuse the circuit-breaker bounds from the live RiskManager so the v2
-    # deterministic layer cannot produce degenerate stops.
-    sl_distance = abs(entry_price - stop_loss) / entry_price
-    if sl_distance > 0.10:
-        stop_loss = entry_price * (0.90 if normalized_direction == "LONG" else 1.10)
-    elif sl_distance < 0.005:
-        stop_loss = entry_price * (0.995 if normalized_direction == "LONG" else 1.005)
 
-    if normalized_direction == "LONG":
-        if stop_loss >= entry_price:
-            stop_loss = entry_price - atr * sl_atr_multiple
-        if take_profit <= entry_price:
-            take_profit = entry_price + atr * tp_atr_multiple
-    else:
-        if stop_loss <= entry_price:
-            stop_loss = entry_price + atr * sl_atr_multiple
-        if take_profit >= entry_price:
-            take_profit = entry_price - atr * tp_atr_multiple
+def _effective_atr_pct(entry_price: Any, atr: Any, atr_pct: Any) -> float:
+    if atr_pct is not None:
+        try:
+            value = float(atr_pct)
+        except (TypeError, ValueError):
+            return 0.0
+        return value if math.isfinite(value) else 0.0
+    if _is_positive_finite(entry_price) and _is_positive_finite(atr):
+        return float(atr) / float(entry_price) * 100
+    return 0.0
 
-    sl_distance_pct = abs(entry_price - stop_loss) / entry_price
-    tp_distance_pct = abs(take_profit - entry_price) / entry_price
-    rr_ratio = tp_distance_pct / sl_distance_pct if sl_distance_pct > 0 else 0.0
-    effective_atr_pct = float(atr_pct) if atr_pct is not None else (atr / entry_price) * 100
 
+def _make_risk_plan(
+    *,
+    direction: str,
+    entry_price: float | None,
+    stop_loss: Any,
+    take_profit: Any,
+    confidence: Any,
+    atr: Any,
+    atr_pct: Any,
+    risk_approved: bool,
+    rejection_reason: str | None,
+    target_source: str,
+    validation: Any = None,
+) -> DeterministicRiskPlan:
     return DeterministicRiskPlan(
-        direction=normalized_direction,
+        direction=direction,
         entry_price=entry_price,
         stop_loss=stop_loss,
         take_profit=take_profit,
         size_pct=compute_position_size(confidence),
-        sl_distance_pct=sl_distance_pct,
-        tp_distance_pct=tp_distance_pct,
-        rr_ratio=rr_ratio,
-        volatility_level=classify_volatility(effective_atr_pct),
+        sl_distance_pct=validation.sl_distance_pct if validation else None,
+        tp_distance_pct=validation.tp_distance_pct if validation else None,
+        rr_ratio=validation.rr_ratio if validation else None,
+        volatility_level=classify_volatility(_effective_atr_pct(entry_price, atr, atr_pct)),
+        risk_approved=risk_approved,
+        rejection_reason=rejection_reason,
+        target_source=target_source,
+    )
+
+
+def build_risk_plan(
+    direction: str,
+    entry_price: float | None,
+    atr: float | None,
+    confidence: Any,
+    atr_pct: float | None = None,
+    sl_atr_multiple: float = 2.0,
+    tp_atr_multiple: float = 4.0,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+    min_rr: float = 1.0,
+    min_distance_pct: float = 0.5,
+    max_distance_pct: float = 10.0,
+    setup: Any = None,
+    range_high: float | None = None,
+    range_low: float | None = None,
+    vwap: float | None = None,
+    measured_move_target: float | None = None,
+) -> DeterministicRiskPlan:
+    """Validate policy-C levels or build a documented fallback plan.
+
+    When the LLM provides ``stop_loss``/``take_profit`` they are authoritative:
+    they are returned verbatim when valid, and the plan is rejected with an
+    explicit reason when they are invalid. They are never replaced by ATR
+    values. The target-geometry/ATR fallback is used only when both levels are
+    absent.
+    """
+    normalized_direction = str(direction or "").strip().upper()
+
+    def rejected(reason: str, *, source: str, validation: Any = None) -> DeterministicRiskPlan:
+        return _make_risk_plan(
+            direction=normalized_direction or "UNKNOWN",
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            confidence=confidence,
+            atr=atr,
+            atr_pct=atr_pct,
+            risk_approved=False,
+            rejection_reason=reason,
+            target_source=source,
+            validation=validation,
+        )
+
+    if normalized_direction not in ("LONG", "SHORT"):
+        return rejected("direction must be LONG or SHORT", source=TARGET_SOURCE_LLM)
+    if not _is_positive_finite(entry_price):
+        return rejected("entry price unavailable", source=TARGET_SOURCE_LLM)
+
+    has_stop_loss = stop_loss is not None
+    has_take_profit = take_profit is not None
+    if has_stop_loss or has_take_profit:
+        if not (has_stop_loss and has_take_profit):
+            return rejected(
+                "LLM stop_loss and take_profit must both be provided",
+                source=TARGET_SOURCE_LLM,
+            )
+        validation = validate_target(
+            normalized_direction,
+            float(entry_price),
+            stop_loss,
+            take_profit,
+            min_rr=min_rr,
+            min_distance_pct=min_distance_pct,
+            max_distance_pct=max_distance_pct,
+        )
+        if not validation.valid:
+            return rejected("; ".join(validation.issues), source=TARGET_SOURCE_LLM, validation=validation)
+        return _make_risk_plan(
+            direction=normalized_direction,
+            entry_price=float(entry_price),
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            confidence=confidence,
+            atr=atr,
+            atr_pct=atr_pct,
+            risk_approved=True,
+            rejection_reason=None,
+            target_source=TARGET_SOURCE_LLM,
+            validation=validation,
+        )
+
+    # No LLM levels at all: documented fallback only (should not occur in
+    # practice). The structure/ATR geometry module is never consulted when the
+    # LLM supplied levels.
+    if not _is_positive_finite(atr):
+        return rejected("fallback target requires a positive ATR", source=TARGET_SOURCE_FALLBACK)
+
+    entry = float(entry_price)
+    atr_value = float(atr)
+    fallback_take_profit: float | None = None
+    if setup is not None:
+        geometry = resolve_target_geometry(
+            setup,
+            direction=normalized_direction,
+            entry_price=entry,
+            atr=atr_value,
+            range_high=range_high,
+            range_low=range_low,
+            vwap=vwap,
+            measured_move_target=measured_move_target,
+        )
+        fallback_take_profit = geometry.target_price
+    if fallback_take_profit is None:
+        fallback_take_profit = (
+            entry + atr_value * tp_atr_multiple
+            if normalized_direction == "LONG"
+            else entry - atr_value * tp_atr_multiple
+        )
+    fallback_stop_loss = (
+        entry - atr_value * sl_atr_multiple
+        if normalized_direction == "LONG"
+        else entry + atr_value * sl_atr_multiple
+    )
+    validation = validate_target(
+        normalized_direction,
+        entry,
+        fallback_stop_loss,
+        fallback_take_profit,
+        min_rr=min_rr,
+        min_distance_pct=min_distance_pct,
+        max_distance_pct=max_distance_pct,
+    )
+    if not validation.valid:
+        return _make_risk_plan(
+            direction=normalized_direction,
+            entry_price=entry,
+            stop_loss=fallback_stop_loss,
+            take_profit=fallback_take_profit,
+            confidence=confidence,
+            atr=atr,
+            atr_pct=atr_pct,
+            risk_approved=False,
+            rejection_reason="fallback target invalid: " + "; ".join(validation.issues),
+            target_source=TARGET_SOURCE_FALLBACK,
+            validation=validation,
+        )
+    return _make_risk_plan(
+        direction=normalized_direction,
+        entry_price=entry,
+        stop_loss=fallback_stop_loss,
+        take_profit=fallback_take_profit,
+        confidence=confidence,
+        atr=atr,
+        atr_pct=atr_pct,
+        risk_approved=True,
+        rejection_reason=None,
+        target_source=TARGET_SOURCE_FALLBACK,
+        validation=validation,
     )

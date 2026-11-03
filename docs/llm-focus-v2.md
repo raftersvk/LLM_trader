@@ -3,11 +3,11 @@
 Status: **prepared, default off, not wired into the live service.**
 Branch: `feat/llm-focus-v2-prep`.
 
-This document describes the staged v2 architecture: the LLM focuses on the
-qualitative trading thesis, while deterministic code owns regime, position size,
-stop-loss/take-profit and the decision to spend another LLM call. Every flag
-defaults to `false`, so the current v1 behavior is unchanged unless an operator
-opts in.
+This document describes the staged v2 architecture: the LLM owns the
+qualitative thesis and proposes absolute stop-loss/take-profit levels, while
+deterministic code owns regime, position size, validation of those levels and
+the decision to spend another LLM call. Every flag defaults to `false`, so the
+current v1 behavior is unchanged unless an operator opts in.
 
 ## Layered architecture
 
@@ -22,11 +22,12 @@ Shortlist v2 (flag: shortlist_v2)  -> candidates + explicit rejection reasons
         |
         v
 LLM qualitative review (flag: llm_focus_v2)
-  action, setup, entry thesis, invalidation, confidence, reasoning/news
+  action, setup, entry thesis, invalidation, confidence, reasoning/news,
+  proposed absolute stop_loss / take_profit
         |
         v
 Deterministic risk layer (P0-A/JEV/strategy)
-  regime, position size, ATR SL/TP
+  regime, position size, fail-closed validation of LLM SL/TP
         |
         v
 Event-driven position management (flag: event_positions_v2)
@@ -36,14 +37,20 @@ Event-driven position management (flag: event_positions_v2)
 ### Decision ownership and target geometry
 
 - `docs/adr/ADR-0001-decision-ownership.md` fixes the authority for regime,
-  direction, SL/TP and size, with the JEV disagreement/precision evidence and
-  the numeric regime switch criterion.
-- `docs/adr/ADR-0002-target-geometry.md` defines optional per-setup `tp_mode`
+  direction, SL/TP and size, with the JEV disagreement/precision evidence, the
+  numeric regime switch criterion and the policy-C fee caveat.
+- **Policy C (confirmed):** the LLM proposes absolute `stop_loss`/`take_profit`
+  levels; the code validates them (correct side, entry present, 0.5-10%
+  distance bounds, R/R floor). Invalid levels reject the signal
+  (`risk_approved=false` with an explicit reason) and are never replaced by ATR
+  targets.
+- `docs/adr/ADR-0002-target-geometry.md` keeps optional per-setup `tp_mode`
   (`atr_multiple` | `structure`) and the structure sub-modes (`mid_range`,
-  `vwap`, `measured_move`). The canonical taxonomy stays in trading-stack
-  (PR #15); this repository reads the field with `atr_multiple` fallback.
-- `src/llm_focus/target_geometry.py` implements the resolver and Python target
-  validation (correct side, 0.5-10% bounds, configurable R/R floor).
+  `vwap`, `measured_move`) as an **explicitly documented fallback only** for
+  signals that carry no levels at all. It is never used when the LLM supplied
+  levels. The canonical taxonomy stays in trading-stack (PR #15).
+- `src/llm_focus/target_geometry.py` implements the fallback resolver and the
+  Python target validation (correct side, 0.5-10% bounds, configurable R/R).
 - `src/llm_focus/fees.py` holds the Kraken reference fees (source and date in
   the module), uses taker by default and exposes venue/tier/liquidity
   sensitivity. Spot Tier 1 is **1.60% round trip** (0.80% + 0.80%), which
@@ -55,14 +62,16 @@ Event-driven position management (flag: event_positions_v2)
 
 - New pure module: `src/llm_focus/prompts.py`.
 - The LLM output keeps `action`, `setup`, `entry_thesis`, `invalidation`,
-  `confidence`, `reasoning` and optional `news`.
-- The LLM no longer self-reports market regime/higher-timeframe bias, position
-  size, or absolute stop-loss/take-profit prices.
-- `to_v1_compatible()` maps `action` to the legacy `signal` field for
-  introspection/parsing compatibility, without inventing risk fields.
+  `confidence`, `reasoning`, proposed absolute `stop_loss`/`take_profit` and
+  optional `news`.
+- The LLM no longer self-reports market regime/higher-timeframe bias or
+  position size.
+- `to_v1_compatible()` maps `action` to the legacy `signal` field and carries
+  the proposed levels across for execution/validation.
 - Deterministic ownership lives in `src/llm_focus/deterministic_risk.py`:
-  regime normalization, allowed setups, confidence-based size, ATR stops and
-  the same 0.5%/10% stop-distance guards used by the live RiskManager.
+  regime normalization, allowed setups, confidence-based size, and fail-closed
+  validation of the LLM levels. The geometry/ATR path is a documented fallback
+  used only when no levels are present; it never overrides the LLM.
 - Integration point: `TemplateManager` branches to the v2 system prompt,
   analysis steps and response template only when the flag is on.
 
@@ -96,7 +105,7 @@ All default to false.
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `llm_focus_v2` | `false` | Use the v2 prompt/schema; LLM stops emitting regime, size, absolute SL/TP. |
+| `llm_focus_v2` | `false` | Use the v2 prompt/schema; LLM emits absolute SL/TP, code validates; LLM stops emitting regime/size. |
 | `shortlist_v2` | `false` | Build the recall-oriented pre-LLM shortlist. |
 | `event_positions_v2` | `false` | Trigger LLM position reviews only on meaningful events. |
 
@@ -107,8 +116,9 @@ unknown values as off.
 ## Rollout order
 
 1. **Schema first (`llm_focus_v2`).** Validate that v2 responses parse, map to
-   the v1 `signal` field, and that deterministic risk produces sane ATR SL/TP
-   and size. Do not enable shortlist or event positions yet.
+   the v1 `signal` field, and that deterministic risk validates the LLM SL/TP
+   (valid levels pass verbatim, invalid levels are rejected, never substituted)
+   and produces a sane size. Do not enable shortlist or event positions yet.
 2. **Shortlist A/B (`shortlist_v2`).** Run `scripts/ab_shortlist.py` against
    archived signals/backtest data. Require the recall guardrail to pass before
    using the shortlist to skip any LLM calls.
@@ -157,6 +167,12 @@ constructs a model manager. `--full-pairs 10` (the default) models the current
   positions in shadow mode first and tune thresholds from observed frequency.
 - **Parameter duplication**: deterministic risk mirrors the live RiskManager
   bounds. Keep both in sync or extract shared constants before wiring v2 live.
+- **Proposed-level quality**: policy C trusts the LLM to propose usable levels;
+  the validator only rejects bad geometry. Weak levels still pass if they are
+  internally coherent, which is why the ADR evidence remains "least bad".
+- **Venue costs**: the C-vs-A comparison used 0.10% round-trip (futures-like).
+  At spot Tier 1 (1.60% round trip) no intra-hour policy is profitable; see
+  ADR-0001.
 - **Default-off discipline**: no live wiring is included in this preparation
   branch; enabling a flag alone must not alter behavior until the explicit
   integration step is reviewed.

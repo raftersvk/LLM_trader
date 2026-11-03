@@ -1,4 +1,9 @@
-"""Pure target-geometry model for LLM-focus v2.
+"""Fallback target-geometry model for LLM-focus v2 (policy C).
+
+Policy C makes the LLM's absolute stop-loss/take-profit levels authoritative.
+This resolver is kept only as an explicitly documented fallback for signals that
+carry no levels at all (expected to be none in practice); it must not be used
+when the LLM supplied levels.
 
 The canonical setup taxonomy lives in the external trading-stack repository
 (PR #15) and is not modified here. This module reads an optional ``tp_mode``
@@ -147,13 +152,17 @@ def resolve_target_geometry(
     vwap: float | None = None,
     measured_move_target: float | None = None,
 ) -> TargetGeometry:
-    """Resolve an ATR or structure target with documented fallbacks.
+    """Resolve an ATR/structure fallback target (policy C fallback only).
+
+    Never call this when the LLM supplied ``stop_loss``/``take_profit``: policy
+    C makes those levels authoritative. This resolver exists only for signals
+    carrying no levels at all.
 
     ``range_mean_reversion`` and ``range_fade_extreme`` try mid-range then
     VWAP when no explicit submode is supplied. If the structural measurement is
     unavailable or on the wrong side of entry, the resolver falls back to the
-    setup's ``tp_atr`` multiple. Setups without ``tp_atr`` keep the LLM level
-    (``effective_mode='llm_level'``).
+    setup's ``tp_atr`` multiple. Setups without ``tp_atr`` return ``None`` so
+    the caller can keep its own target or reject the signal.
     """
     normalized_direction = _normalize_direction(direction)
     if entry_price <= 0 or atr <= 0:

@@ -24,6 +24,8 @@ def _valid_payload():
             "invalidation": "Close below the swing low invalidates the thesis.",
             "confidence": 78,
             "reasoning": "Trend and momentum align.",
+            "stop_loss": 95_000.0,
+            "take_profit": 104_000.0,
             "news": ["ETF flow positive"],
         }
     }
@@ -51,8 +53,10 @@ class TestV2Schema:
             assert field in properties
         assert "news" in properties
 
-    def test_schema_forbids_risk_and_regime_fields(self):
+    def test_schema_exposes_llm_levels_and_forbids_regime_size(self):
         properties = V2_ANALYSIS_SCHEMA["properties"]
+        assert "stop_loss" in properties
+        assert "take_profit" in properties
         for field in V2_FORBIDDEN_FIELDS:
             assert field not in properties
         assert V2_ANALYSIS_SCHEMA["additionalProperties"] is False
@@ -66,13 +70,30 @@ class TestV2Schema:
         issues = validate_v2_payload(payload)
         assert any("setup" in issue for issue in issues)
 
-    def test_forbidden_risk_fields_are_rejected(self):
+    def test_forbidden_size_and_regime_fields_are_rejected(self):
         payload = _valid_payload()
-        payload["analysis"]["stop_loss"] = 95_000
+        payload["analysis"]["regime"] = "trend_up"
         payload["analysis"]["position_size_pct"] = 0.2
         issues = validate_v2_payload(payload)
-        assert any("stop_loss" in issue for issue in issues)
+        assert any("regime" in issue for issue in issues)
         assert any("position_size_pct" in issue for issue in issues)
+
+    def test_buy_requires_both_llm_levels(self):
+        payload = _valid_payload()
+        payload["analysis"]["stop_loss"] = None
+        issues = validate_v2_payload(payload)
+        assert any("stop_loss" in issue for issue in issues)
+
+        del payload["analysis"]["take_profit"]
+        issues = validate_v2_payload(payload)
+        assert any("take_profit" in issue for issue in issues)
+
+    def test_hold_may_use_null_levels(self):
+        payload = _valid_payload()
+        payload["analysis"]["action"] = "HOLD"
+        payload["analysis"]["stop_loss"] = None
+        payload["analysis"]["take_profit"] = None
+        assert validate_v2_payload(payload) == ()
 
     def test_invalid_action_and_confidence(self):
         payload = _valid_payload()
@@ -84,28 +105,40 @@ class TestV2Schema:
 
 
 class TestV2Mapping:
-    def test_to_v1_compatible_maps_action_to_signal(self):
+    def test_to_v1_compatible_maps_action_and_levels(self):
         mapped = to_v1_compatible(_valid_payload())["analysis"]
         assert mapped["signal"] == "BUY"
         assert mapped["setup"] == "TREND_PULLBACK"
         assert mapped["entry_thesis"]
         assert mapped["invalidation"]
-        for forbidden in ("stop_loss", "take_profit", "position_size", "position_size_pct"):
+        assert mapped["stop_loss"] == 95_000.0
+        assert mapped["take_profit"] == 104_000.0
+        for forbidden in ("position_size", "position_size_pct", "regime", "htf"):
             assert forbidden not in mapped
 
     def test_v2_template_contract(self):
         template = build_v2_response_template()
-        for field in ("action", "setup", "entry_thesis", "invalidation", "confidence", "reasoning", "news"):
+        for field in (
+            "action",
+            "setup",
+            "entry_thesis",
+            "invalidation",
+            "confidence",
+            "reasoning",
+            "stop_loss",
+            "take_profit",
+            "news",
+        ):
             assert f'"{field}"' in template
-        assert '"stop_loss"' not in template
-        assert '"take_profit"' not in template
         assert '"position_size"' not in template
-        assert "POSITION SIZING FORMULA" not in template
+        assert "policy C" in template
+        assert "NEVER replaced" in template
 
-    def test_v2_steps_do_not_request_regime_self_report(self):
+    def test_v2_steps_request_levels_without_regime_self_report(self):
         steps = build_v2_analysis_steps("BTC/USDT")
         assert "deterministic P0-A layer already owns regime" in steps
-        assert "Do not output absolute stop-loss or take-profit prices" in steps
+        assert "absolute stop-loss and take-profit" in steps
+        assert "invalid levels reject" in steps
         assert "R/R CALCULATION" not in steps
 
 
@@ -115,13 +148,17 @@ class TestV2SystemPrompt:
         assert "V2 Decision Boundary" in prompt
         assert "deterministic P0-A" in prompt
         assert "Do NOT self-report regime/HTF" in prompt
+        assert "policy C" in prompt
+        assert "absolute stop-loss/take-profit" in prompt
+        assert "never replaced by ATR targets" in prompt
         assert "Last analysis: 2026-11-02 12:00:00 UTC" in prompt
 
-    def test_v2_decision_rules_do_not_request_size_or_sl_tp(self):
+    def test_v2_decision_rules_request_levels_but_not_size(self):
         rules = build_v2_decision_rules(confidence_threshold=82)
         assert "confidence >= 82" in rules
         assert "JEV veto" in rules
-        assert "do not emit absolute stop-loss" in rules.lower()
+        assert "provide absolute stop-loss and take-profit" in rules.lower()
+        assert "never replaced by ATR targets" in rules
         assert "POSITION SIZING FORMULA" not in rules
 
 
@@ -155,8 +192,8 @@ class TestTemplateManagerIsolation:
         assert '"setup"' in template
         assert '"entry_thesis"' in template
         assert '"invalidation"' in template
-        assert '"stop_loss"' not in template
-        assert '"take_profit"' not in template
+        assert '"stop_loss"' in template
+        assert '"take_profit"' in template
         assert '"position_size"' not in template
         assert "POSITION SIZING FORMULA" not in template
         assert "V2 Decision Boundary" in system_prompt
