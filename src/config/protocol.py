@@ -138,6 +138,8 @@ class ConfigProtocol(Protocol):
 
     def costs_overrides(self) -> dict[str, Any]: ...
 
+    def risk_sizing_overrides(self) -> dict[str, Any]: ...
+
 
 
     @property

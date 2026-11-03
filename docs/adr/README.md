@@ -10,6 +10,7 @@ alternatives (with the reason they lost) → consequences → how it was verifie
 | [0003](0003-cycle-checkpoints.md) | One persisted cycle checkpoint; duplicate suppression by decision hash | accepted |
 | [0004](0004-approval-gate.md) | Human approval gate is opt-in and expires into a refusal | accepted |
 | [0005](0005-real-price-exit-ownership.md) | The real price owns the exit; the exchange leg is a catastrophe backstop | accepted |
+| [ADR-0003](ADR-0003-risk-position-sizing.md) | LLM-focus v2 position size comes from risk budget / stop distance (flag off) | prepared |
 
 Add a new ADR for any change that alters where state lives, who may execute an order, or
 what evidence a lesson may rest on. Supersede rather than rewrite.

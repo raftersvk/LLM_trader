@@ -184,6 +184,30 @@ min_edge_multiple = 1.5
 min_sl_atr_multiple = 0.25
 max_sl_atr_multiple = 12.0
 
+[risk_sizing]
+# Risk/volatility position sizing (LLM-focus v2 only; off while llm_focus_v2
+# is false). size_pct = risk_per_trade_pct / sl_distance_pct, where both are
+# percentages: 0.25 / 2.0 = 0.125 means 12.5% of capital.
+# Precedence: config.ini > taxonomy `risk:` block > built-in defaults.
+# Risk budget per trade, in percent of capital. This is the tuning knob:
+# position size is derived as risk_per_trade_pct / sl_distance_pct.
+# Recommended default 0.25%: 2% stop -> 12.5%, 1% stop -> 25%, 4% stop -> 6.25%.
+# Per-pair risk overrides (e.g. BEAMX/USDT: 0.10-0.15) and per-regime
+# multipliers (e.g. high_vol: 0.5, 1.0 neutral) live in the taxonomy risk block,
+# not in this flat section.
+risk_per_trade_pct = 0.25
+# Skip the trade when the computed size falls below this percentage.
+min_size_pct = 0.1
+# Futures only: maximum leverage. Spot rejects sizes above 100% of capital.
+max_leverage = 1.0
+# Portfolio-level exposure ceiling, in percent of capital. When omitted it is
+# 100% on spot and 200% on futures. A canonical per-pair `max_stake` (quote
+# currency) is still honoured as an optional per-trade cap when capital is known.
+max_portfolio_exposure_pct = 100.0
+# What to do when a new signal would breach the portfolio ceiling:
+# scale_down (default) trims it to the remaining room; reject refuses it.
+exposure_mode = scale_down
+
 [risk_management]
 # SL/TP execution mode: soft (candle-close only) | hard (intra-candle polling)
 stop_loss_type = hard

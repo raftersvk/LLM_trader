@@ -10,10 +10,11 @@ levels at all. These helpers stay pure so tests can assert the boundary.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping
 
-from src.config.regime_taxonomy import DEFAULT_REGIME_SETUPS, CostsSettings
+from src.config.regime_taxonomy import DEFAULT_REGIME_SETUPS, CostsSettings, RiskSettings
+from src.llm_focus.risk_sizing import PositionSizeDecision, compute_risk_based_size
 from src.llm_focus.target_geometry import resolve_target_geometry, validate_target
 
 TRENDING_UP = "TRENDING_UP"
@@ -112,6 +113,7 @@ class DeterministicRiskPlan:
     rejection_reason: str | None = None
     target_source: str = TARGET_SOURCE_LLM
     fee_gate: FeeGateResult | None = None
+    sizing: PositionSizeDecision | None = None
 
 
 def normalize_regime(regime: Any) -> str:
@@ -342,6 +344,84 @@ def assess_fee_gate(
 
 
 def build_risk_plan(
+    direction: str,
+    entry_price: float | None,
+    atr: float | None,
+    confidence: Any,
+    atr_pct: float | None = None,
+    sl_atr_multiple: float = 2.0,
+    tp_atr_multiple: float = 4.0,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+    min_rr: float = 1.0,
+    min_distance_pct: float = 0.5,
+    max_distance_pct: float = 10.0,
+    costs: CostsSettings | None = None,
+    setup: Any = None,
+    range_high: float | None = None,
+    range_low: float | None = None,
+    vwap: float | None = None,
+    measured_move_target: float | None = None,
+    risk_sizing: bool = False,
+    risk_settings: RiskSettings | None = None,
+    capital: float | None = None,
+    trading_mode: str = "spot",
+    pair_max_stake: float | None = None,
+    current_exposure_pct: float = 0.0,
+    symbol: str | None = None,
+    regime: str | None = None,
+) -> DeterministicRiskPlan:
+    """Validate policy-C levels and optionally size from the risk budget.
+
+    The policy-C target validation is unchanged. ``risk_sizing`` is an opt-in
+    flag (off by default): when false the plan keeps the legacy
+    confidence-based ``compute_position_size`` result, so enabling the v2
+    feature cannot change legacy behaviour. When true, an approved plan is
+    sized with :func:`compute_risk_based_size`; a floor or leverage rejection
+    turns the plan into a refusal with an explicit reason.
+    """
+    plan = _build_risk_plan(
+        direction,
+        entry_price,
+        atr,
+        confidence,
+        atr_pct,
+        sl_atr_multiple,
+        tp_atr_multiple,
+        stop_loss,
+        take_profit,
+        min_rr,
+        min_distance_pct,
+        max_distance_pct,
+        costs,
+        setup,
+        range_high,
+        range_low,
+        vwap,
+        measured_move_target,
+    )
+    if not risk_sizing or not plan.risk_approved or plan.sl_distance_pct is None:
+        return plan
+    decision = compute_risk_based_size(
+        plan.sl_distance_pct,
+        risk_settings,
+        capital=capital,
+        trading_mode=trading_mode,
+        pair_max_stake=pair_max_stake,
+        current_exposure_pct=current_exposure_pct,
+        symbol=symbol,
+        regime=regime,
+    )
+    return replace(
+        plan,
+        size_pct=decision.size_pct,
+        risk_approved=decision.approved,
+        rejection_reason=decision.reason,
+        sizing=decision,
+    )
+
+
+def _build_risk_plan(
     direction: str,
     entry_price: float | None,
     atr: float | None,

@@ -85,9 +85,21 @@ Event-driven position management (flag: event_positions_v2)
 - `to_v1_compatible()` maps `action` to the legacy `signal` field and carries
   the proposed levels across for execution/validation.
 - Deterministic ownership lives in `src/llm_focus/deterministic_risk.py`:
-  regime normalization, allowed setups, confidence-based size, and fail-closed
-  validation of the LLM levels. The geometry/ATR path is a documented fallback
-  used only when no levels are present; it never overrides the LLM.
+  regime normalization, allowed setups, and fail-closed validation of the LLM
+  levels. The geometry/ATR path is a documented fallback used only when no
+  levels are present; it never overrides the LLM.
+- Position size comes from the risk budget, not from LLM confidence:
+  `size_pct = risk_per_trade_pct / sl_distance_pct` (`src/llm_focus/risk_sizing.py`,
+  ADR-0003). **The risk level is the tuning knob**; size is derived. The
+  recommended default is `risk_per_trade_pct: 0.25` (2% stop -> 12.5%, 1% stop
+  -> 25%, 4% stop -> 6.25%), with optional lower per-pair risk overrides
+  (`risk.pair_overrides`, e.g. BEAMX 0.10-0.15) and optional regime multipliers
+  (`risk.regime_risk_multipliers`, 1.0 neutral). There is **no fixed per-trade
+  percentage cap**: the safety brakes are the portfolio exposure ceiling
+  (`max_portfolio_exposure_pct`, scaled down or rejected via `exposure_mode`),
+  the account limits (spot rejects above 100%, futures rejects above
+  `max_leverage`) and the `min_size_pct` floor (`size_below_min`). The legacy
+  confidence-based size remains the default while `llm_focus_v2` is off.
 - Integration point: `TemplateManager` branches to the v2 system prompt,
   analysis steps and response template only when the flag is on.
 - `AnalysisResultProcessor` converts v2 replies with `to_v1_compatible()` before

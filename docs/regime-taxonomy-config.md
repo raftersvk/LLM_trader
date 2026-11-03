@@ -85,6 +85,19 @@ pair_overrides: {}              # optional flat execution overrides (W3 schema)
 #   be_at_r: 1.0
 #   trail_after_r: 1.5
 
+risk:                           # optional risk-budget sizing (ADR-0003)
+  risk_per_trade_pct: 0.25      # risk level: the tuning knob, % of capital
+  pair_overrides:               # optional per-pair risk levels
+    BEAMX/USDT: 0.10
+    TRX/USDT: 0.15
+  regime_risk_multipliers:      # optional, 1.0 is neutral
+    high_vol: 0.5
+    low_vol: 1.0
+  min_size_pct: 0.1             # below this the trade is skipped
+  max_leverage: 1.0             # futures only; spot rejects above 100%
+  max_portfolio_exposure_pct: 100.0  # total open exposure ceiling
+  exposure_mode: scale_down     # scale_down | reject
+
 jev:
   bias_short_only: true         # W3 canonical: shorts only (P0-B default)
   log_decisions: true           # append one JSONL audit record per analysis
@@ -117,6 +130,25 @@ jev:
   `max_stake`, `leverage`, `trail_atr`, `be_at_r`, `trail_after_r`). These are
   consumed by the Freqtrade strategy, not by the regime snapshot. Both
   `BTC/USDT:USDT` and `BTC/USDT` keys resolve to the signal symbol.
+- `risk`: optional risk-budget sizing policy (ADR-0003).
+  **The risk level is the tuning knob**, size is derived:
+  `size_pct = risk_per_trade_pct / sl_distance_pct`, with no fixed per-trade
+  percentage cap. Recommended default `risk_per_trade_pct: 0.25`;
+  `pair_overrides` lowers it per volatile/illiquid pair (e.g. BEAMX 0.10-0.15)
+  and `regime_risk_multipliers` scales it per regime (1.0 or absent = neutral).
+  The real brakes are the portfolio ceiling (`max_portfolio_exposure_pct`,
+  `exposure_mode = scale_down | reject`), the account limits (spot rejects
+  above 100%, futures above `max_leverage`), the `min_size_pct` floor and an
+  optional canonical per-pair `max_stake`. Precedence: `config.ini
+  [risk_sizing]` > this block > built-in defaults. The flag `llm_focus_v2`
+  must be on for it to replace the legacy confidence-based size.
+
+  Size vs stop distance for the recommended risk levels:
+
+  | Risk per trade | Stop 2% | Stop 1% | Stop 4% |
+  | --- | --- | --- | --- |
+  | 0.25% (recommended default) | 12.5% | 25% | 6.25% |
+  | 0.50% | 25% | 50% | 12.5% |
 - `jev`: the W3 canonical file sets `bias_short_only: true` (shorts only,
   P0-B default) and `log_decisions: true`; set `bias_short_only: false` to
   disable the post-OOS short veto. `log_decisions` appends one structured
