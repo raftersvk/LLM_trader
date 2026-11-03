@@ -18,6 +18,7 @@ from src.config.regime_taxonomy import (
     DEFAULT_TAXONOMY_CONFIG_PATH,
     NO_TRADE_REGIMES,
     REGIMES,
+    CostsSettings,
     RegimeThresholds,
     SetupDefinition,
     TaxonomyConfigError,
@@ -25,6 +26,7 @@ from src.config.regime_taxonomy import (
     load_taxonomy_config,
     parse_taxonomy_config,
     render_setup_taxonomy,
+    resolve_costs_config,
     resolve_taxonomy_config_path,
 )
 from src.signal_service.jev_client import JevResponse
@@ -740,3 +742,96 @@ jev:
     assert config.jev.log_path == str(tmp_path / "decisions.jsonl")
     assert not (tmp_path / "decisions.jsonl").exists()
 
+
+
+# --------------------------------------------------------------------- costs
+def test_default_costs_are_kraken_futures_tier_1():
+    costs = default_taxonomy_config().costs
+
+    assert costs == CostsSettings()
+    assert costs.venue == "futures"
+    assert costs.tier == 1
+    assert costs.entry_order_type == "taker"
+    assert costs.maker_pct == pytest.approx(0.02)
+    assert costs.taker_pct == pytest.approx(0.05)
+    assert costs.round_trip_pct() == pytest.approx(0.10)
+    assert costs.min_edge_multiple == pytest.approx(1.5)
+
+
+def test_taxonomy_costs_follow_the_venue_tier_constants():
+    config = parse_taxonomy_config({"costs": {"venue": "spot", "tier": 2}})
+
+    assert config.costs.venue == "spot"
+    assert config.costs.tier == 2
+    assert config.costs.maker_pct == pytest.approx(0.30)
+    assert config.costs.taker_pct == pytest.approx(0.60)
+    assert config.costs.round_trip_pct() == pytest.approx(1.20)
+
+
+def test_taxonomy_cost_rates_override_the_constants():
+    config = parse_taxonomy_config(
+        {
+            "costs": {
+                "venue": "futures",
+                "tier": 1,
+                "entry_order_type": "maker",
+                "maker_pct": 0.01,
+                "taker_pct": 0.03,
+                "min_edge_multiple": 2.0,
+            }
+        }
+    )
+
+    assert config.costs.entry_order_type == "maker"
+    assert config.costs.maker_pct == pytest.approx(0.01)
+    assert config.costs.taker_pct == pytest.approx(0.03)
+    assert config.costs.round_trip_pct() == pytest.approx(0.04)
+    assert config.costs.min_edge_multiple == pytest.approx(2.0)
+
+
+def test_runtime_overrides_win_over_taxonomy_and_defaults():
+    taxonomy = parse_taxonomy_config({"costs": {"venue": "spot", "tier": 1}})
+    config_ini_overrides = {
+        "venue": "futures",
+        "tier": 1,
+        "entry_order_type": "maker",
+        "maker_pct": 0.01,
+        "taker_pct": 0.03,
+        "min_edge_multiple": 2.0,
+    }
+
+    effective = resolve_costs_config(taxonomy, config_ini_overrides)
+
+    assert effective.venue == "futures"
+    assert effective.tier == 1
+    assert effective.entry_order_type == "maker"
+    assert effective.maker_pct == pytest.approx(0.01)
+    assert effective.taker_pct == pytest.approx(0.03)
+    assert effective.min_edge_multiple == pytest.approx(2.0)
+
+
+def test_absent_config_ini_costs_keep_taxonomy_values():
+    taxonomy = parse_taxonomy_config({"costs": {"venue": "spot", "tier": 3}})
+
+    effective = resolve_costs_config(taxonomy, {})
+
+    assert effective.venue == "spot"
+    assert effective.tier == 3
+    assert effective.maker_pct == pytest.approx(0.22)
+    assert effective.taker_pct == pytest.approx(0.38)
+
+
+@pytest.mark.parametrize(
+    "costs",
+    [
+        {"venue": "binance"},
+        {"tier": 0},
+        {"tier": 1.5},
+        {"entry_order_type": "limit"},
+        {"min_edge_multiple": 0},
+        {"unknown": 1},
+    ],
+)
+def test_invalid_costs_blocks_are_rejected(costs):
+    with pytest.raises(TaxonomyConfigError):
+        parse_taxonomy_config({"costs": costs})

@@ -2,14 +2,18 @@
 
 import pytest
 
+from src.config.regime_taxonomy import CostsSettings
 from src.llm_focus.deterministic_risk import (
     NO_TRADE,
     RANGING,
+    REASON_FEES_BREAK_RR,
+    REASON_FEES_EXCEED_EDGE,
     TARGET_SOURCE_FALLBACK,
     TARGET_SOURCE_LLM,
     TRENDING_DOWN,
     TRENDING_UP,
     UNKNOWN,
+    assess_fee_gate,
     assess_regime,
     assess_regime_from_mapping,
     build_atr_stops,
@@ -247,3 +251,89 @@ class TestPolicyCRiskPlan:
         plan = build_risk_plan("SIDEWAYS", 100.0, 1.0, confidence=80, stop_loss=97.0, take_profit=106.0)
         assert not plan.risk_approved
         assert plan.rejection_reason == "direction must be LONG or SHORT"
+
+
+class TestFeeAwareEntryGate:
+    def test_defaults_are_kraken_futures_tier_1(self):
+        costs = CostsSettings()
+        assert costs.venue == "futures"
+        assert costs.tier == 1
+        assert costs.maker_pct == pytest.approx(0.02)
+        assert costs.taker_pct == pytest.approx(0.05)
+        assert costs.round_trip_pct() == pytest.approx(0.10)
+
+    def test_edge_boundary_exactly_1_5x_passes_and_below_fails(self):
+        costs = CostsSettings(min_edge_multiple=1.5)
+        min_edge_pct = costs.round_trip_pct() * costs.min_edge_multiple
+
+        at_boundary = assess_fee_gate(
+            100.0, 99.0, 100.0 + min_edge_pct, costs=costs, min_rr=0.0
+        )
+        below = assess_fee_gate(
+            100.0, 99.0, 100.0 + min_edge_pct - 0.0001, costs=costs, min_rr=0.0
+        )
+
+        assert at_boundary.passed
+        assert REASON_FEES_EXCEED_EDGE not in at_boundary.reasons
+        assert REASON_FEES_EXCEED_EDGE in below.reasons
+        assert not below.passed
+
+    def test_fee_adjusted_rr_boundary(self):
+        costs = CostsSettings(min_edge_multiple=1.0)
+        # round trip 0.10%, SL 1%, TP 1.75% -> (1.75-0.10)/(1+0.10) = 1.5
+        at_boundary = assess_fee_gate(100.0, 99.0, 101.75, costs=costs, min_rr=1.5)
+        below = assess_fee_gate(100.0, 99.0, 101.749, costs=costs, min_rr=1.5)
+
+        assert at_boundary.adjusted_rr == pytest.approx(1.5)
+        assert at_boundary.passed
+        assert REASON_FEES_BREAK_RR in below.reasons
+        assert not below.passed
+
+    def test_maker_entry_changes_the_outcome(self):
+        taker = CostsSettings(entry_order_type="taker", min_edge_multiple=1.5)
+        maker = CostsSettings(entry_order_type="maker", min_edge_multiple=1.5)
+        # 0.12% TP: below 1.5 x 0.10% taker RT, above 1.5 x 0.07% maker RT.
+        taker_gate = assess_fee_gate(100.0, 99.0, 100.12, costs=taker, min_rr=0.0)
+        maker_gate = assess_fee_gate(100.0, 99.0, 100.12, costs=maker, min_rr=0.0)
+
+        assert not taker_gate.passed
+        assert REASON_FEES_EXCEED_EDGE in taker_gate.reasons
+        assert maker_gate.passed
+
+    def test_spot_tier_1_rejects_what_futures_tier_1_accepts(self):
+        futures = CostsSettings.from_mapping({"venue": "futures", "tier": 1})
+        spot = CostsSettings.from_mapping({"venue": "spot", "tier": 1})
+
+        futures_gate = assess_fee_gate(100.0, 99.0, 102.0, costs=futures, min_rr=1.5)
+        spot_gate = assess_fee_gate(100.0, 99.0, 102.0, costs=spot, min_rr=1.5)
+
+        assert futures_gate.passed
+        assert not spot_gate.passed
+        assert REASON_FEES_EXCEED_EDGE in spot_gate.reasons
+        assert spot_gate.round_trip_pct == pytest.approx(1.60)
+
+    def test_risk_plan_rejects_fee_failure_without_substitution(self):
+        spot = CostsSettings.from_mapping({"venue": "spot", "tier": 1})
+        plan = build_risk_plan(
+            "LONG", 100.0, 1.0, confidence=80,
+            stop_loss=99.0, take_profit=102.0, costs=spot, min_rr=1.5,
+        )
+
+        assert not plan.risk_approved
+        assert plan.rejection_reason == REASON_FEES_EXCEED_EDGE + "; " + REASON_FEES_BREAK_RR
+        assert plan.stop_loss == pytest.approx(99.0)
+        assert plan.take_profit == pytest.approx(102.0)
+        assert plan.fee_gate is not None
+        assert plan.fee_gate.round_trip_pct == pytest.approx(1.60)
+
+    def test_risk_plan_accepts_when_fee_gate_passes(self):
+        plan = build_risk_plan(
+            "LONG", 100.0, 1.0, confidence=80,
+            stop_loss=99.0, take_profit=102.0, min_rr=1.5,
+        )
+
+        assert plan.risk_approved
+        assert plan.rejection_reason is None
+        assert plan.fee_gate is not None
+        assert plan.fee_gate.passed
+        assert plan.fee_gate.round_trip_pct == pytest.approx(0.10)

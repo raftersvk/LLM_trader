@@ -695,3 +695,35 @@ class TestReferenceExitCheckCadence:
         config = config_with({"risk_management": {"reference_exit_check_seconds": value}})
         with pytest.raises(ValueError):
             config.REFERENCE_EXIT_CHECK_SECONDS
+
+
+def test_costs_section_is_exposed_as_typed_overrides(tmp_path, monkeypatch):
+    monkeypatch.delenv("LLM_TRADER_CONFIG_INI", raising=False)
+    path = tmp_path / "config.ini"
+    path.write_text(
+        """
+[costs]
+venue = futures
+tier = 1
+entry_order_type = maker
+maker_pct = 0.01
+taker_pct = 0.03
+min_edge_multiple = 2.0
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(loader, "CONFIG_INI_PATH", path)
+    config = Config.__new__(Config)
+    config._config_data = {}
+    config._load_ini_config()
+
+    overrides = config.costs_overrides()
+
+    assert overrides == {
+        "venue": "futures",
+        "tier": 1,
+        "entry_order_type": "maker",
+        "maker_pct": 0.01,
+        "taker_pct": 0.03,
+        "min_edge_multiple": 2.0,
+    }

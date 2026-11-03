@@ -47,7 +47,7 @@ La taxonomie canonique vit dans **trading-stack (PR #15)** et n'est pas modifié
 - R/R minimum paramétrable (1,0 par défaut) ;
 - valeurs finies et strictement positives.
 
-Si une vérification échoue : `risk_approved=false` et raison explicite. Aucun niveau n'est corrigé, arrondi ou remplacé pour forcer l'approbation.
+Après ces contrôles, la **porte de frais** de l'ADR-0001 s'applique (edge 1,5x et R/R ajusté aux frais, selon `[costs]`/taxonomie). Si une vérification échoue : `risk_approved=false` et raison explicite (`fees_exceed_edge` ou `fees_break_rr` inclus). Aucun niveau n'est corrigé, arrondi ou remplacé pour forcer l'approbation.
 
 ## Suivi
 

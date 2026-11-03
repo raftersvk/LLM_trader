@@ -136,6 +136,8 @@ class ConfigProtocol(Protocol):
     @property
     def EVENT_POSITIONS_V2(self) -> bool: ...
 
+    def costs_overrides(self) -> dict[str, Any]: ...
+
 
 
     @property

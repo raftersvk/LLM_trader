@@ -31,6 +31,11 @@ from src.composition.startup_support import (
     show_error_dialog,
 )
 from src.config.loader import config
+from src.config.regime_taxonomy import (
+    format_costs_summary,
+    load_taxonomy_config,
+    resolve_costs_config,
+)
 from src.logger.logger import Logger
 from src.trading import (
     ExecutorHandler,
@@ -181,6 +186,11 @@ class CompositionRoot(ProvisioningMixin):
     async def build_dependencies(self) -> dict:
         """Build all dependencies for the trading bot via segmented provisions."""
         start_time = time.perf_counter()
+
+        costs = resolve_costs_config(
+            load_taxonomy_config(), self.config.costs_overrides()
+        )
+        self.logger.info("Effective costs: %s", format_costs_summary(costs))
 
         self.console.clear()
         project_root = Path(__file__).parent.resolve()

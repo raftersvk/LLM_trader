@@ -57,6 +57,18 @@ Event-driven position management (flag: event_positions_v2)
   disqualifies most intra-hour strategies. Earlier backtests at 0.05/0.10/0.20%
   materially understated spot costs. Futures Tier 1 is 0.02/0.05%, stablecoin/FX
   is 0.20/0.20%.
+- **Costs are configuration:** `RegimeTaxonomyConfig.costs` reads an optional
+  `costs` block (`venue`, `tier`, `entry_order_type`, `maker_pct`, `taker_pct`,
+  `min_edge_multiple`). Built-in defaults are Kraken futures Tier 1 and the
+  numbers come from `fees.py`; taxonomy values override them, and the
+  `[costs]` section of `config.ini` overrides the taxonomy. Precedence:
+  **config.ini > taxonomy > built-in defaults**. Effective values are logged at
+  startup.
+- **Fee-aware entry gate (fail-closed):** after the policy-C geometric checks,
+  require both `tp_distance_pct >= min_edge_multiple * round_trip` and
+  `(tp_distance_pct - round_trip) / (sl_distance_pct + round_trip) >= min_rr`.
+  Failures reject with `fees_exceed_edge` or `fees_break_rr`; levels are never
+  replaced. Exit fees are assumed taker unless a maker exit is documented.
 
 ### Phase 1: v2 prompt/schema (`llm_focus_v2`)
 
@@ -118,7 +130,9 @@ unknown values as off.
 1. **Schema first (`llm_focus_v2`).** Validate that v2 responses parse, map to
    the v1 `signal` field, and that deterministic risk validates the LLM SL/TP
    (valid levels pass verbatim, invalid levels are rejected, never substituted)
-   and produces a sane size. Do not enable shortlist or event positions yet.
+   and produces a sane size. The fee gate must reject a spot Tier-1 trade that
+   a futures Tier-1 policy accepts, and `[costs]` overrides must be logged.
+   Do not enable shortlist or event positions yet.
 2. **Shortlist A/B (`shortlist_v2`).** Run `scripts/ab_shortlist.py` against
    archived signals/backtest data. Require the recall guardrail to pass before
    using the shortlist to skip any LLM calls.

@@ -160,13 +160,25 @@ google_top_k = 64
 [llm_focus]
 # LLM-focus v2 rollout flags. All default to false: with these flags off the
 # legacy pipeline is unchanged.
-# Phase 1: v2 prompt/schema. The LLM stops self-reporting regime/HTF, position
-# size and absolute SL/TP; the deterministic strategy layer owns them.
+# Phase 1: v2 prompt/schema. The LLM stops self-reporting regime/HTF and
+# position size; it proposes absolute SL/TP and the deterministic layer
+# validates them (policy C).
 llm_focus_v2 = false
 # Phase 2: recall-oriented pre-LLM shortlist (P0-A regime/setups, ATR, positions).
 shortlist_v2 = false
 # Phase 3: event-driven LLM position reviews (regime flip, near SL/TP, ATR shock, stale).
 event_positions_v2 = false
+
+[costs]
+# Fee-aware entry gate (v2). Precedence: config.ini > taxonomy > built-in
+# Kraken defaults. Venue/tier are account-specific; maker/taker percentages
+# follow the Kraken constants unless overridden here.
+venue = futures
+tier = 1
+entry_order_type = taker
+maker_pct = 0.02
+taker_pct = 0.05
+min_edge_multiple = 1.5
 
 [risk_management]
 # SL/TP execution mode: soft (candle-close only) | hard (intra-candle polling)

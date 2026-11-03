@@ -559,6 +559,18 @@ class Config:
         parsed = coerce_flag_value(self.get_config("llm_focus", key, False))
         return False if parsed is None else parsed
 
+    def costs_overrides(self) -> dict[str, Any]:
+        """Return the optional [costs] block for config.ini > taxonomy precedence."""
+        section = self._config_data.get("costs")
+        if not isinstance(section, dict):
+            return {}
+        overrides = dict(section)
+        # ``_convert_value`` maps the bare literal "1" to True; restore the
+        # integer tier expected by CostsSettings.
+        if isinstance(overrides.get("tier"), bool):
+            overrides["tier"] = int(overrides["tier"])
+        return overrides
+
     @property
     def DEBUG_SAVE_CHARTS(self):
         return self.get_config("debug", "save_chart_images", False)

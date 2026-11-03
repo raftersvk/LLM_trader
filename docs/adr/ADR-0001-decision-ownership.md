@@ -39,14 +39,43 @@ La décision humaine du 2026-11-03 retient **définitivement la politique C** po
 - L'échantillon est **mince** : **35 à 44 trades**, environ **9 jours**, **spot uniquement**. Les conclusions statistiques restent fragiles.
 - A est **abandonnée**. B (structure) a été testée et est statistiquement équivalente à C, mais n'est pas choisie : une seule source de niveaux (le LLM) est plus simple à opérer et à auditer.
 
-## Frais Kraken — caveat obligatoire
+## Frais — configuration et porte d'entrée
+
+Les frais sont une **configuration partagée** et un **critère de validité** de la position, pas seulement une hypothèse de backtest.
+
+```yaml
+costs:
+  venue: futures        # spot | futures
+  tier: 1               # Kraken tier
+  entry_order_type: taker   # taker (market) | maker (limit)
+  maker_pct: 0.02
+  taker_pct: 0.05
+  min_edge_multiple: 1.5    # expected move >= 1.5x round-trip cost
+```
+
+- **Précédence** : `config.ini` > taxonomie YAML > défauts intégrés. Le bloc `[costs]` de `config.ini` existe parce que venue/tier sont propres au compte. Les valeurs effectives sont loguées au démarrage (`Effective costs: ...`).
+- Les nombres Kraken viennent de `src/llm_focus/fees.py` (spot T1 0,40/0,80 ; T2 0,30/0,60 ; T3 0,22/0,38 ; stablecoin 0,20/0,20 ; futures T1 0,02/0,05). Le YAML et `config.ini` les surchargent.
+- La porte d'entrée, appliquée **après** les validations de C (côté, 0,5–10 %, entrée présente), exige les deux conditions :
+  - `tp_distance_pct >= min_edge_multiple * round_trip` sinon `fees_exceed_edge` ;
+  - `(tp_distance_pct - round_trip) / (sl_distance_pct + round_trip) >= min_rr` sinon `fees_break_rr`.
+- La sortie est supposée **taker** sauf sortie maker documentée. Un échec est explicite (`risk_approved=false`) et les niveaux ne sont jamais remplacés.
+
+### Chiffres historiques
 
 La comparaison C-vs-A initiale utilisait un coût de **0,10 % aller-retour**, ce qui correspond aux frais **futures** Kraken Tier 1 (taker 0,05 % par côté). Ce n'est pas l'hypothèse spot.
 
-- **Spot Tier 1** : taker **0,80 % par côté**, soit **1,60 % aller-retour**. Le résultat C net publié (-1,09 % par trade) intègre 0,10 % de coût, donc le brut est d'environ **-0,99 %**. Avec 1,60 % de coût, C devient environ **-2,59 % par trade** (environ **-47 $** par trade au notionnel implicite d'environ 1 817 $). **À ces frais spot, aucune politique intra-horaire ne survit** : A, B et C sont toutes largement négatives.
-- **Futures Tier 1** : taker **0,05 % par côté**, soit **0,10 % aller-retour**. C'est l'hypothèse dans laquelle la comparaison C-vs-A est pertinente ; C reste alors à **-19,81 $ / -1,09 %** par trade.
-- Conclusion : la politique C est la moins mauvaise **sous frais futures**, pas une stratégie rentable en spot Tier 1.
-- Le tooling de backtest SL/TP C-vs-A n'est **pas** dans ce dépôt. S'il y est ajouté, il devra être paramétré par venue/marché/tier via `src/llm_focus/fees.py` (spot vs futures) et afficher le coût aller-retour utilisé.
+- **Spot Tier 1** : taker **0,80 % par côté**, soit **1,60 % aller-retour**. Le résultat C net publié (-1,09 % par trade) intègre 0,10 % de coût, donc le brut est d'environ **-0,99 %**. Avec 1,60 % de coût, C devient environ **-2,59 % par trade** (environ **-47 $** par trade au notionnel implicite d'environ 1 817 $). **À ces frais spot, aucune politique intra-horaire ne survit** : A, B et C sont toutes largement négatives. Le spot est donc **disqualifié** pour cette stratégie.
+- **Futures Tier 1** : taker **0,05 % par côté**, soit **0,10 % aller-retour**. C'est l'hypothèse pertinente ; C reste alors négative (voir ci-dessous).
+
+### Recomputation de la porte sur les signaux archivés (futures T1)
+
+Même jeu de **111 signaux BUY/SELL archivés** (47 BUY, 64 SELL, 2026-10-24 → 2026-11-02), mêmes bougies Binance 1h, aucun appel LLM :
+
+- **Règle 1,5x seule** (`tp_distance >= 0,15 %`) : **111/111 passent**, 0 rejet `fees_exceed_edge`.
+- **Porte complète** (1,5x + R/R ajusté aux frais, `min_rr = 1,5`) : **84/111 passent, 27 rejetés**. Répartition : **27 `fees_break_rr`**, **0 `fees_exceed_edge`**.
+- Après application des autres validations C (porte d'entrée, R/R, distance), le chemin C avec porte de frais prend **79 trades**, dont **73 clôturés** et 6 ouverts en fin de données. PnL net **-21,14 $**, moyenne **-0,53 %/trade** (futures, 0,10 % aller-retour). La même replay C sans porte de frais sur ces 111 signaux donne **-25,13 $** sur 88 clôturés : la porte retire 15 trades exécutables (**tous `fees_break_rr`**) et réduit la perte en dollars, sans rendre la stratégie positive.
+- Conclusion inchangée : C est la moins mauvaise **sous frais futures**, pas une stratégie rentable en spot Tier 1. L'échantillon reste minuscule et négatif.
+- Le tooling C-vs-A n'est **pas** dans ce dépôt ; la recomputation ci-dessus a réutilisé le cache/moteur hors dépôt de l'étude initiale. Le résolveur de coûts est paramétré par venue/marché/tier via `src/llm_focus/fees.py`.
 
 ## Critère de bascule du régime
 

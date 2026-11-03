@@ -13,7 +13,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-from src.config.regime_taxonomy import DEFAULT_REGIME_SETUPS
+from src.config.regime_taxonomy import DEFAULT_REGIME_SETUPS, CostsSettings
 from src.llm_focus.target_geometry import resolve_target_geometry, validate_target
 
 TRENDING_UP = "TRENDING_UP"
@@ -70,6 +70,25 @@ class RegimeAssessment:
     volatility: str
 
 
+REASON_FEES_EXCEED_EDGE = "fees_exceed_edge"
+REASON_FEES_BREAK_RR = "fees_break_rr"
+
+
+@dataclass(frozen=True)
+class FeeGateResult:
+    """Outcome of the fee-aware entry gate."""
+
+    passed: bool
+    reasons: tuple[str, ...]
+    entry_fee_pct: float
+    exit_fee_pct: float
+    round_trip_pct: float
+    tp_distance_pct: float
+    sl_distance_pct: float
+    min_edge_pct: float
+    adjusted_rr: float | None
+
+
 @dataclass(frozen=True)
 class DeterministicRiskPlan:
     """Validated policy-C risk plan.
@@ -91,6 +110,7 @@ class DeterministicRiskPlan:
     risk_approved: bool = False
     rejection_reason: str | None = None
     target_source: str = TARGET_SOURCE_LLM
+    fee_gate: FeeGateResult | None = None
 
 
 def normalize_regime(regime: Any) -> str:
@@ -240,6 +260,7 @@ def _make_risk_plan(
     rejection_reason: str | None,
     target_source: str,
     validation: Any = None,
+    fee_gate: FeeGateResult | None = None,
 ) -> DeterministicRiskPlan:
     return DeterministicRiskPlan(
         direction=direction,
@@ -254,6 +275,62 @@ def _make_risk_plan(
         risk_approved=risk_approved,
         rejection_reason=rejection_reason,
         target_source=target_source,
+        fee_gate=fee_gate,
+    )
+
+
+def assess_fee_gate(
+    entry_price: float | None,
+    stop_loss: float | None,
+    take_profit: float | None,
+    *,
+    costs: CostsSettings | None = None,
+    min_rr: float = 1.0,
+) -> FeeGateResult:
+    """Fee-aware entry gate: expected move >= min_edge x round trip and fee RR.
+
+    Exit fees are assumed taker. The gate is evaluated after the policy-C
+    geometric validation; it never alters the levels.
+    """
+    effective_costs = costs or CostsSettings()
+    entry_fee = effective_costs.fee_pct(effective_costs.entry_order_type)
+    exit_fee = effective_costs.fee_pct("taker")
+    round_trip = entry_fee + exit_fee
+    min_edge_pct = effective_costs.min_edge_multiple * round_trip
+
+    if not all(_is_positive_finite(value) for value in (entry_price, stop_loss, take_profit)):
+        return FeeGateResult(
+            passed=False,
+            reasons=("entry/SL/TP must be finite positive numbers",),
+            entry_fee_pct=entry_fee,
+            exit_fee_pct=exit_fee,
+            round_trip_pct=round_trip,
+            tp_distance_pct=0.0,
+            sl_distance_pct=0.0,
+            min_edge_pct=min_edge_pct,
+            adjusted_rr=None,
+        )
+
+    entry = float(entry_price)
+    tp_distance_pct = abs(float(take_profit) - entry) / entry * 100
+    sl_distance_pct = abs(entry - float(stop_loss)) / entry * 100
+    reasons: list[str] = []
+    if tp_distance_pct < min_edge_pct:
+        reasons.append(REASON_FEES_EXCEED_EDGE)
+    denominator = sl_distance_pct + round_trip
+    adjusted_rr = (tp_distance_pct - round_trip) / denominator if denominator > 0 else None
+    if adjusted_rr is None or adjusted_rr < min_rr:
+        reasons.append(REASON_FEES_BREAK_RR)
+    return FeeGateResult(
+        passed=not reasons,
+        reasons=tuple(reasons),
+        entry_fee_pct=entry_fee,
+        exit_fee_pct=exit_fee,
+        round_trip_pct=round_trip,
+        tp_distance_pct=tp_distance_pct,
+        sl_distance_pct=sl_distance_pct,
+        min_edge_pct=min_edge_pct,
+        adjusted_rr=adjusted_rr,
     )
 
 
@@ -270,6 +347,7 @@ def build_risk_plan(
     min_rr: float = 1.0,
     min_distance_pct: float = 0.5,
     max_distance_pct: float = 10.0,
+    costs: CostsSettings | None = None,
     setup: Any = None,
     range_high: float | None = None,
     range_low: float | None = None,
@@ -286,7 +364,13 @@ def build_risk_plan(
     """
     normalized_direction = str(direction or "").strip().upper()
 
-    def rejected(reason: str, *, source: str, validation: Any = None) -> DeterministicRiskPlan:
+    def rejected(
+        reason: str,
+        *,
+        source: str,
+        validation: Any = None,
+        fee_gate: FeeGateResult | None = None,
+    ) -> DeterministicRiskPlan:
         return _make_risk_plan(
             direction=normalized_direction or "UNKNOWN",
             entry_price=entry_price,
@@ -299,6 +383,7 @@ def build_risk_plan(
             rejection_reason=reason,
             target_source=source,
             validation=validation,
+            fee_gate=fee_gate,
         )
 
     if normalized_direction not in ("LONG", "SHORT"):
@@ -325,6 +410,16 @@ def build_risk_plan(
         )
         if not validation.valid:
             return rejected("; ".join(validation.issues), source=TARGET_SOURCE_LLM, validation=validation)
+        fee_gate = assess_fee_gate(
+            entry_price, stop_loss, take_profit, costs=costs, min_rr=min_rr
+        )
+        if not fee_gate.passed:
+            return rejected(
+                "; ".join(fee_gate.reasons),
+                source=TARGET_SOURCE_LLM,
+                validation=validation,
+                fee_gate=fee_gate,
+            )
         return _make_risk_plan(
             direction=normalized_direction,
             entry_price=float(entry_price),
@@ -337,6 +432,7 @@ def build_risk_plan(
             rejection_reason=None,
             target_source=TARGET_SOURCE_LLM,
             validation=validation,
+            fee_gate=fee_gate,
         )
 
     # No LLM levels at all: documented fallback only (should not occur in
@@ -394,6 +490,24 @@ def build_risk_plan(
             target_source=TARGET_SOURCE_FALLBACK,
             validation=validation,
         )
+    fee_gate = assess_fee_gate(
+        entry, fallback_stop_loss, fallback_take_profit, costs=costs, min_rr=min_rr
+    )
+    if not fee_gate.passed:
+        return _make_risk_plan(
+            direction=normalized_direction,
+            entry_price=entry,
+            stop_loss=fallback_stop_loss,
+            take_profit=fallback_take_profit,
+            confidence=confidence,
+            atr=atr,
+            atr_pct=atr_pct,
+            risk_approved=False,
+            rejection_reason="; ".join(fee_gate.reasons),
+            target_source=TARGET_SOURCE_FALLBACK,
+            validation=validation,
+            fee_gate=fee_gate,
+        )
     return _make_risk_plan(
         direction=normalized_direction,
         entry_price=entry,
@@ -406,4 +520,5 @@ def build_risk_plan(
         rejection_reason=None,
         target_source=TARGET_SOURCE_FALLBACK,
         validation=validation,
+        fee_gate=fee_gate,
     )
