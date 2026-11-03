@@ -43,6 +43,17 @@ REGIMES: tuple[str, ...] = (
 )
 NO_TRADE_REGIMES: tuple[str, ...] = ("low_vol", "high_vol", "unclear")
 ALLOWED_SIDES: tuple[str, ...] = ("long", "short", "both")
+TP_MODE_ATR_MULTIPLE = "atr_multiple"
+TP_MODE_STRUCTURE = "structure"
+VALID_TP_MODES: tuple[str, ...] = (TP_MODE_ATR_MULTIPLE, TP_MODE_STRUCTURE)
+STRUCTURE_MID_RANGE = "mid_range"
+STRUCTURE_VWAP = "vwap"
+STRUCTURE_MEASURED_MOVE = "measured_move"
+VALID_TP_SUBMODES: tuple[str, ...] = (
+    STRUCTURE_MID_RANGE,
+    STRUCTURE_VWAP,
+    STRUCTURE_MEASURED_MOVE,
+)
 COST_VENUES: tuple[str, ...] = ("spot", "futures")
 COST_ORDER_TYPES: tuple[str, ...] = ("taker", "maker")
 COST_FIELDS: frozenset[str] = frozenset({
@@ -157,6 +168,8 @@ class SetupDefinition:
     tp_atr: float | None = None
     trail_atr: float | None = None
     be_at_r: float | None = None
+    tp_mode: str = TP_MODE_ATR_MULTIPLE
+    tp_submode: str | None = None
 
     _FIELDS: ClassVar[tuple[str, ...]] = (
         "side",
@@ -169,6 +182,8 @@ class SetupDefinition:
         "tp_atr",
         "trail_atr",
         "be_at_r",
+        "tp_mode",
+        "tp_submode",
     )
     _REQUIRED_FIELDS: ClassVar[tuple[str, ...]] = (
         "side",
@@ -248,6 +263,14 @@ class SetupDefinition:
                 f"setups.{name}.be_at_r",
                 allow_zero=True,
             ),
+            tp_mode=_tp_mode(
+                data.get("tp_mode", base.tp_mode if base else TP_MODE_ATR_MULTIPLE),
+                f"setups.{name}.tp_mode",
+            ),
+            tp_submode=_optional_tp_submode(
+                data.get("tp_submode", base.tp_submode if base else None),
+                f"setups.{name}.tp_submode",
+            ),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -269,6 +292,9 @@ class SetupDefinition:
             value = getattr(self, name)
             if value is not None:
                 data[name] = value
+        data["tp_mode"] = self.tp_mode
+        if self.tp_submode is not None:
+            data["tp_submode"] = self.tp_submode
         return data
 
 
@@ -656,6 +682,36 @@ def _positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise TaxonomyConfigError(f"{label} must be a positive integer")
     return value
+
+
+def _tp_mode(value: Any, label: str) -> str:
+    """Validate the target-geometry mode enum (default applied by the caller)."""
+    if not isinstance(value, str) or not value.strip():
+        raise TaxonomyConfigError(
+            f"{label} must be one of {'|'.join(VALID_TP_MODES)}"
+        )
+    mode = value.strip().lower()
+    if mode not in VALID_TP_MODES:
+        raise TaxonomyConfigError(
+            f"{label} must be one of {'|'.join(VALID_TP_MODES)}, got {value!r}"
+        )
+    return mode
+
+
+def _optional_tp_submode(value: Any, label: str) -> str | None:
+    """Validate the optional structural target sub-mode enum."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise TaxonomyConfigError(
+            f"{label} must be one of {'|'.join(VALID_TP_SUBMODES)} or null"
+        )
+    submode = value.strip().lower()
+    if submode not in VALID_TP_SUBMODES:
+        raise TaxonomyConfigError(
+            f"{label} must be one of {'|'.join(VALID_TP_SUBMODES)}, got {value!r}"
+        )
+    return submode
 
 
 def _boolean(value: Any, label: str) -> bool:

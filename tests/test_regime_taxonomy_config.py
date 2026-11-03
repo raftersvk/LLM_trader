@@ -18,6 +18,8 @@ from src.config.regime_taxonomy import (
     DEFAULT_TAXONOMY_CONFIG_PATH,
     NO_TRADE_REGIMES,
     REGIMES,
+    TP_MODE_ATR_MULTIPLE,
+    TP_MODE_STRUCTURE,
     CostsSettings,
     RegimeThresholds,
     SetupDefinition,
@@ -29,6 +31,7 @@ from src.config.regime_taxonomy import (
     resolve_costs_config,
     resolve_taxonomy_config_path,
 )
+from src.llm_focus.target_geometry import read_tp_mode, resolve_target_geometry
 from src.signal_service.jev_client import JevResponse
 from src.signal_service.jev_gate import JevGate
 from src.signal_service.regime_snapshot import build_regime_snapshot
@@ -409,6 +412,178 @@ jev:
 """
 
 
+# Canonical document from trading-stack PR #18 (commit a13ec93). It adds the
+# optional per-setup ``tp_mode`` field. Embedded byte for byte so the parser is
+# verified against the exact cross-repo document without a sibling checkout.
+CANONICAL_PR18_TAXONOMY_REF = "a13ec93"
+CANONICAL_PR18_TAXONOMY_YAML = """\
+# Canonical regime / setup taxonomy shared by LLM_trader and Freqtrade.
+#
+# LLM_trader reads this file to build its 1h regime snapshot and prompt
+# taxonomy. SignalStrategy reads the same file for setup exits and pair
+# overrides, falling back to the legacy config-futures.json tables when this
+# file or a key is absent. Do not add or remove fields without updating both
+# sides and docs/futures-mode.md.
+version: 1
+
+# The 1h decision timeframe is enabled. 4h stays off until it is validated.
+enabled_timeframes:
+  - 1h
+
+# Deterministic regime snapshot thresholds (mirror
+# LLM_trader/src/signal_service/regime_snapshot.py).
+regime_thresholds:
+  adx_trend: 25.0
+  adx_weak: 20.0
+  range_choppiness: 61.8
+  high_vol_atr_multiple: 2.5
+  high_vol_atr_pct_floor: 3.0
+  low_vol_atr_multiple: 0.55
+  low_vol_choppiness: 55.0
+
+# Setups allowed per regime. The regime snapshot is authoritative; an empty
+# list means HOLD (no actionable setup).
+regime_setups:
+  trend_up:
+    - trend_pullback
+    - breakout_retest
+    - momentum_continuation
+  trend_down:
+    - rally_failure
+    - breakdown_retest
+    - momentum_short
+  range:
+    - range_fade_extreme
+    - range_mean_reversion
+  low_vol: []
+  high_vol: []
+  unclear: []
+
+# Per-setup defaults. Multipliers are expressed in 1h ATR (price-preserving
+# P0-B scaling), max_hold_bars in 1h bars. Policy C makes the signal's absolute
+# SL/TP authoritative; sl_atr/tp_atr only serve as a fallback when a signal
+# carries no usable levels at all. A setup without sl_atr/tp_atr keeps the
+# signal's absolute SL/TP, matching the legacy config-futures.json table (which
+# has no family for breakout_retest, rally_failure or breakdown_retest).
+# trail_atr / be_at_r stay opt-in: omit them so a legacy per-setup trailing
+# config is not shadowed.
+#
+# tp_mode is the target-geometry policy consumed by LLM_trader:
+#   atr_multiple -> ATR-derived target; trend setups keep it.
+#   structure    -> structural target (mid_range, then VWAP) with a documented
+#                   ATR fallback; range setups use it. An omitted/unknown value
+#                   reads as atr_multiple, so older readers stay compatible.
+# When a trend setup has no tp_atr, atr_multiple keeps the LLM's own target.
+setups:
+  trend_pullback:
+    side: long
+    description: >-
+      Orderly pullback to SMA20/structure support in an uptrend with a
+      rejection close.
+    entry: Pullback into SMA20/support with a rejection close.
+    invalidation: Close below the pullback low.
+    regimes:
+      - trend_up
+    sl_atr: 2.5
+    tp_atr: 4.8
+    max_hold_bars: 24
+    tp_mode: atr_multiple
+  breakout_retest:
+    side: long
+    description: >-
+      Break of a 20-bar high/range then a held retest of the broken level.
+    entry: Held retest of the broken 20-bar high/range level.
+    invalidation: Close back below the broken level.
+    regimes:
+      - trend_up
+    max_hold_bars: 24
+    tp_mode: atr_multiple
+  momentum_continuation:
+    side: long
+    description: >-
+      Higher-high/higher-low continuation without more than 2 ATR extension
+      from SMA20.
+    entry: Continuation after a higher high and higher low.
+    invalidation: Lower low.
+    regimes:
+      - trend_up
+    sl_atr: 2.5
+    tp_atr: 4.0
+    max_hold_bars: 12
+    tp_mode: atr_multiple
+  rally_failure:
+    side: short
+    description: >-
+      Rally into SMA20/resistance rejected with a lower high in a downtrend.
+    entry: Rejection at SMA20/resistance with a lower high.
+    invalidation: Close above the swing high.
+    regimes:
+      - trend_down
+    max_hold_bars: 24
+    tp_mode: atr_multiple
+  breakdown_retest:
+    side: short
+    description: >-
+      Support break then a rejected retest of the broken level.
+    entry: Rejected retest of the broken support level.
+    invalidation: Close back above the broken level.
+    regimes:
+      - trend_down
+    max_hold_bars: 24
+    tp_mode: atr_multiple
+  momentum_short:
+    side: short
+    description: >-
+      Lower-high/lower-low continuation without more than 2 ATR extension.
+    entry: Continuation after a lower high and lower low.
+    invalidation: Higher high.
+    regimes:
+      - trend_down
+    sl_atr: 2.5
+    tp_atr: 4.5
+    max_hold_bars: 12
+    tp_mode: atr_multiple
+  range_fade_extreme:
+    side: both
+    description: >-
+      Fade a wick beyond the range boundary that closes back inside.
+    entry: Wick beyond the range boundary closing back inside.
+    invalidation: Close beyond the range boundary.
+    regimes:
+      - range
+    sl_atr: 2.0
+    tp_atr: 4.5
+    max_hold_bars: 12
+    tp_mode: structure
+  range_mean_reversion:
+    side: both
+    description: >-
+      Return toward mid/VWAP after an excursion.
+    entry: Excursion away from mid/VWAP with a reversal close.
+    invalidation: Break of the range.
+    regimes:
+      - range
+    sl_atr: 2.0
+    tp_atr: 4.5
+    max_hold_bars: 12
+    tp_mode: structure
+
+# Exchange-pair overrides. Keys may be the Freqtrade pair (BTC/USDT:USDT) or
+# the signal-contract symbol (BTC/USDT). Accepted fields: sl_atr, tp_atr,
+# max_hold_bars, max_hold_hours, max_stake, leverage, trail_atr, be_at_r,
+# trail_after_r. Empty by default: setups above are the only override source.
+pair_overrides: {}
+
+# JEV gate settings consumed by LLM_trader; mirrored here so both sides read the
+# same canonical file. The strategy does not act on these fields.
+jev:
+  # P0-B default: shorts only. Set explicitly to false to re-enable longs.
+  bias_short_only: true
+  log_decisions: true
+  log_path: runtime/logs/jev_decisions.jsonl
+"""
+
+
 def test_embedded_canonical_document_is_pinned_by_sha():
     digest = hashlib.sha256(CANONICAL_TAXONOMY_YAML.encode("utf-8")).hexdigest()
 
@@ -464,6 +639,76 @@ def test_w3_canonical_document_parses_and_renders(tmp_path):
     assert "Close below the pullback low." in block
     assert "Higher-high/higher-low continuation" in block
     assert render_setup_taxonomy(config, "4h") == ""
+
+
+def test_trading_stack_pr18_document_parses_tp_modes(tmp_path):
+    config = load_taxonomy_config(
+        _write(tmp_path / "regime_taxonomy.yaml", CANONICAL_PR18_TAXONOMY_YAML)
+    )
+
+    assert config.version == "1"
+    assert config.setups["range_mean_reversion"].tp_mode == TP_MODE_STRUCTURE
+    assert config.setups["range_fade_extreme"].tp_mode == TP_MODE_STRUCTURE
+    for name in (
+        "trend_pullback",
+        "breakout_retest",
+        "momentum_continuation",
+        "rally_failure",
+        "breakdown_retest",
+        "momentum_short",
+    ):
+        assert config.setups[name].tp_mode == TP_MODE_ATR_MULTIPLE, name
+    for name in ("range_mean_reversion", "range_fade_extreme"):
+        assert config.setups[name].tp_submode is None, name
+
+    # read_tp_mode consumes the parsed SetupDefinition, not the raw document.
+    mode, submode, note = read_tp_mode(config.setups["range_mean_reversion"])
+    assert (mode, submode, note) == (TP_MODE_STRUCTURE, None, None)
+    trend_mode, trend_submode, _ = read_tp_mode(config.setups["trend_pullback"])
+    assert (trend_mode, trend_submode) == (TP_MODE_ATR_MULTIPLE, None)
+
+    geometry = resolve_target_geometry(
+        config.setups["range_mean_reversion"],
+        direction="LONG",
+        entry_price=96.0,
+        atr=1.0,
+        range_low=95.0,
+        range_high=105.0,
+    )
+    assert geometry.effective_mode == TP_MODE_STRUCTURE
+    assert geometry.target_price == 100.0
+
+
+def test_setup_tp_mode_validation_and_defaults():
+    required = {
+        "side": "long",
+        "description": "Custom retest.",
+        "entry": "Retest.",
+        "invalidation": "Break.",
+        "regimes": ["trend_up"],
+        "max_hold_bars": 24,
+    }
+
+    defaulted = SetupDefinition.from_mapping("breakout_retest", required)
+    assert defaulted.tp_mode == TP_MODE_ATR_MULTIPLE
+    assert defaulted.tp_submode is None
+
+    normalized = SetupDefinition.from_mapping(
+        "breakout_retest",
+        {**required, "tp_mode": "STRUCTURE", "tp_submode": "VWAP"},
+    )
+    assert normalized.tp_mode == TP_MODE_STRUCTURE
+    assert normalized.tp_submode == "vwap"
+
+    with pytest.raises(TaxonomyConfigError, match="tp_mode"):
+        SetupDefinition.from_mapping(
+            "breakout_retest", {**required, "tp_mode": "fibonacci"}
+        )
+    with pytest.raises(TaxonomyConfigError, match="tp_submode"):
+        SetupDefinition.from_mapping(
+            "breakout_retest",
+            {**required, "tp_mode": "structure", "tp_submode": "fibonacci"},
+        )
 
 
 def test_built_in_defaults_equal_the_canonical_document(tmp_path):

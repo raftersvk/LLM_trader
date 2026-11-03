@@ -31,7 +31,7 @@ La taxonomie canonique vit dans **trading-stack (PR #15)** et n'est pas modifié
 ## Règles du repli
 
 1. Le repli n'est calculé que lorsque `stop_loss` et `take_profit` sont tous deux absents. Un seul niveau présent est une erreur qui rejette le signal, sans repli.
-2. `tp_mode` absent ou inconnu → `atr_multiple`.
+2. `tp_mode` absent → `atr_multiple`; une valeur inconnue est rejetée par le parseur de taxonomie (`TaxonomyConfigError`), pas convertie silencieusement.
 3. `structure` sans sous-mode explicite → `mid_range` puis `vwap` pour les deux setups de range ; sinon repli ATR.
 4. Mesure impossible (`range_high <= range_low`, VWAP absent, cible du mauvais côté) → repli ATR documenté.
 5. `tp_atr` absent → cible ATR générique du plan de repli, jamais un remplacement d'un niveau LLM.
@@ -54,6 +54,6 @@ Après ces contrôles, la **porte de frais** de l'ADR-0001 s'applique (edge 1,5x
 ## Suivi
 
 - **Cross-repo trading-stack** : `SignalStrategy` résout `sl_atr`/`tp_atr` avec la précédence **pair > setup > global**, ce qui écrase les niveaux absolus du signal. Pour que C soit effectif en production, la précédence doit devenir **niveaux du signal > taxonomie (repli)**. Changement trading-stack avec sa propre revue, non implémenté ici.
-- Ajouter `tp_mode`/`tp_submode` à la taxonomie canonique reste un suivi trading-stack, hors de ce dépôt.
+- `tp_mode`/`tp_submode` sont désormais présents dans la taxonomie canonique (trading-stack PR #18, commit a13ec93) et validés par `SetupDefinition` (`src/config/regime_taxonomy.py`). `read_tp_mode` consomme ces champs déjà parsés.
 - Valider `measured_move` par backtest avant toute activation.
 - Implémentation : `src/llm_focus/target_geometry.py` (repli) et `src/llm_focus/deterministic_risk.py` (validation C).

@@ -6,10 +6,10 @@ carry no levels at all (expected to be none in practice); it must not be used
 when the LLM supplied levels.
 
 The canonical setup taxonomy lives in the external trading-stack repository
-(PR #15) and is not modified here. This module reads an optional ``tp_mode``
-from a setup mapping/object and falls back to ``atr_multiple`` when the field is
-absent, so the LLM_Trader side can adopt the field safely before the taxonomy
-ships it.
+(PR #15) and is not modified here. ``src.config.regime_taxonomy.SetupDefinition``
+is the single validated source of ``tp_mode``/``tp_submode``; this module reads
+those parsed fields and falls back to ``atr_multiple`` only when the field is
+absent.
 """
 
 from __future__ import annotations
@@ -18,16 +18,19 @@ import math
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-TP_MODE_ATR_MULTIPLE = "atr_multiple"
-TP_MODE_STRUCTURE = "structure"
+from src.config.regime_taxonomy import (
+    STRUCTURE_MEASURED_MOVE,
+    STRUCTURE_MID_RANGE,
+    STRUCTURE_VWAP,
+    TP_MODE_ATR_MULTIPLE,
+    TP_MODE_STRUCTURE,
+    VALID_TP_MODES,
+    VALID_TP_SUBMODES,
+)
+
 TP_MODE_LLM_LEVEL = "llm_level"
 
-STRUCTURE_MID_RANGE = "mid_range"
-STRUCTURE_VWAP = "vwap"
-STRUCTURE_MEASURED_MOVE = "measured_move"
-
-VALID_TP_MODES = (TP_MODE_ATR_MULTIPLE, TP_MODE_STRUCTURE)
-VALID_STRUCTURE_MODES = (STRUCTURE_MID_RANGE, STRUCTURE_VWAP, STRUCTURE_MEASURED_MOVE)
+VALID_STRUCTURE_MODES = VALID_TP_SUBMODES
 
 #: Measured move stays an explicit, unvalidated option; only the two range
 #: setups get a structure default, matching their taxonomy descriptions.
@@ -87,12 +90,18 @@ def _target_on_correct_side(direction: str, entry_price: float, target: float) -
 
 
 def read_tp_mode(setup: Any) -> tuple[str, str | None, str | None]:
-    """Read ``tp_mode``/``tp_submode`` from a setup definition.
+    """Read ``tp_mode``/``tp_submode`` from a parsed setup definition.
 
-    Returns ``(requested_mode, structure_mode, note)``. An absent or unknown
-    ``tp_mode`` falls back to ``atr_multiple`` with a note explaining why.
+    ``SetupDefinition`` validates both fields, so this reader treats them as the
+    single source of truth and falls back to ``atr_multiple`` only when the
+    field is absent. A raw mapping is still accepted for callers that have not
+    adopted the taxonomy parser.
+
+    Returns ``(requested_mode, structure_mode, note)``.
     """
-    raw_mode = _field(setup, "tp_mode")
+    raw_mode = getattr(setup, "tp_mode", None)
+    if raw_mode is None and isinstance(setup, Mapping):
+        raw_mode = setup.get("tp_mode")
     if raw_mode in (None, ""):
         return TP_MODE_ATR_MULTIPLE, None, "tp_mode absent: default atr_multiple"
     mode = str(raw_mode).strip().lower()
@@ -101,13 +110,13 @@ def read_tp_mode(setup: Any) -> tuple[str, str | None, str | None]:
     if mode not in VALID_TP_MODES:
         return TP_MODE_ATR_MULTIPLE, None, f"invalid tp_mode '{raw_mode}': fallback atr_multiple"
 
-    raw_structure = _field(setup, "tp_submode")
-    if raw_structure in (None, ""):
-        raw_structure = _field(setup, "structure_mode")
+    raw_structure = getattr(setup, "tp_submode", None)
+    if raw_structure is None and isinstance(setup, Mapping):
+        raw_structure = setup.get("tp_submode")
     structure_mode = None
     if raw_structure not in (None, ""):
         candidate = str(raw_structure).strip().lower()
-        if candidate in VALID_STRUCTURE_MODES:
+        if candidate in VALID_TP_SUBMODES:
             structure_mode = candidate
         else:
             return TP_MODE_ATR_MULTIPLE, None, f"invalid structure mode '{raw_structure}': fallback atr_multiple"
