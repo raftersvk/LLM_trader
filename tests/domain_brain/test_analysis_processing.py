@@ -415,6 +415,64 @@ async def test_json_object_reply_keeps_the_narrative_and_a_trailing_block():
     model_manager.send_prompt_streaming.assert_awaited_once()
 
 
+V2_JSON_REPLY = json.dumps(
+    {
+        "narrative": "1) SETUP: trend pullback held the 50 SMA.",
+        "analysis": {
+            "action": "BUY",
+            "setup": "TREND_PULLBACK",
+            "entry_thesis": "Pullback held above the 50 SMA with volume support.",
+            "invalidation": "Close below the swing low invalidates the thesis.",
+            "confidence": 78,
+            "reasoning": "Trend and momentum align.",
+            "stop_loss": 95_000.0,
+            "take_profit": 104_000.0,
+            "news": ["ETF flow positive"],
+        },
+    }
+)
+
+
+async def test_llm_focus_v2_flag_on_cycle_satisfies_decision_contract():
+    """A full flag-on cycle: v2 prompt -> v2 reply -> v1 decision contract."""
+    from src.analyzer.decision_contract import validate_decision_payload
+    from src.analyzer.prompts.template_manager import TemplateManager
+
+    config = SimpleNamespace(
+        STOP_LOSS_TYPE="soft",
+        STOP_LOSS_CHECK_INTERVAL="1h",
+        TAKE_PROFIT_TYPE="soft",
+        TAKE_PROFIT_CHECK_INTERVAL="1h",
+        RESEARCH_TEAM_ENABLED=False,
+        PROVIDER="googleai",
+        MARKET_TYPE="spot",
+        ENTRY_ORDER_TYPE="market",
+        MODEL_VERBOSITY="medium",
+        LLM_FOCUS_V2=True,
+    )
+    manager = TemplateManager(config=config)
+    system_prompt = manager.build_system_prompt("BTC/USDT")
+    response_template = manager.build_response_template()
+    assert "V2 Decision Boundary" in system_prompt
+    assert '"action"' in response_template
+
+    processor, model_manager = make_json_parser_processor(V2_JSON_REPLY)
+    processor.context = AnalysisContext(symbol="BTC/USDT", current_price=100_000.0)
+
+    result = await processor.process_analysis(
+        system_prompt=system_prompt, prompt=response_template
+    )
+
+    analysis = result["analysis"]
+    assert analysis["signal"] == "BUY"
+    assert analysis["entry_price"] == 100_000.0
+    assert analysis["risk_reward_ratio"] == pytest.approx(0.8)
+    assert 0 < analysis["position_size"] <= 1
+    assert validate_decision_payload(result) == []
+    assert result["response_validation"]["status"] == "valid"
+    model_manager.send_prompt_streaming.assert_awaited_once()
+
+
 async def test_reply_without_a_json_block_falls_back_without_a_second_request():
     """A reply that carries no JSON at all falls back to HOLD with a single API call."""
     processor, model_manager = make_json_parser_processor(NARRATIVE_ONLY)

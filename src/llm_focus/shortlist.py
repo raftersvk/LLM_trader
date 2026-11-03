@@ -17,7 +17,7 @@ from src.llm_focus.deterministic_risk import (
     assess_regime,
     normalize_setups,
 )
-from src.llm_focus.flags import shortlist_v2_enabled
+from src.llm_focus.flags import coerce_flag_value, shortlist_v2_enabled
 
 REASON_REGIME_UNKNOWN = "regime_unknown"
 REASON_NO_ALLOWED_SETUPS = "no_allowed_setups"
@@ -292,9 +292,12 @@ def candidate_from_mapping(record: Mapping[str, Any]) -> ShortlistCandidate:
         allowed_setups = tuple(part.strip() for part in allowed_setups.split(",") if part.strip())
 
     atr_pct = p0a.get("atr_pct", p0a.get("atr_percentage", record.get("atr_pct")))
-    has_open_position = bool(
+    # Archived records may carry JSON strings ("false", "0") that are truthy
+    # when passed to bool(); coerce them so a string "false" is not an open
+    # position.
+    has_open_position = coerce_flag_value(
         record.get("has_open_position", record.get("open_position", False))
-    )
+    ) is True
 
     return ShortlistCandidate(
         symbol=str(record.get("symbol", record.get("pair", ""))),

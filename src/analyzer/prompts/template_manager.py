@@ -946,6 +946,11 @@ major subsection when evidence supports it). Avoid repetition and padding. Mark 
 explicitly rather than fabricating values. Detailed scenarios never override Decision Rules or
 create additional signals. End with a brief risk disclaimer before the final three labels."""
 
+    def _uses_json_object_output(self, json_object_output: bool) -> bool:
+        """Return whether the provider is forced into JSON-object output."""
+        provider = (getattr(self.config, "PROVIDER", "") or "").strip().lower()
+        return bool(json_object_output) or provider in ("deepseek", "all")
+
     def build_response_template(self, has_chart_analysis: bool = False,
                                 model_verbosity: str | None = None,
                                 dynamic_thresholds: dict[str, Any] | None = None,
@@ -966,7 +971,10 @@ create additional signals. End with a brief risk disclaimer before the final thr
             str: Formatted response template (output-format-only)
         """
         if llm_focus_v2_enabled(self.config):
-            return build_v2_response_template(dynamic_thresholds)
+            return build_v2_response_template(
+                dynamic_thresholds,
+                json_object_output=self._uses_json_object_output(json_object_output),
+            )
         _thresholds = dynamic_thresholds or {}
         chart_validation_line = ""
         if has_chart_analysis:
@@ -1046,8 +1054,7 @@ create additional signals. End with a brief risk disclaimer before the final thr
         # prompt even when the signal opt-in is off. Other providers (notably
         # litellm / OpenCode Go) reach JSON mode only through the signal-path
         # opt-in, which is exactly when response_format is sent on the wire.
-        provider = self.config.PROVIDER.strip().lower()
-        is_json_object_output = json_object_output or provider in ("deepseek", "all")
+        is_json_object_output = self._uses_json_object_output(json_object_output)
 
         # The 1h taxonomy is opt-in by timeframe and only on the signal-service
         # path that installs the deterministic snapshot provider. The shared

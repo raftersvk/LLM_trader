@@ -13,6 +13,8 @@ from src.analyzer.decision_contract import validate_decision_payload
 from src.analyzer.pattern_quality_scorer import PatternQualityScorer
 from src.analyzer.risk_reward_validator import RiskRewardValidator
 from src.analyzer.trend_validator import TrendValidator
+from src.llm_focus.deterministic_risk import compute_position_size
+from src.llm_focus.prompts import to_v1_compatible
 from src.logger.logger import Logger
 
 if TYPE_CHECKING:
@@ -93,6 +95,7 @@ class AnalysisResultProcessor:
         cleaned_response = self._clean_response(complete_response)
 
         parsed_response = self.unified_parser.parse_ai_response(cleaned_response)
+        parsed_response = self._normalize_v2_decision(parsed_response)
 
         if not self.unified_parser.validate_ai_response(parsed_response):
             self.logger.warning("Invalid response format from AI model")
@@ -126,6 +129,7 @@ class AnalysisResultProcessor:
             )
             cleaned_response = self._clean_response(complete_response)
             parsed_response = self.unified_parser.parse_ai_response(cleaned_response)
+            parsed_response = self._normalize_v2_decision(parsed_response)
             if not self.unified_parser.validate_ai_response(parsed_response):
                 self.logger.error("Contract retry returned an invalid response shape")
                 return {
@@ -146,6 +150,32 @@ class AnalysisResultProcessor:
         self._log_analysis_result(parsed_response)
 
         return self._format_analysis_response(parsed_response, cleaned_response)
+
+    def _normalize_v2_decision(self, parsed_response: dict[str, Any]) -> dict[str, Any]:
+        """Convert an LLM-focus v2 payload into the v1 decision contract.
+
+        ``llm_focus_v2`` prompts the model for ``action`` plus proposed
+        ``stop_loss``/``take_profit`` instead of ``signal`` and the v1 execution
+        fields. ``to_v1_compatible`` is the single conversion point; the current
+        market price and the deterministic position size fill the fields the
+        parser/decision contract requires. Responses that already carry a v1
+        ``signal`` are returned untouched.
+        """
+        analysis = parsed_response.get("analysis")
+        if not isinstance(analysis, dict) or "signal" in analysis or "action" not in analysis:
+            return parsed_response
+
+        entry_price = self.context.current_price if self.context is not None else None
+        converted = to_v1_compatible(
+            parsed_response,
+            entry_price=entry_price,
+            position_size=compute_position_size(analysis.get("confidence")),
+        )
+        normalized = {**parsed_response, **converted}
+        validate = getattr(self.unified_parser, "validate_trading_response", None)
+        if callable(validate):
+            normalized["response_validation"] = validate(normalized)
+        return normalized
 
     def _log_analysis_result(self, parsed_response: dict[str, Any]) -> None:
         """Log analysis result information"""

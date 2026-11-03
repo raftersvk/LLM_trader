@@ -113,6 +113,20 @@ class TestBuildShortlist:
         assert result.rejections[0].reasons == (REASON_NO_ALLOWED_SETUPS,)
         assert REASON_REGIME_UNKNOWN not in result.rejections[0].reasons
 
+    @pytest.mark.parametrize("regime", ["low_vol", "high_vol", "unclear", "LOW_VOL"])
+    def test_rejects_no_trade_regime_even_with_non_empty_allowed_setups(self, regime):
+        result = build_shortlist(
+            [
+                _candidate(
+                    regime=regime,
+                    allowed_setups=("TREND_PULLBACK",),
+                    setup="TREND_PULLBACK",
+                )
+            ]
+        )
+        assert result.symbols == ()
+        assert result.rejections[0].reasons == (REASON_NO_ALLOWED_SETUPS,)
+
     def test_rejects_setup_outside_p0a_allowed_list(self):
         result = build_shortlist([_candidate(setup="RANGE_FADE")])
         assert result.rejections[0].reasons == (REASON_SETUP_NOT_ALLOWED,)
@@ -222,3 +236,13 @@ class TestCandidateMapping:
         assert candidate.allowed_setups == ("TREND_PULLBACK", "BREAKOUT_RETEST")
         assert candidate.atr_pct == pytest.approx(2.5)
         assert candidate.jev_bias == "LONG"
+
+    @pytest.mark.parametrize(
+        ("raw_value", "expected"),
+        [("false", False), ("0", False), ("no", False), ("true", True), ("1", True), (True, True), (False, False)],
+    )
+    def test_open_position_string_values_are_coerced(self, raw_value, expected):
+        candidate = candidate_from_mapping(
+            {"symbol": "BTC/USDT", "open_position": raw_value}
+        )
+        assert candidate.has_open_position is expected

@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from src.llm_focus.prompts import (
     V2_ANALYSIS_SCHEMA,
     V2_FORBIDDEN_FIELDS,
@@ -116,6 +118,26 @@ class TestV2Mapping:
         for forbidden in ("position_size", "position_size_pct", "regime", "htf"):
             assert forbidden not in mapped
 
+    def test_to_v1_compatible_fills_execution_fields(self):
+        mapped = to_v1_compatible(
+            _valid_payload(), entry_price=100_000.0, position_size=0.03
+        )["analysis"]
+        assert mapped["entry_price"] == 100_000.0
+        assert mapped["position_size"] == 0.03
+        assert mapped["risk_reward_ratio"] == pytest.approx(
+            (104_000.0 - 100_000.0) / (100_000.0 - 95_000.0)
+        )
+
+    def test_to_v1_compatible_derives_short_risk_reward(self):
+        payload = _valid_payload()
+        payload["analysis"].update(
+            {"action": "SELL", "stop_loss": 105_000.0, "take_profit": 90_000.0}
+        )
+        mapped = to_v1_compatible(payload, entry_price=100_000.0)["analysis"]
+        assert mapped["risk_reward_ratio"] == pytest.approx(
+            (100_000.0 - 90_000.0) / (105_000.0 - 100_000.0)
+        )
+
     def test_v2_template_contract(self):
         template = build_v2_response_template()
         for field in (
@@ -133,6 +155,25 @@ class TestV2Mapping:
         assert '"position_size"' not in template
         assert "policy C" in template
         assert "NEVER replaced" in template
+
+    def test_v2_template_json_mode_emits_one_object(self):
+        template = build_v2_response_template(json_object_output=True)
+        assert "ONE JSON object and NOTHING outside it" in template
+        assert '"narrative"' in template
+        assert '"action"' in template
+        assert "Structure your analysis before JSON" not in template
+        assert "Then output JSON" not in template
+
+    def test_v2_prompt_text_states_atr_relative_stop_band(self):
+        template = build_v2_response_template()
+        rules = build_v2_decision_rules()
+        system_prompt = build_v2_system_prompt("BTC/USDT")
+        steps = build_v2_analysis_steps("BTC/USDT")
+        for text in (template, rules, system_prompt, steps):
+            assert "0.5-10%" not in text
+        assert "ATR-relative stop band" in template
+        assert "min_sl_atr_multiple" in template
+        assert "ATR-relative stop band" in rules
 
     def test_v2_steps_request_levels_without_regime_self_report(self):
         steps = build_v2_analysis_steps("BTC/USDT")
@@ -207,3 +248,17 @@ class TestTemplateManagerIsolation:
             dynamic_thresholds={"confidence_threshold": 82}
         )
         assert ">= 82" in template
+
+    def test_flag_on_json_mode_provider_uses_single_object(self):
+        config = _template_config(v2=True)
+        config.PROVIDER = "deepseek"
+        template = self._manager(config).build_response_template()
+        assert "ONE JSON object and NOTHING outside it" in template
+        assert '"narrative"' in template
+        assert "Structure your analysis before JSON" not in template
+
+    def test_flag_on_json_object_flag_uses_single_object(self):
+        manager = self._manager(_template_config(v2=True))
+        template = manager.build_response_template(json_object_output=True)
+        assert "ONE JSON object and NOTHING outside it" in template
+        assert '"narrative"' in template

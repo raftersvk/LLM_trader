@@ -158,11 +158,17 @@ def assess_regime(
     ``allowed_setups=None`` means the field was omitted, so the defaults for the
     normalized regime are used. An explicit empty list means P0-A declared a
     hard no-trade (no-trade regime or disabled timeframe) and must stay empty
-    so the shortlist rejects the candidate. Unknown regimes have no allowed
-    setups, which makes the shortlist fail closed.
+    so the shortlist rejects the candidate. A no-trade regime (low/high
+    volatility, unclear) always has no allowed setups, even when a non-empty
+    list is supplied. Unknown regimes have no allowed setups, which makes the
+    shortlist fail closed.
     """
     normalized_regime = normalize_regime(regime)
-    if allowed_setups is None:
+    if normalized_regime == NO_TRADE:
+        # A no-trade regime is a hard veto: never let an explicitly supplied
+        # allowed_setups list (stale or malformed P0-A input) make it tradeable.
+        setups: tuple[str, ...] = ()
+    elif allowed_setups is None:
         setups = DEFAULT_ALLOWED_SETUPS[normalized_regime]
     else:
         setups = normalize_setups(allowed_setups)

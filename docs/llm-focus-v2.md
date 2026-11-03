@@ -90,6 +90,10 @@ Event-driven position management (flag: event_positions_v2)
   used only when no levels are present; it never overrides the LLM.
 - Integration point: `TemplateManager` branches to the v2 system prompt,
   analysis steps and response template only when the flag is on.
+- `AnalysisResultProcessor` converts v2 replies with `to_v1_compatible()` before
+  the v1 parser/decision contract runs: `entry_price` comes from the current
+  market price, `risk_reward_ratio` is derived from the proposed levels, and the
+  deterministic position size fills `position_size`.
 
 ### Phase 2: recall-oriented shortlist (`shortlist_v2`)
 
